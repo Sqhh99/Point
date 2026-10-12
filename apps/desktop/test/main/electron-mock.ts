@@ -34,6 +34,7 @@ export function electronModule() {
     safeStorage,
     ipcMain: { handle: (ch: string, fn: Handler) => void state.handlers.set(ch, fn) },
     dialog: {
+      showErrorBox: vi.fn(),
       showSaveDialog: vi.fn(async () => state.saveResult),
       showOpenDialog: vi.fn(async () => state.openResult)
     },
