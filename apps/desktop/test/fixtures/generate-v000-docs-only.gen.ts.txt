@@ -1,0 +1,26 @@
+/**
+ * Earliest on-disk schema (commit 8be18b1, PR #5): only the `docs` table, no
+ * conversations/messages. Run like generate-v010.gen.ts but on 8be18b1, with the
+ * electron mock copied in from a later commit (8be18b1 has no test/main).
+ */
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { expect, it, vi } from "vitest";
+
+vi.mock("electron", async () => (await import("./electron-mock.js")).electronModule());
+const ws = await import("../../src/main/workspace.js");
+
+it("generates the docs-only fixture", async () => {
+  const out = process.env.FIXTURE_OUT!;
+  expect(out).toBeTruthy();
+  const root = mkdtempSync(join(tmpdir(), "point-v000-"));
+  const src = mkdtempSync(join(tmpdir(), "point-src-"));
+  ws.openWorkspace(root);
+  writeFileSync(join(src, "早期文档.md"), "# 早期文档 🌱\n\n只有 docs 表的工作区。\n");
+  await ws.importFile(join(src, "早期文档.md"));
+  ws.closeWorkspace?.();
+  rmSync(out, { recursive: true, force: true });
+  mkdirSync(out, { recursive: true });
+  cpSync(root, join(out, "workspace"), { recursive: true });
+});

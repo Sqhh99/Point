@@ -1,9 +1,9 @@
-import { app } from "electron";
+import { app, dialog } from "electron";
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, extname, join, resolve, sep } from "node:path";
-import { NoteStore, docTypeOf, parseDocument, type ParsedDoc } from "@point/core";
+import { DbTooNewError, NoteStore, docTypeOf, migrate, parseDocument, type ParsedDoc } from "@point/core";
 import type { DocMeta } from "../shared/ipc.js";
 
 /**
@@ -19,42 +19,31 @@ let current: { root: string; db: Database.Database; notes: NoteStore } | null = 
 function openDb(root: string): Database.Database {
   mkdirSync(join(root, ".point"), { recursive: true });
   const db = new Database(join(root, ".point", "index.db"));
+  try {
+    migrate(db);
+  } catch (err) {
+    db.close();
+    throw err;
+  }
+  // Only after the version check: a refused (too new) database must stay byte-for-byte untouched.
   db.pragma("journal_mode = WAL");
-  db.exec(`CREATE TABLE IF NOT EXISTS docs (
-    id TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    type TEXT NOT NULL,
-    path TEXT NOT NULL,
-    imported_at TEXT NOT NULL
-  )`);
-  db.exec(`CREATE TABLE IF NOT EXISTS conversations (
-    id TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    doc_id TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY,
-    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-    role TEXT NOT NULL,
-    content TEXT NOT NULL,
-    kind TEXT,
-    meta TEXT,
-    created_at TEXT NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS messages_by_conversation ON messages(conversation_id, created_at);`);
   db.pragma("foreign_keys = ON");
-  const cols = db.prepare("PRAGMA table_info(messages)").all() as { name: string }[];
-  if (!cols.some((c) => c.name === "meta")) db.exec("ALTER TABLE messages ADD COLUMN meta TEXT");
   return db;
 }
 
 export function openWorkspace(root: string): string {
   const abs = resolve(root);
   for (const d of ["docs", "notes"]) mkdirSync(join(abs, d), { recursive: true });
+  let db: Database.Database;
+  try {
+    db = openDb(abs);
+  } catch (err) {
+    // Never keep running on a half-migrated or too-new database: the old workspace stays open.
+    dialog.showErrorBox("无法打开工作区", err instanceof DbTooNewError ? err.message : `数据库升级失败，已回滚，未做任何修改。\n${String(err)}`);
+    throw err;
+  }
   current?.db.close();
-  current = { root: abs, db: openDb(abs), notes: new NoteStore(join(abs, "notes")) };
+  current = { root: abs, db, notes: new NoteStore(join(abs, "notes")) };
   writeFileSync(stateFile(), JSON.stringify({ path: abs }));
   return abs;
 }

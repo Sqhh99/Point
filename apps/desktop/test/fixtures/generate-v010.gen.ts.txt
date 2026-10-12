@@ -1,0 +1,62 @@
+/**
+ * Generates the real v0.1.0 workspace fixture. NOT a regular test: it only works
+ * against the v0.1.0 code (commit fd0cb6a). To regenerate:
+ *   git checkout fd0cb6a
+ *   cp apps/desktop/test/fixtures/generate-v010.gen.ts.txt apps/desktop/test/main/zz-gen.test.ts
+ *   FIXTURE_OUT=$PWD/apps/desktop/test/fixtures/v0.1.0 pnpm --filter @point/desktop run test:main zz-gen
+ *   rm apps/desktop/test/main/zz-gen.test.ts
+ */
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { expect, it, vi } from "vitest";
+import { state } from "./electron-mock.js";
+
+vi.mock("electron", async () => (await import("./electron-mock.js")).electronModule());
+
+const ws = await import("../../src/main/workspace.js");
+const settings = await import("../../src/main/settings.js");
+const conv = await import("../../src/main/conversations.js");
+const { makeDocx } = await import("../../../../packages/core/test/fixtures/make.js");
+
+it("generates the v0.1.0 fixture", async () => {
+  const out = process.env.FIXTURE_OUT!;
+  expect(out).toBeTruthy();
+  const root = mkdtempSync(join(tmpdir(), "point-v010-"));
+  const src = mkdtempSync(join(tmpdir(), "point-src-"));
+  ws.openWorkspace(root);
+
+  writeFileSync(join(src, "信息论笔记.md"), "# 熵与信息 🧠\n\n香农熵 H(X) = -Σ p log p。\n\n## 互信息\n\n「编码」与“解码”👍\n");
+  writeFileSync(join(src, "emoji-only.md"), "# 🚀🌏✨\n\n混合 mixed 内容 👨‍👩‍👧 family ZWJ\n");
+  writeFileSync(join(src, "论文.docx"), await makeDocx([{ style: "Heading1", text: "深度学习综述" }, { text: "第一段：卷积神经网络 CNN 🙂" }]));
+  const d1 = await ws.importFile(join(src, "信息论笔记.md"));
+  const d2 = await ws.importFile(join(src, "emoji-only.md"));
+  const d3 = await ws.importFile(join(src, "论文.docx"));
+
+  const notes = ws.need().notes;
+  notes.create({ title: "熵的直觉 🔥", body: "熵 = 平均惊讶度。\n\n- 均匀分布熵最大\n- 确定事件熵为 0 ✅", sourceDocId: d1.id, tags: ["信息论", "数学"] });
+  notes.create({ title: "待读：深度学习", body: "CNN / RNN / Transformer 🤖", sourceDocId: d3.id, tags: ["待读"] });
+  notes.create({ title: "", body: "没有标题的笔记 📝" });
+
+  settings.update({ id: "glm", model: "glm-4-plus", makeActive: true });
+  settings.update({ id: "deepseek", baseURL: "https://api.deepseek.com/v1" });
+  settings.setKey("glm", "sk-fixture-不是真的-key");
+
+  const c1 = conv.createConversation("问熵 🤔", d1.id);
+  conv.addMessage(c1.id, "user", "什么是熵？🙂");
+  conv.addMessage(c1.id, "assistant", "熵衡量不确定性：H(X) = -Σ p(x) log p(x)。\n\n```\nprint('熵')\n```");
+  conv.addMessage(c1.id, "user", "解释这段", "explain", { selection: "香农熵 H(X)", docId: d1.id } as never);
+  conv.addMessage(c1.id, "assistant", "这是香农熵的定义 📐", "explain");
+  conv.addMessage(c1.id, "user", "用一句话总结 👨‍👩‍👧");
+  conv.addMessage(c1.id, "assistant", "熵 = 平均信息量。");
+  const c2 = conv.createConversation("空文档的对话");
+  conv.addMessage(c2.id, "user", "你好");
+  void d2;
+
+  ws.closeWorkspace();
+  rmSync(out, { recursive: true, force: true });
+  mkdirSync(out, { recursive: true });
+  cpSync(root, join(out, "workspace"), { recursive: true });
+  mkdirSync(join(out, "userData"));
+  cpSync(join(state.userData, "settings.json"), join(out, "userData", "settings.json"));
+});
