@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Mark, MarkAnchor, TaskKind } from "@point/core";
+// Pure tree helpers only: the core barrel also pulls in Node modules that cannot load in the renderer.
+import { branchTree, branchesFrom, breadcrumb, defaultLeaf, latestLeaf, pathTo, siblingsOf, type BranchOrigin, type BranchTreeNode } from "@point/core/tree";
 import type { CaptureResult, MessageMeta, StoredMessage, TaskEvent, TaskRequest } from "../shared/ipc";
 import { Markdown } from "./Markdown";
 import { NotesPanel, type NoteFlash } from "./NotesPanel";
@@ -101,6 +103,22 @@ function Lightbox({ sha, onClose }: { sha: string; onClose(): void }) {
   );
 }
 
+function TreeList({ nodes, current, onPick }: { nodes: BranchTreeNode[]; current?: string; onPick(id: string): void }) {
+  if (nodes.length === 0) return null;
+  return (
+    <ul>
+      {nodes.map((n) => (
+        <li key={n.branchId}>
+          <button className={n.branchId === current ? "current" : ""} onClick={() => onPick(n.branchId)}>
+            「{n.quote.slice(0, 24)}」
+          </button>
+          <TreeList nodes={n.children} current={current} onPick={onPick} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function MarksCard({ marks, docTitle, onOpenImage }: { marks: MarkAnchor[]; docTitle?: string; onOpenImage(sha: string): void }) {
   return (
     <blockquote className="quote-card" data-testid="quote-card">
@@ -142,7 +160,24 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
   const closeViewer = useCallback(() => setViewing(null), []);
   const [tab, setTab] = useState<"chat" | "notes">("chat");
   const [conversationId, setConversationId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<StoredMessage[]>([]);
+  // The whole conversation tree; what is shown is the root → leaf path.
+  const [tree, setTree] = useState<{ messages: StoredMessage[]; origins: BranchOrigin[] }>({ messages: [], origins: [] });
+  const [leafId, setLeafId] = useState<string | null>(null);
+  const messages = useMemo(() => (leafId ? pathTo(tree.messages, leafId) : []), [tree, leafId]);
+  /** Next send goes under this message (从这里分支); `null` = new first question. */
+  const [fork, setFork] = useState<{ parentId: string | null; label: string } | null>(null);
+  const [branchDraft, setBranchDraft] = useState<NonNullable<TaskRequest["branch"]> | null>(null);
+  /** First message re-mounted by a sibling switch, to fade it in. */
+  const [switched, setSwitched] = useState<string | null>(null);
+  const [treeOpen, setTreeOpen] = useState(false);
+  const [chipOpen, setChipOpen] = useState<string | null>(null);
+  const [answerBar, setAnswerBar] = useState<{ top: number; left: number; branch: NonNullable<TaskRequest["branch"]> } | null>(null);
+
+  const refresh = useCallback(async (convId: string, leaf?: string | null) => {
+    const t = await api.conversations.tree(convId);
+    setTree(t);
+    setLeafId(leaf ?? defaultLeaf(t.messages, t.origins)?.id ?? null);
+  }, []);
   const [draft, setDraft] = useState<{ requestId: string; text: string } | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
   const [attached, setAttached] = useState<SelectionInfo | null>(null);
@@ -184,12 +219,13 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
     requestRef.current = null;
     setDraft(null);
     setNotePending(false);
+    const convId = e.type === "done" ? e.message.conversationId : e.partial?.conversationId;
     if (e.type === "done") {
-      setMessages((m) => [...m, e.message]);
+      void refresh(convId!, e.message.id);
       // 记笔记: the generated note goes straight into the current note.
       if (cur.req.kind === "note") void insertIntoNote(e.message.content);
     } else {
-      if (e.partial) setMessages((m) => [...m, e.partial!]);
+      if (e.partial) void refresh(convId!, e.partial.id);
       if (e.code !== "aborted") setFailure({ code: e.code, message: e.message, request: cur.req });
     }
   };
@@ -217,17 +253,9 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
         requestRef.current = { id: started.requestId, req };
         const queued = early.current.filter((e) => e.requestId === started.requestId);
         early.current = [];
-        if (req.regenerate) {
-          // Server dropped the previous answer; mirror that locally.
-          setMessages((m) => {
-            const out = [...m];
-            while (out.at(-1)?.role === "assistant") out.pop();
-            return out;
-          });
-        } else if (started.conversationId !== conversationId) {
-          setConversationId(started.conversationId);
-          setMessages(started.userMessage ? [started.userMessage] : []);
-        } else if (started.userMessage) setMessages((m) => [...m, started.userMessage!]);
+        if (started.conversationId !== conversationId) setConversationId(started.conversationId);
+        // Show the thread down to the question being answered; the old answer (if any) stays as a sibling.
+        await refresh(started.conversationId, started.userMessage?.id ?? (req.regenerate ? (req.parentId ?? undefined) : undefined));
         setDraft({ requestId: started.requestId, text: "" });
         if (req.kind === "note") setNotePending(true);
         for (const e of queued) handleRef.current(e);
@@ -236,7 +264,7 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
         setFailure({ code: message.startsWith("当前模型不支持图片") ? "no_vision" : "invalid", message, request: req });
       }
     },
-    [conversationId]
+    [conversationId, refresh]
   );
 
   const run = useCallback(
@@ -250,18 +278,81 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
         page: sel?.page,
         question: q,
         docId: docId ?? undefined,
-        // Selection actions start a fresh thread; questions continue the current one.
-        conversationId: kind === "ask" ? (conversationId ?? undefined) : undefined
+        // Selection actions start a fresh thread; questions continue the thread being shown.
+        conversationId: kind === "ask" ? (conversationId ?? undefined) : undefined,
+        parentId: kind === "ask" && conversationId ? (leafId ?? undefined) : undefined
       }),
-    [start, docId, conversationId]
+    [start, docId, conversationId, leafId]
   );
 
-  const regenerate = (req: TaskRequest) => start({ ...req, conversationId: conversationId ?? undefined, regenerate: !!conversationId });
-
-  const lastRequest = (): TaskRequest | null => {
-    const u = [...messages].reverse().find((m) => m.role === "user" && m.meta);
-    return u?.meta ? { ...u.meta.request } : null;
+  /** 重新生成 / 重试: answer `user` again as a new sibling answer. */
+  const regenerate = (req: TaskRequest, user?: StoredMessage) =>
+    start({ ...req, conversationId: conversationId ?? undefined, regenerate: !!conversationId, parentId: user?.id });
+  const userBefore = (id: string): StoredMessage | undefined => {
+    const i = messages.findIndex((m) => m.id === id);
+    return [...messages.slice(0, i)].reverse().find((m) => m.role === "user");
   };
+  const lastUser = () => [...messages].reverse().find((m) => m.role === "user");
+
+  const switchTo = (id: string) => {
+    setSwitched(id);
+    setLeafId(latestLeaf(tree.messages, tree.origins, id)?.id ?? id);
+  };
+  const stepSibling = (id: string, delta: number) => {
+    const sibs = siblingsOf(tree.messages, tree.origins, id);
+    const next = sibs[sibs.findIndex((m) => m.id === id) + delta];
+    if (next) switchTo(next.id);
+  };
+  // ⌥←/⌥→ (Alt on Windows) switches the last shown message that has alternatives.
+  useEffect(() => {
+    if (tab !== "chat") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.altKey || (e.key !== "ArrowLeft" && e.key !== "ArrowRight") || draft) return;
+      const m = [...messages].reverse().find((x) => siblingsOf(tree.messages, tree.origins, x.id).length > 1);
+      if (!m) return;
+      e.preventDefault();
+      stepSibling(m.id, e.key === "ArrowLeft" ? -1 : 1);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  /** 从这里分支: on an answer, continue under it; on a question, ask again in its place. */
+  const forkFrom = (m: StoredMessage) => {
+    setBranchDraft(null);
+    if (m.role === "assistant") {
+      setFork({ parentId: m.id, label: "从这条回答继续一个新分支" });
+      setLeafId(m.id);
+    } else {
+      setFork({ parentId: m.parentId, label: "改问这个问题（新分支）" });
+      setQuestion(m.content);
+      setLeafId(m.parentId);
+    }
+    setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
+  /** Selecting text inside an answer offers 追问分支 (design v0.2). */
+  const onLogMouseUp = () => {
+    const s = window.getSelection();
+    const log = logRef.current;
+    if (!s || s.isCollapsed || !log || draft) return setAnswerBar(null);
+    const range = s.getRangeAt(0);
+    const el = (range.commonAncestorContainer instanceof Element ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement)?.closest<HTMLElement>(".msg.assistant[data-id]");
+    const quote = s.toString().trim();
+    const src = el && messages.find((m) => m.id === el.dataset.id);
+    if (!src || quote.length < 2) return setAnswerBar(null);
+    // Offsets are in the stored markdown: take the occurrence of the quote (rendered text may differ from source).
+    const start = src.content.indexOf(quote);
+    if (start < 0) return setAnswerBar(null);
+    const r = range.getBoundingClientRect();
+    const box = log.getBoundingClientRect();
+    setAnswerBar({
+      top: Math.max(r.top - box.top + log.scrollTop - 8 - 32, log.scrollTop),
+      left: Math.min(Math.max(r.left - box.left + r.width / 2, 60), box.width - 60),
+      branch: { sourceId: src.id, start, end: start + quote.length, quote }
+    });
+  };
+
 
   useEffect(() => {
     if (!trigger) return;
@@ -295,6 +386,21 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
   const send = () => {
     const q = question.trim();
     if (!q || draft) return;
+    if (branchDraft || fork) {
+      const req: TaskRequest = {
+        kind: "ask",
+        selection: branchDraft?.quote ?? "",
+        question: q,
+        docId: docId ?? undefined,
+        conversationId: conversationId ?? undefined,
+        ...(branchDraft ? { branch: branchDraft } : { parentId: fork!.parentId })
+      };
+      setQuestion("");
+      setBranchDraft(null);
+      setFork(null);
+      void start(req);
+      return;
+    }
     if (batchMarks) {
       const ids = batchMarks.map((m) => m.id);
       const req: TaskRequest = { kind: "ask", selection: "", question: q, marks: ids };
@@ -340,10 +446,16 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
     requestRef.current = null;
     setDraft(null);
     setConversationId(null);
-    setMessages([]);
+    setTree({ messages: [], origins: [] });
+    setLeafId(null);
+    setFork(null);
+    setBranchDraft(null);
     setFailure(null);
   };
 
+  const crumbs = leafId ? breadcrumb(tree.messages, tree.origins, leafId) : [];
+  /** Main thread as shown by default: newest first question, newest answers, no span branches. */
+  const mainThreadLeaf = () => defaultLeaf(tree.messages, tree.origins)?.id ?? null;
   const lastAssistantId = [...messages].reverse().find((m) => m.role === "assistant")?.id;
 
   return (
@@ -371,42 +483,147 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
         )
       ) : (
         <>
+          {leafId && (tree.origins.length > 0 || crumbs.length > 1) && (
+            <nav className="crumbs" aria-label="分支路径" data-testid="crumbs">
+              {crumbs.map((c, i) => (
+                <span key={c.branchId ?? "main"} className="crumb">
+                  {i > 0 && <span className="crumb-sep">›</span>}
+                  <button
+                    className={i === crumbs.length - 1 ? "link active" : "link"}
+                    onClick={() => (c.branchId ? switchTo(c.branchId) : setLeafId(mainThreadLeaf()))}
+                  >
+                    {c.branchId ? `「${(c.quote ?? "").slice(0, 16)}」` : "主线"}
+                  </button>
+                </span>
+              ))}
+              {tree.origins.length > 0 && (
+                <button className="link push-right" onClick={() => setTreeOpen((o) => !o)} aria-expanded={treeOpen}>
+                  分支树
+                </button>
+              )}
+              {treeOpen && (
+                <div className="branch-tree" role="dialog" aria-label="分支树">
+                  <ul>
+                    <li>
+                      <button className={crumbs.length === 1 ? "current" : ""} onClick={() => (setTreeOpen(false), setLeafId(mainThreadLeaf()))}>
+                        主线
+                      </button>
+                      <TreeList nodes={branchTree(tree.messages, tree.origins)} current={crumbs.at(-1)?.branchId} onPick={(id) => (setTreeOpen(false), switchTo(id))} />
+                    </li>
+                  </ul>
+                </div>
+              )}
+            </nav>
+          )}
           <div className="chat-log" ref={logRef} data-testid="chat-log">
             {messages.length === 0 && !draft && !failure && (
               <div className="placeholder">在阅读器里选中文字，用浮条让 AI 解读、记笔记或画图；也可以直接提问。</div>
             )}
-            {messages.map((m) =>
-              m.role === "user" ? (
-                <div key={m.id} className="turn">
-                  {m.meta && <QuoteCard meta={m.meta} onOpenImage={setViewing} />}
-                  <div className="msg user" data-role="user">
-                    {m.content}
-                  </div>
-                </div>
-              ) : (
-                <div key={m.id} className="msg assistant" data-role="assistant">
-                  <Markdown text={m.content} />
-                  <div className="msg-actions">
-                    <button className="link" onClick={() => void insertIntoNote(m.content)}>
-                      插入笔记
-                    </button>
-                    <button className="link" onClick={() => void copy(m)}>
-                      {copiedId === m.id ? "已复制" : "复制"}
-                    </button>
-                    {m.id === lastAssistantId && !draft && lastRequest() && (
-                      <button className="link" onClick={() => void regenerate(lastRequest()!)}>
-                        重新生成
-                      </button>
-                    )}
-                    {m.id === lastAssistantId && conversationId && (
-                      <button className="link" onClick={() => void exportConversation()}>
-                        {exportStatus === "已导出" ? "已导出" : "导出对话为 md"}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )
+            {answerBar && (
+              <div className="selection-toolbar answer-bar" role="toolbar" aria-label="回答选区操作" style={{ top: answerBar.top, left: answerBar.left }} onMouseDown={(e) => e.preventDefault()}>
+                <button
+                  onClick={() => {
+                    setBranchDraft(answerBar.branch);
+                    setFork(null);
+                    setAnswerBar(null);
+                    window.getSelection()?.removeAllRanges();
+                    setTimeout(() => inputRef.current?.focus(), 0);
+                  }}
+                >
+                  <span>追问分支</span>
+                </button>
+              </div>
             )}
+            {messages.map((m, i) => {
+              const sibs = siblingsOf(tree.messages, tree.origins, m.id);
+              const at = sibs.findIndex((x) => x.id === m.id);
+              const fade = switched && messages.findIndex((x) => x.id === switched) <= i ? " fade-in" : "";
+              const switcher =
+                sibs.length > 1 ? (
+                  <div className="sibling-switch" data-testid="sibling-switch">
+                    <button className="icon" aria-label="上一条" disabled={at <= 0} onClick={() => stepSibling(m.id, -1)}>
+                      ‹
+                    </button>
+                    <span>
+                      {at + 1}/{sibs.length}
+                    </span>
+                    <button className="icon" aria-label="下一条" disabled={at >= sibs.length - 1} onClick={() => stepSibling(m.id, 1)}>
+                      ›
+                    </button>
+                  </div>
+                ) : null;
+              const forkBtn = (
+                <button className="link" onClick={() => forkFrom(m)} disabled={!!draft}>
+                  从这里分支
+                </button>
+              );
+              if (m.role === "user")
+                return (
+                  <div key={m.id} className={"turn" + fade}>
+                    {m.meta && <QuoteCard meta={m.meta} onOpenImage={setViewing} />}
+                    <div className="msg user" data-role="user" data-id={m.id}>
+                      {m.content}
+                    </div>
+                    <div className="user-foot">
+                      {switcher}
+                      <div className="msg-actions">{forkBtn}</div>
+                    </div>
+                  </div>
+                );
+              const branches = branchesFrom(tree.origins, m.id);
+              const asked = userBefore(m.id);
+              return (
+                <div key={m.id} className={"msg assistant" + fade} data-role="assistant" data-id={m.id} onMouseUp={onLogMouseUp}>
+                  <Markdown text={m.content} />
+                  {branches.length > 0 && (
+                    <div className="branch-chip-wrap">
+                      <button className="branch-chip" data-testid="branch-chip" onClick={() => setChipOpen(chipOpen === m.id ? null : m.id)} aria-expanded={chipOpen === m.id}>
+                        ⑂ {branches.length} 个分支
+                      </button>
+                      {chipOpen === m.id && (
+                        <ul className="branch-menu" role="menu">
+                          {branches.map((o) => (
+                            <li key={o.childId}>
+                              <button
+                                role="menuitem"
+                                onClick={() => {
+                                  setChipOpen(null);
+                                  switchTo(o.childId);
+                                }}
+                              >
+                                「{o.quote.slice(0, 40)}」
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  )}
+                  <div className="assistant-foot">
+                    {switcher}
+                    <div className="msg-actions">
+                      <button className="link" onClick={() => void insertIntoNote(m.content)}>
+                        插入笔记
+                      </button>
+                      <button className="link" onClick={() => void copy(m)}>
+                        {copiedId === m.id ? "已复制" : "复制"}
+                      </button>
+                      {!draft && asked?.meta && (
+                        <button className="link" onClick={() => void regenerate({ ...asked.meta!.request }, asked)}>
+                          重新生成
+                        </button>
+                      )}
+                      {forkBtn}
+                      {m.id === lastAssistantId && conversationId && (
+                        <button className="link" onClick={() => void exportConversation()}>
+                          {exportStatus === "已导出" ? "已导出" : "导出对话为 md"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
             {draft && (
               <div className="msg assistant streaming" data-role="assistant-draft" aria-busy="true">
                 {draft.text ? <Markdown text={draft.text} streaming /> : null}
@@ -424,7 +641,10 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
                     </button>
                   )}
                   {failure.code !== "invalid" && failure.code !== "no_vision" && (
-                    <button className="link" onClick={() => void regenerate(failure.request)}>
+                    <button
+                      className="link"
+                      onClick={() => void (failure.code === "invalid" || failure.code === "no_vision" ? start(failure.request) : regenerate(failure.request, lastUser()))}
+                    >
                       重试
                     </button>
                   )}
@@ -433,6 +653,22 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
             )}
           </div>
           <div className="composer">
+            {branchDraft && (
+              <div className="attached" data-testid="branch-draft">
+                <span title={branchDraft.quote}>追问分支：「{branchDraft.quote.slice(0, 40)}」</span>
+                <button className="link" onClick={() => setBranchDraft(null)} aria-label="取消分支">
+                  ×
+                </button>
+              </div>
+            )}
+            {fork && (
+              <div className="attached" data-testid="fork-draft">
+                <span>{fork.label}</span>
+                <button className="link" onClick={() => (setFork(null), setLeafId(defaultLeaf(tree.messages, tree.origins)?.id ?? null))} aria-label="取消分支">
+                  ×
+                </button>
+              </div>
+            )}
             {batchMarks && (
               <div className="attached" data-testid="attached-marks">
                 <span>一起问 {batchMarks.length} 个标记</span>

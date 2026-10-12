@@ -167,15 +167,17 @@ describe("tasks IPC with POINT_FAKE_LLM=1 (conversations in SQLite)", () => {
     expect(convs.find((c) => c.id === r.conversationId)?.title).toBe("解读概念：熵");
   });
 
-  it("regenerate replaces the trailing answer instead of appending", async () => {
+  it("regenerate adds a sibling answer and keeps the old one (⑥)", async () => {
     const s = sender();
     const a = (await invoke(IPC.tasksRun, s, { kind: "ask", selection: "", question: "为什么？" })) as Started;
     await until(() => !!doneOf(s, a.requestId));
     const b = (await invoke(IPC.tasksRun, s, { kind: "ask", selection: "", question: "为什么？", conversationId: a.conversationId, regenerate: true })) as Started;
     expect(b.userMessage).toBeUndefined();
     await until(() => !!doneOf(s, b.requestId));
-    const msgs = (await invoke(IPC.convMessages, s, a.conversationId)) as { role: string }[];
-    expect(msgs.map((m) => m.role)).toEqual(["user", "assistant"]);
+    const msgs = (await invoke(IPC.convMessages, s, a.conversationId)) as { id: string; role: string; parentId: string | null }[];
+    expect(msgs.map((m) => m.role)).toEqual(["user", "assistant", "assistant"]);
+    expect(msgs[1].parentId).toBe(msgs[0].id);
+    expect(msgs[2].parentId).toBe(msgs[0].id);
   });
 
   it("cancel aborts and keeps the partial answer", async () => {

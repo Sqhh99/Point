@@ -1,4 +1,4 @@
-import type { ChatMessage, DocType, Mark, MarkAnchor, Note, NoteInput, NoteMeta, ParsedDoc, ProviderId, ProviderPreset, TaskKind } from "@point/core";
+import type { BranchOrigin, ChatMessage, DocType, Mark, MarkAnchor, Note, NoteInput, NoteMeta, ParsedDoc, ProviderId, ProviderPreset, TaskKind } from "@point/core";
 
 export interface ProviderSettings {
   id: ProviderId;
@@ -97,13 +97,25 @@ export interface TaskRequest {
   marks?: string[];
   /** sha256 of a region capture in `.point/captures/` to attach as an image. */
   image?: string;
-  /** Re-run without storing a new user message (重新生成 / 重试). */
+  /**
+   * 重新生成 / 重试: store no new user message; the new answer becomes a sibling of the old one(s).
+   * With `parentId` it answers that user message, otherwise the last user message of the main thread.
+   */
   regenerate?: boolean;
+  /**
+   * Where in the conversation tree this turn goes: the new user message is a child of this message
+   * (the leaf being shown, or the message being branched from). `null` = a new first message (a
+   * sibling of the conversation's first question). Omitted = end of the main thread.
+   * With `regenerate`, the id of the user message to answer again.
+   */
+  parentId?: string | null;
+  /** 追问分支: fork from span [start, end) of an assistant answer (stored in branch_origin). */
+  branch?: { sourceId: string; start: number; end: number; quote: string };
 }
 
 /** Stored on the user message of a task so the UI can show the quote card and re-run it. */
 export interface MessageMeta {
-  request: Omit<TaskRequest, "conversationId" | "regenerate">;
+  request: Omit<TaskRequest, "conversationId" | "regenerate" | "parentId" | "branch">;
   /** Snapshot of the marks sent with 「一起问」, in order (validated anchors from the database). */
   marks?: MarkAnchor[];
   docTitle?: string;
@@ -213,6 +225,8 @@ export interface PointAPI {
   conversations: {
     list(): Promise<ConversationMeta[]>;
     messages(conversationId: string): Promise<StoredMessage[]>;
+    /** Every message plus every branch origin (for siblings, breadcrumb and branch tree). */
+    tree(conversationId: string): Promise<{ messages: StoredMessage[]; origins: BranchOrigin[] }>;
     remove(conversationId: string): Promise<void>;
     /** System save dialog → one .md of the conversation. */
     export(conversationId: string): Promise<ExportResult>;
@@ -255,6 +269,7 @@ export const IPC = {
   tasksEvent: "tasks:event",
   convList: "conversations:list",
   convMessages: "conversations:messages",
+  convTree: "conversations:tree",
   convRemove: "conversations:remove",
   notesList: "notes:list",
   notesRead: "notes:read",
