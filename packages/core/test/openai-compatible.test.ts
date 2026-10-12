@@ -124,3 +124,42 @@ describe("OpenAICompatibleProvider", () => {
     expect(() => createProvider({ id: "nope" as "glm", apiKey: "k" })).toThrow();
   });
 });
+
+describe("vision: request body + capabilities", async () => {
+  const { buildOpenAIBody, modelCapabilities, buildTaskMessages } = await import("../src/index.js");
+
+  it("text-only messages keep string content", () => {
+    const b = buildOpenAIBody([{ role: "user", content: "hi" }], { model: "m", maxTokens: 5 });
+    expect(b).toEqual({ model: "m", messages: [{ role: "user", content: "hi" }], stream: true, max_tokens: 5 });
+  });
+
+  it("images become image_url data-URL parts after the text", () => {
+    const b = buildOpenAIBody([{ role: "user", content: "看图", images: [{ mime: "image/png", base64: "QUJD" }] }], { model: "gpt-4o" });
+    expect(b.messages).toEqual([
+      { role: "user", content: [{ type: "text", text: "看图" }, { type: "image_url", image_url: { url: "data:image/png;base64,QUJD" } }] }
+    ]);
+  });
+
+  it("provider sends the image in the request", async () => {
+    const calls: Call[] = [];
+    const p = new OpenAICompatibleProvider({ id: "openai", baseURL: "https://x/v1", apiKey: "k", fetch: fakeFetch(() => new Response(streamOf(["data: [DONE]\n\n"])), calls) });
+    await collect(p.chat([{ role: "user", content: "q", images: [{ mime: "image/png", base64: "Zm9v" }] }], { model: "gpt-4o" }));
+    expect(String(calls[0].init.body)).toContain("data:image/png;base64,Zm9v");
+  });
+
+  it("modelCapabilities: preset list, override, unknown provider", () => {
+    expect(modelCapabilities("openai", "gpt-4o").vision).toBe(true);
+    expect(modelCapabilities("deepseek", "deepseek-chat").vision).toBe(false);
+    expect(modelCapabilities("glm", "glm-4v-flash").vision).toBe(true);
+    expect(modelCapabilities("openai", "my-custom").vision).toBe(false);
+    expect(modelCapabilities("deepseek", "deepseek-chat", { vision: true }).vision).toBe(true);
+    expect(modelCapabilities("openai", "gpt-4o", { vision: false }).vision).toBe(false);
+    expect(modelCapabilities("nope", "x").vision).toBe(false);
+  });
+
+  it("buildTaskMessages: an image replaces the need for selected text", () => {
+    expect(() => buildTaskMessages({ kind: "explain", selection: "" })).toThrow("请先选中一段文字");
+    const m = buildTaskMessages({ kind: "explain", selection: "", hasImage: true });
+    expect(m.at(-1)!.content).toContain("附图");
+  });
+});

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { TaskKind } from "@point/core";
-import type { MessageMeta, StoredMessage, TaskEvent, TaskRequest } from "../shared/ipc";
+import type { CaptureResult, MessageMeta, StoredMessage, TaskEvent, TaskRequest } from "../shared/ipc";
 import { Markdown } from "./Markdown";
 import { NotesPanel, type NoteFlash } from "./NotesPanel";
 import type { SelectionInfo } from "./Reader";
@@ -18,6 +18,10 @@ interface Props {
   docId: string | null;
   docTitle: string | null;
   hasWorkspace: boolean;
+  /** Current model accepts images. */
+  vision: boolean;
+  /** Latest region capture; a new seq attaches it to the composer. */
+  capture: (CaptureResult & { seq: number }) | null;
   onOpenSettings(): void;
 }
 
@@ -28,27 +32,34 @@ const REASONS: Record<string, string> = {
   rate_limit: "请求太频繁，被模型服务限流了",
   network: "网络连接失败",
   server: "模型服务暂时出错",
-  bad_request: "请求被模型服务拒绝"
+  bad_request: "请求被模型服务拒绝",
+  no_vision: "当前模型不支持图片"
 };
+
+export const NO_VISION_TEXT = "当前模型不支持图片。请在「设置」里换一个支持看图的模型（例如 gpt-4o、glm-4v-flash），或勾选「该模型支持看图」。";
 
 const stripIpcPrefix = (m: string) => m.replace(/^Error invoking remote method '[^']+': (Error: )?/, "");
 
 function QuoteCard({ meta }: { meta: MessageMeta }) {
   const [open, setOpen] = useState(false);
-  const { selection, page } = meta.request;
-  if (!selection?.trim()) return null;
+  const { selection, page, image } = meta.request;
+  if (!selection?.trim() && !image) return null;
   const source = [meta.docTitle ? `《${meta.docTitle}》` : null, page ? `第 ${page} 页` : null].filter(Boolean).join(" · ");
   return (
     <blockquote className={`quote-card${open ? " open" : ""}`} data-testid="quote-card">
-      <button className="quote-text" onClick={() => setOpen((o) => !o)} title={open ? "收起" : "展开"}>
-        {selection.trim()}
-      </button>
+      {image && <div className="quote-image">[截图]</div>}
+      {selection?.trim() && (
+        <button className="quote-text" onClick={() => setOpen((o) => !o)} title={open ? "收起" : "展开"}>
+          {selection.trim()}
+        </button>
+      )}
       {source && <div className="quote-source">{source}</div>}
     </blockquote>
   );
 }
 
-export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onOpenSettings }: Props) {
+export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, capture, onOpenSettings }: Props) {
+  const [image, setImage] = useState<CaptureResult | null>(null);
   const [tab, setTab] = useState<"chat" | "notes">("chat");
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<StoredMessage[]>([]);
@@ -141,15 +152,17 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onOpenSettings
         if (req.kind === "note") setNotePending(true);
         for (const e of queued) handleRef.current(e);
       } catch (err) {
-        setFailure({ code: "invalid", message: stripIpcPrefix((err as Error).message), request: req });
+        const message = stripIpcPrefix((err as Error).message);
+        setFailure({ code: message.startsWith("当前模型不支持图片") ? "no_vision" : "invalid", message, request: req });
       }
     },
     [conversationId]
   );
 
   const run = useCallback(
-    (kind: TaskKind, sel: SelectionInfo | null, q?: string) =>
+    (kind: TaskKind, sel: SelectionInfo | null, q?: string, img?: string) =>
       start({
+        image: img,
         kind,
         selection: sel?.text ?? "",
         context: sel?.context,
@@ -182,12 +195,23 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onOpenSettings
     // Only react to new triggers.
   }, [trigger?.seq]);
 
+  useEffect(() => {
+    if (!capture) return;
+    setTab("chat");
+    setImage(capture);
+    setTimeout(() => inputRef.current?.focus(), 0);
+  }, [capture?.seq]);
+
   const send = () => {
     const q = question.trim();
     if (!q || draft) return;
+    const req: TaskRequest = { kind: "ask", selection: attached?.text ?? "", question: q, image: image?.sha };
+    // Checked again in main; this keeps the question and the image so the user can switch models.
+    if (image && !vision) return setFailure({ code: "no_vision", message: NO_VISION_TEXT, request: req });
     setQuestion("");
-    void run("ask", attached, q);
+    void run("ask", attached, q, image?.sha);
     setAttached(null);
+    setImage(null);
   };
 
   const stop = () => {
@@ -294,12 +318,12 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onOpenSettings
                 <div className="error-reason">{REASONS[failure.code] ?? "出错了"}</div>
                 <div className="error-detail">{failure.message}</div>
                 <div className="error-actions">
-                  {failure.code === "auth" && (
+                  {(failure.code === "auth" || failure.code === "no_vision") && (
                     <button className="link" onClick={onOpenSettings}>
                       去设置
                     </button>
                   )}
-                  {failure.code !== "invalid" && (
+                  {failure.code !== "invalid" && failure.code !== "no_vision" && (
                     <button className="link" onClick={() => void regenerate(failure.request)}>
                       重试
                     </button>
@@ -313,6 +337,14 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onOpenSettings
               <div className="attached">
                 <span title={attached.text}>引用：{attached.text.slice(0, 60)}</span>
                 <button className="link" onClick={() => setAttached(null)} aria-label="移除引用">
+                  ×
+                </button>
+              </div>
+            )}
+            {image && (
+              <div className="attached" data-testid="attached-image">
+                <span>已附截图（{image.width}×{image.height}）</span>
+                <button className="link" onClick={() => setImage(null)} aria-label="移除截图">
                   ×
                 </button>
               </div>

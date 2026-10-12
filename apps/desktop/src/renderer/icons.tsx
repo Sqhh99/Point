@@ -25,3 +25,8 @@ export const IconAsk = () => (
     <path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z" />
   </svg>
 );
+export const IconCapture = () => (
+  <svg {...base}>
+    <path d="M2.5 5V2.5H5M11 2.5h2.5V5M13.5 11v2.5H11M5 13.5H2.5V11" />
+  </svg>
+);

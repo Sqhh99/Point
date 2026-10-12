@@ -33,3 +33,31 @@ export function openShortcutOf(
   if (!mod) return null;
   return e.shiftKey ? "file" : "workspace";
 }
+
+/** ⌘⇧S on macOS, Ctrl+Shift+S elsewhere: enter region capture. Key repeat and the other platform's modifier are ignored. */
+export function isCaptureKey(
+  e: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey" | "repeat">,
+  platform: string
+): boolean {
+  if (e.repeat || e.altKey || !e.shiftKey || e.key.toLowerCase() !== "s") return false;
+  return platform === "darwin" ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+}
+
+export interface Box {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Normalised rectangle between two drag points, clipped to `bounds`; null when smaller than 4×4. */
+export function dragRect(a: { x: number; y: number }, b: { x: number; y: number }, bounds: Box): Box | null {
+  const x1 = Math.max(Math.min(a.x, b.x), bounds.x);
+  const y1 = Math.max(Math.min(a.y, b.y), bounds.y);
+  const x2 = Math.min(Math.max(a.x, b.x), bounds.x + bounds.width);
+  const y2 = Math.min(Math.max(a.y, b.y), bounds.y + bounds.height);
+  const width = Math.round(x2 - x1);
+  const height = Math.round(y2 - y1);
+  if (width < 4 || height < 4) return null;
+  return { x: Math.round(x1), y: Math.round(y1), width, height };
+}

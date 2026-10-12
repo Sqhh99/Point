@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { DocMeta, OpenResult, WorkspaceInfo } from "../shared/ipc";
+import type { ActiveModel, CaptureResult, DocMeta, OpenResult, WorkspaceInfo } from "../shared/ipc";
 import { AIPanel, type TaskTrigger } from "./AIPanel";
 import { Library } from "./Library";
 import { Reader } from "./Reader";
 import { Settings } from "./Settings";
+import { StatusBar } from "./StatusBar";
 import { TitleBar } from "./TitleBar";
 import { clampChatWidth, isToggleLibraryKey, openShortcutOf } from "./layout";
 
@@ -19,6 +20,8 @@ export function App() {
   const [trigger, setTrigger] = useState<TaskTrigger | null>(null);
   const [docTitle, setDocTitle] = useState<string | null>(null);
   const [chatWidth, setChatWidth] = useState(() => clampChatWidth(localStorage.getItem("point.chatWidth")));
+  const [model, setModel] = useState<ActiveModel | null>(null);
+  const [capture, setCapture] = useState<(CaptureResult & { seq: number }) | null>(null);
   const drag = useRef<{ x: number; w: number } | null>(null);
 
   useEffect(() => {
@@ -59,6 +62,12 @@ export function App() {
   useEffect(() => {
     refresh().catch((e: Error) => setError(e.message));
   }, [refresh]);
+
+  // Re-read after leaving settings: the active model or its vision flag may have changed.
+  useEffect(() => {
+    if (view !== "reader") return;
+    api.settings.get().then((s) => setModel(s.active), () => setModel(null));
+  }, [view]);
 
   const run = (fn: () => Promise<void>) => () => {
     setError(null);
@@ -123,6 +132,9 @@ export function App() {
             onOpenRecent={openRecent}
             onDocLoaded={(d) => setDocTitle(d?.title ?? null)}
             onAction={(kind, sel) => setTrigger((t) => ({ seq: (t?.seq ?? 0) + 1, kind, sel }))}
+            vision={!!model?.vision}
+            onCapture={(r) => setCapture((c) => ({ ...r, seq: (c?.seq ?? 0) + 1 }))}
+            onCaptureError={setError}
           />
         )}
       </main>
@@ -132,9 +144,12 @@ export function App() {
         docId={activeId}
         docTitle={docTitle}
         hasWorkspace={!!workspace.path}
+        vision={!!model?.vision}
+        capture={capture}
         onOpenSettings={() => setView("settings")}
       />
     </div>
+    <StatusBar workspace={workspace.path} docTitle={view === "settings" ? null : docTitle} model={model} />
     </div>
   );
 }

@@ -5,6 +5,31 @@ export interface ProviderSettings {
   baseURL: string;
   model: string;
   hasKey: boolean;
+  /** Effective capabilities of the configured model (user override, else preset). */
+  capabilities: { vision: boolean };
+  /** True when the user set vision explicitly instead of relying on the preset list. */
+  visionOverride?: boolean;
+}
+
+/** What the status bar shows: the model questions are sent to right now. */
+export interface ActiveModel {
+  providerName: string;
+  model: string;
+  vision: boolean;
+}
+
+export interface CaptureRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Only the sha of the stored PNG crosses IPC; main builds the path itself. */
+export interface CaptureResult {
+  sha: string;
+  width: number;
+  height: number;
 }
 
 export interface SettingsView {
@@ -12,12 +37,15 @@ export interface SettingsView {
   providers: ProviderSettings[];
   presets: ProviderPreset[];
   encryptionAvailable: boolean;
+  active: ActiveModel;
 }
 
 export interface ProviderPatch {
   id: ProviderId;
   baseURL?: string;
   model?: string;
+  /** true/false sets the vision capability explicitly; null clears it back to the preset default. */
+  vision?: boolean | null;
   makeActive?: boolean;
 }
 
@@ -65,6 +93,8 @@ export interface TaskRequest {
   page?: number;
   /** Continue this conversation; a new one is created when omitted. */
   conversationId?: string;
+  /** sha256 of a region capture in `.point/captures/` to attach as an image. */
+  image?: string;
   /** Re-run without storing a new user message (重新生成 / 重试). */
   regenerate?: boolean;
 }
@@ -124,6 +154,10 @@ export interface PointAPI {
     action(a: WindowAction): Promise<void>;
     /** Fires with the new maximized state; returns an unsubscribe. */
     onMaximized(cb: (maximized: boolean) => void): () => void;
+  };
+  capture: {
+    /** Captures `rect` (CSS px of this window) into the workspace; resolves with the sha only. */
+    region(rect: CaptureRect): Promise<CaptureResult>;
   };
   settings: {
     get(): Promise<SettingsView>;
@@ -219,5 +253,6 @@ export const IPC = {
   notesAppend: "notes:append",
   notesExportCurrent: "notes:exportCurrent",
   notesExportAll: "notes:exportAll",
-  convExport: "conversations:export"
+  convExport: "conversations:export",
+  captureRegion: "capture:region"
 } as const;

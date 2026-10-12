@@ -6,6 +6,8 @@ import { IPC, type TaskEvent, type TaskRequest, type TaskStarted } from "../shar
 import { addMessage, createConversation, dropTrailingAssistant, deleteConversation, getMessages, hasConversation, historyFor, listConversations } from "./conversations.js";
 import { errInfo, providerFor } from "./ipc.js";
 import { docTitle, need } from "./workspace.js";
+import { assertCaptureSha, captureImage } from "./capture.js";
+import { assertVisionAllowed, withImage } from "./vision.js";
 
 const KINDS = Object.keys(TASK_LABELS) as TaskKind[];
 const running = new Map<string, AbortController>();
@@ -23,11 +25,12 @@ function validate(raw: unknown): TaskRequest {
     docId: str(r.docId, 64),
     page: typeof r.page === "number" && Number.isInteger(r.page) && r.page > 0 ? r.page : undefined,
     conversationId: str(r.conversationId, 64),
+    image: r.image === undefined || r.image === null ? undefined : assertCaptureSha(r.image),
     regenerate: r.regenerate === true
   };
 }
 
-async function stream(sender: WebContents, requestId: string, conversationId: string, req: TaskRequest, messages: ReturnType<typeof buildTaskMessages>) {
+async function stream(sender: WebContents, requestId: string, conversationId: string, req: TaskRequest, messages: ReturnType<typeof buildTaskMessages>, llm?: ReturnType<typeof providerFor>) {
   const ctrl = new AbortController();
   running.set(requestId, ctrl);
   const send = (e: TaskEvent) => {
@@ -35,7 +38,7 @@ async function stream(sender: WebContents, requestId: string, conversationId: st
   };
   let text = "";
   try {
-    const { provider, model } = providerFor();
+    const { provider, model } = llm ?? providerFor();
     for await (const d of provider.chat(messages, { model, signal: ctrl.signal })) {
       text += d.text;
       send({ requestId, type: "delta", text: d.text });
@@ -52,23 +55,31 @@ async function stream(sender: WebContents, requestId: string, conversationId: st
 
 export function registerTasksIpc(): void {
   ipcMain.handle(IPC.tasksRun, (e, raw: unknown): TaskStarted => {
-    need();
+    const ws = need();
     const req = validate(raw);
+    // Gate before anything is stored: an image on a text-only model is a clear error, not a silent drop.
+    // Without an image the provider is resolved lazily so a missing key still streams back as an "auth" event.
+    const llm = req.image ? providerFor() : undefined;
+    if (llm) assertVisionAllowed(llm.vision, true);
+    const image = req.image ? captureImage(ws.root, req.image) : undefined;
     const title = req.docId ? docTitle(req.docId) : undefined;
     let conversationId = req.conversationId && hasConversation(req.conversationId) ? req.conversationId : undefined;
     const regenerate = !!(req.regenerate && conversationId);
     const history = conversationId ? historyFor(conversationId, regenerate) : [];
     // Build first so invalid input (empty selection, missing question) fails before anything is stored.
-    const messages = buildTaskMessages({ kind: req.kind, selection: req.selection, context: req.context, question: req.question, docTitle: title, history });
+    const messages = withImage(
+      buildTaskMessages({ kind: req.kind, selection: req.selection, context: req.context, question: req.question, docTitle: title, history, hasImage: !!image }),
+      image
+    );
     if (!conversationId) {
       const sel = req.selection.trim().replace(/\s+/g, " ");
-      conversationId = createConversation(`${TASK_LABELS[req.kind]}：${sel.slice(0, 30) || req.question?.slice(0, 30) || ""}`, req.docId).id;
+      conversationId = createConversation(`${TASK_LABELS[req.kind]}：${sel.slice(0, 30) || req.question?.slice(0, 30) || (image ? "截图" : "")}`, req.docId).id;
     }
-    const meta = { request: { kind: req.kind, selection: req.selection, context: req.context, question: req.question, docId: req.docId, page: req.page }, docTitle: title };
+    const meta = { request: { kind: req.kind, selection: req.selection, context: req.context, question: req.question, docId: req.docId, page: req.page, image: req.image }, docTitle: title };
     if (regenerate) dropTrailingAssistant(conversationId);
     const userMessage = regenerate ? undefined : addMessage(conversationId, "user", describeTask(req), req.kind, meta);
     const requestId = randomUUID();
-    void stream(e.sender, requestId, conversationId, req, messages);
+    void stream(e.sender, requestId, conversationId, req, messages, llm);
     return { requestId, conversationId, userMessage };
   });
   ipcMain.handle(IPC.tasksCancel, (_e, id: unknown) => {

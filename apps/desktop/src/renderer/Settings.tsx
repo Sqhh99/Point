@@ -10,6 +10,7 @@ export function Settings({ onClose }: { onClose(): void }) {
   const [baseURL, setBaseURL] = useState("");
   const [model, setModel] = useState("");
   const [key, setKey] = useState("");
+  const [vision, setVision] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<{ text: string; kind: "" | "ok" | "err" }>({ text: "", kind: "" });
 
@@ -27,6 +28,7 @@ export function Settings({ onClose }: { onClose(): void }) {
     if (!cfg) return;
     setBaseURL(cfg.baseURL);
     setModel(cfg.model);
+    setVision(cfg.capabilities.vision);
     setKey("");
   }, [id, state]);
 
@@ -35,7 +37,9 @@ export function Settings({ onClose }: { onClose(): void }) {
   const save = async () => {
     setBusy(true);
     try {
-      let s = await api.settings.update({ id, baseURL, model, makeActive: true });
+      // Only store an explicit flag when it differs from what the preset says about this model.
+      const presetVision = preset.visionModels.includes(model.trim() || preset.defaultModel);
+      let s = await api.settings.update({ id, baseURL, model, vision: vision === presetVision ? null : vision, makeActive: true });
       if (key) s = await api.settings.setKey(id, key);
       setState(s);
       setStatus({ text: "已保存", kind: "ok" });
@@ -84,12 +88,19 @@ export function Settings({ onClose }: { onClose(): void }) {
       </label>
       <label className="field">
         模型
-        <input type="text" spellCheck={false} list="model-list" value={model} onChange={(e) => setModel(e.target.value)} />
+        <input type="text" spellCheck={false} list="model-list" value={model} onChange={(e) => {
+            setModel(e.target.value);
+            if (cfg.visionOverride === undefined) setVision(preset.visionModels.includes(e.target.value.trim()));
+          }} />
         <datalist id="model-list">
           {preset.models.map((m) => (
             <option key={m} value={m} />
           ))}
         </datalist>
+      </label>
+      <label className="check">
+        <input type="checkbox" data-testid="vision-toggle" checked={vision} onChange={(e) => setVision(e.target.checked)} />
+        该模型支持看图（框选截图提问需要）
       </label>
       <label className="field">
         API Key

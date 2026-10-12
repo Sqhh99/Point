@@ -334,3 +334,52 @@ test("exports the current note as md and all notes as a zip", async () => {
   expect(conv).toContain("type: conversation");
   expect(conv).toContain("### AI");
 });
+
+test("status bar shows workspace, doc and model; region capture attaches a screenshot to a question", async () => {
+  const win = await app.firstWindow();
+  const ws = (await win.evaluate(() => window.point.workspace.get())).path!;
+  await win.getByTestId("doc-list").getByRole("button", { name: /熵的定义/ }).click();
+  await expect(win.getByTestId("reader").locator("h1")).toHaveText("熵的定义");
+
+  const bar = win.getByTestId("statusbar");
+  expect((await bar.boundingBox())?.height).toBe(24);
+  await expect(bar).toContainText("熵的定义");
+  await expect(win.getByTestId("status-model")).toHaveText("fake");
+  await expect(win.getByTestId("status-vision")).toHaveText("支持看图");
+
+  // Toolbar button enters capture mode, Esc leaves it.
+  await win.getByTestId("capture-button").click();
+  const overlay = win.getByTestId("capture-overlay");
+  await expect(overlay).toBeVisible();
+  await win.keyboard.press("Escape");
+  await expect(overlay).toBeHidden();
+
+  // Shortcut enters it too; drag a rectangle over the reader.
+  await win.keyboard.press(process.platform === "darwin" ? "Meta+Shift+S" : "Control+Shift+S");
+  await expect(overlay).toBeVisible();
+  const box = (await win.getByTestId("reader").boundingBox())!;
+  await win.mouse.move(box.x + 20, box.y + 60);
+  await win.mouse.down();
+  await win.mouse.move(box.x + 200, box.y + 140, { steps: 5 });
+  await expect(win.getByTestId("capture-rect")).toBeVisible();
+  await win.mouse.up();
+  await expect(overlay).toBeHidden();
+  const attached = win.getByTestId("attached-image");
+  await expect(attached).toContainText("已附截图");
+
+  const captures = readdirSync(join(ws, ".point", "captures"));
+  expect(captures).toHaveLength(1);
+  expect(captures[0]).toMatch(/^[0-9a-f]{64}\.png$/);
+  expect(readFileSync(join(ws, ".point", "captures", captures[0])).subarray(1, 4).toString()).toBe("PNG");
+
+  await win.screenshot({ path: join(import.meta.dirname, "..", "test-results", "capture.png") });
+  const input = win.getByPlaceholder(/问点什么/);
+  await input.fill("这张截图讲了什么？");
+  await input.press("Enter");
+  const log = win.getByTestId("chat-log");
+  await expect(log.locator('[data-role="assistant"]').last()).toContainText("已收到 1 张截图");
+  await expect(attached).toBeHidden();
+
+  // The renderer cannot name a path: only a 64-hex sha is accepted.
+  await expect(win.evaluate(() => window.point.tasks.run({ kind: "ask", selection: "", question: "q", image: "../index.db" }))).rejects.toThrow(/无效的截图标识/);
+});

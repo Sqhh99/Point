@@ -1,11 +1,13 @@
-export type { ChatMessage, ChatOptions, Delta, FetchLike, LLMProvider, Role } from "./llm/types.js";
+export type { ChatMessage, ChatOptions, Delta, FetchLike, ImageInput, LLMProvider, Role } from "./llm/types.js";
 export { LLMError, type LLMErrorCode } from "./llm/errors.js";
-export { OpenAICompatibleProvider, type OpenAICompatibleConfig } from "./llm/openai-compatible.js";
+export { OpenAICompatibleProvider, buildOpenAIBody, type OpenAICompatibleConfig } from "./llm/openai-compatible.js";
 export {
   PROVIDER_PRESETS,
   createProvider,
   getPreset,
+  modelCapabilities,
   type CreateProviderInput,
+  type ModelCapabilities,
   type ProviderId,
   type ProviderPreset
 } from "./llm/presets.js";

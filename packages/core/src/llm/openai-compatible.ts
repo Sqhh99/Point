@@ -13,6 +13,26 @@ interface ChunkJSON {
   choices?: { delta?: { content?: string | null } }[];
 }
 
+type OpenAIContent = string | ({ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } })[];
+
+/** OpenAI chat/completions body. Messages with images use the content-parts form (`image_url` data URLs). */
+export function buildOpenAIBody(messages: ChatMessage[], opts: Pick<ChatOptions, "model" | "temperature" | "maxTokens">): Record<string, unknown> {
+  const out = messages.map((m): { role: string; content: OpenAIContent } => {
+    if (!m.images?.length) return { role: m.role, content: m.content };
+    return {
+      role: m.role,
+      content: [
+        { type: "text", text: m.content },
+        ...m.images.map((i) => ({ type: "image_url" as const, image_url: { url: `data:${i.mime};base64,${i.base64}` } }))
+      ]
+    };
+  });
+  const body: Record<string, unknown> = { model: opts.model, messages: out, stream: true };
+  if (opts.temperature !== undefined) body.temperature = opts.temperature;
+  if (opts.maxTokens !== undefined) body.max_tokens = opts.maxTokens;
+  return body;
+}
+
 function isAbort(err: unknown): boolean {
   return err instanceof Error && err.name === "AbortError";
 }
@@ -31,9 +51,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
   }
 
   async *chat(messages: ChatMessage[], opts: ChatOptions): AsyncIterable<Delta> {
-    const body: Record<string, unknown> = { model: opts.model, messages, stream: true };
-    if (opts.temperature !== undefined) body.temperature = opts.temperature;
-    if (opts.maxTokens !== undefined) body.max_tokens = opts.maxTokens;
+    const body = buildOpenAIBody(messages, opts);
 
     let res: Response;
     try {
