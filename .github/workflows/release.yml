@@ -43,6 +43,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      # node-gyp 9 (better-sqlite3 rebuild) imports distutils, removed in Python 3.12.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
