@@ -30,3 +30,8 @@
 1. CSV 只按 UTF-8 解码（`packages/core/src/docs/xlsx.ts` 中 `TextDecoder("utf-8")`）：UTF-16 CSV（Excel 的“Unicode 文本”）和 GBK CSV（中文 Windows 上 Excel 默认的 CSV）都会乱码。
 2. 按序号打开最近记录时，序号指的是过滤掉不存在文件之后的列表（`apps/desktop/src/main/open-ipc.ts` 的 `openRecentAt`），每次调用都会重新过滤。菜单打开期间如果前面某一项被删，点第 i 项会打开另一个文件。
 3. （macOS，等 CI 确认）`resolveOpenTarget` 用的是 `realpathSync`（JS 实现），它保留调用方传入的大小写；而 darwin 上 `path.relative` 区分大小写，所以 `…/SCRATCH` 不会被识别成 scratch 目录。修法可以改用 `realpathSync.native`。
+
+## 6. 追加：合入 #34 的 typecheck 修复（2026-10-12）
+- 用普通 merge commit 合入 \`origin/feat/viewers\`（包含 \`6187aab\`，修了 \`open.test.ts\` 的类型），没有 rebase，也没有 force-push。
+- 本地 Linux：\`pnpm lint\`、\`pnpm typecheck\` 通过；\`pnpm test\` 通过：core 137；main 266，其中 262 通过、4 个由平台条件跳过。
+- 两个平台的 CI 结果，以及 macOS 上 scratch 大小写那条 \`it.fails\` 的结论，CI 跑完后补在这里或 PR 评论里。

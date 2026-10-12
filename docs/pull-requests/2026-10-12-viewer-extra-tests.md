@@ -30,10 +30,10 @@ Related to #34
 不升版本。
 
 ## 如何测试
-- [ ] `pnpm lint` 和 `pnpm typecheck` 通过 —— lint 通过；typecheck 失败，原因是 #34 自带的 `open.test.ts` 有 TS18046 错误（33、34、52、53、99 行），在基线 `24ec7f2` 上同样失败，本 PR 新增的文件没有错误
+- [x] `pnpm lint` 和 `pnpm typecheck` 通过（合入 #34 的 `6187aab` 之后）
 - [x] `pnpm test` 通过（core 137；main 262 通过、4 个由平台条件跳过）
 - [ ] `pnpm e2e` 通过 —— 没跑，本 PR 不改 e2e
-- [ ] Windows 和 macOS 上的 CI 全绿 —— 在 #34 的 typecheck 修好之前，check 会和 #34 一起失败
+- [ ] Windows 和 macOS 上的 CI 全绿 —— 推送合并 commit 后等 CI
 - [ ] 在应用里实际走过受影响的流程 —— 不适用
 
 ## 检查项
