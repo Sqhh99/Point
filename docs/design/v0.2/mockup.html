@@ -1,0 +1,42 @@
+<!doctype html><meta charset="utf-8"><style>
+:root{--bg:#fbfaf7;--elev:#fff;--panel:#f3f1ec;--s2:#ecebe6;--line:rgb(0 0 0/.08);--border:rgb(0 0 0/.1);--text:#1d1d1f;--muted:#6e6e73;--accent:#2f6feb;--hl:rgb(47 111 235/.1);
+--ui:-apple-system,"PingFang SC","Noto Sans CJK SC",sans-serif;--read:"Noto Serif CJK SC",Georgia,serif;--r:8px}
+*{box-sizing:border-box;margin:0}body{width:1440px;height:900px;font:13px var(--ui);color:var(--text);background:var(--bg);display:grid;grid-template-rows:36px 1fr 24px}
+.tb{display:flex;align-items:center;border-bottom:1px solid var(--line);background:var(--panel);padding:0 0 0 12px;gap:10px}
+.tb .ws{font-weight:600}.tb .btn{padding:3px 8px;border-radius:6px;color:var(--muted)}.tb .btn:hover{background:var(--s2)}
+.tb .title{flex:1;text-align:center;color:var(--muted)}.wc{display:flex}.wc span{width:46px;height:36px;display:grid;place-items:center;color:var(--muted)}
+main{display:grid;grid-template-columns:240px 1fr 400px;min-height:0}
+aside{background:var(--panel);border-right:1px solid var(--line);padding:12px 8px;display:flex;flex-direction:column;gap:4px}
+h6{font:600 11px var(--ui);color:var(--muted);letter-spacing:.04em;padding:8px 8px 4px}
+.it{padding:5px 8px;border-radius:6px;display:flex;gap:6px;align-items:center}.it.on{background:var(--hl);color:var(--accent)}
+.mk{display:flex;gap:6px;padding:6px 8px;border-radius:6px;align-items:flex-start}.mk i{width:14px;height:14px;border:1.5px solid var(--border);border-radius:4px;flex:none;margin-top:2px}.mk i.c{background:var(--accent);border-color:var(--accent)}
+.mk small{color:var(--muted);display:block;font-size:11px}.thumb{width:36px;height:24px;border-radius:4px;background:repeating-linear-gradient(45deg,#ddd 0 3px,#eee 3px 6px);flex:none}
+.ask{margin-top:auto;background:var(--accent);color:#fff;text-align:center;padding:7px;border-radius:var(--r);font-weight:600}
+.reader{overflow:hidden;display:flex;flex-direction:column;align-items:center}
+.rt{align-self:stretch;height:40px;display:flex;align-items:center;gap:6px;padding:0 16px;border-bottom:1px solid var(--line);color:var(--muted)}.rt b{color:var(--text);font-weight:500}.rt .sp{flex:1}.rt span{padding:3px 8px;border-radius:6px}.rt .act{background:var(--s2);color:var(--text)}
+.page{margin:24px;width:640px;background:var(--elev);border:1px solid var(--line);border-radius:4px;padding:56px 64px;font:16px/1.85 var(--read);position:relative;box-shadow:0 1px 3px rgb(0 0 0/.05)}
+.page h1{font-size:22px;margin-bottom:16px}.page p{margin-bottom:14px}.sel{background:rgb(47 111 235/.22)}
+.fb{position:absolute;left:300px;top:150px;display:flex;background:var(--text);color:#fff;border-radius:var(--r);height:36px;align-items:center;padding:0 4px;font:13px var(--ui);box-shadow:0 4px 16px rgb(0 0 0/.18)}.fb span{padding:6px 10px}.fb span+span{border-left:1px solid rgb(255 255 255/.15)}
+.region{position:absolute;left:64px;top:330px;width:300px;height:120px;border:1.5px dashed var(--accent);background:rgb(47 111 235/.06);border-radius:4px}
+.chat{border-left:1px solid var(--line);display:flex;flex-direction:column;background:var(--bg);min-height:0}
+.crumb{height:40px;display:flex;align-items:center;gap:6px;padding:0 14px;border-bottom:1px solid var(--line);color:var(--muted)}.crumb b{color:var(--text);font-weight:500}.crumb .tree{margin-left:auto;padding:3px 8px;border-radius:6px;background:var(--s2);color:var(--text)}
+.msgs{flex:1;padding:16px 14px;display:flex;flex-direction:column;gap:14px;overflow:hidden}
+.q{border-left:3px solid var(--accent);background:var(--panel);padding:6px 10px;border-radius:0 6px 6px 0;color:var(--muted);font:13px/1.6 var(--read)}
+.u{align-self:flex-end;background:var(--s2);padding:8px 12px;border-radius:var(--r);max-width:85%}
+.a{font:14px/1.75 var(--read)}.a .br{text-decoration:underline;text-decoration-color:var(--accent);text-underline-offset:4px}
+.bc{display:inline-flex;gap:4px;margin-top:6px;font:12px var(--ui);color:var(--accent);background:var(--hl);padding:2px 8px;border-radius:10px}
+.comp{margin:0 14px 14px;border:1px solid var(--border);border-radius:var(--r);background:var(--elev);padding:10px 12px;color:var(--muted);display:flex;justify-content:space-between}
+footer{border-top:1px solid var(--line);background:var(--panel);display:flex;align-items:center;padding:0 12px;gap:16px;color:var(--muted);font-size:11px}
+</style>
+<div class="tb"><span class="ws">信息论读书会</span><span class="btn">打开 ▾</span><span class="title">Shannon-1948.pdf</span><div class="wc"><span>—</span><span>☐</span><span>✕</span></div></div>
+<main><aside><h6>文件</h6><div class="it">📁 papers</div><div class="it on">📄 Shannon-1948.pdf</div><div class="it">📊 实验数据.xlsx</div><div class="it">📝 讲义.docx</div>
+<h6>AI 笔记</h6><div class="it">✦ 熵与互信息.md</div><div class="it">✦ 第2章总结.md</div>
+<h6>标记 · 3</h6><div class="mk"><i class="c"></i><div>信道容量<small>p.4</small></div></div><div class="mk"><i class="c"></i><div class="thumb"></div><div>图 7 区域<small>p.11</small></div></div><div class="mk"><i></i><div>冗余度<small>p.6</small></div></div>
+<div class="ask">一起问（2）</div></aside>
+<section class="reader"><div class="rt"><b>p.4 / 55</b><span class="sp"></span><span>− 100% +</span><span class="act">⬚ 框选</span><span>⋯</span></div>
+<div class="page"><h1>A Mathematical Theory of Communication</h1><p>The fundamental problem of communication is that of reproducing at one point either exactly or approximately a message selected at another point. We define the <span class="sel">channel capacity</span> as the maximum rate…</p><div class="fb"><span>问 AI</span><span>标记</span><span>解读</span></div><p>Frequently the messages have meaning; that is they refer to or are correlated according to some system with certain physical or conceptual entities.</p><div class="region"></div><p style="margin-top:150px">These semantic aspects of communication are irrelevant to the engineering problem.</p></div></section>
+<section class="chat"><div class="crumb">主对话 › <b>信道容量</b><span class="tree">⑂ 分支树</span></div><div class="msgs">
+<div class="q">“the channel capacity as the maximum rate…” · p.4</div><div class="u">这里的信道容量怎么理解？</div>
+<div class="a">信道容量是信道在<span class="br">噪声存在时仍能可靠传输的最高信息速率</span>，单位是比特每秒。它由带宽和信噪比共同决定……<br><span class="bc">⑂ 2 个分支</span></div></div>
+<div class="comp"><span>继续问，或在回答里选中文字派生分支…</span><span>⌘↵</span></div></section></main>
+<footer><span>DeepSeek · deepseek-chat · 可看图 ✓</span><span>已保存到本地</span></footer>
