@@ -30,3 +30,13 @@ export const IconCapture = () => (
     <path d="M2.5 5V2.5H5M11 2.5h2.5V5M13.5 11v2.5H11M5 13.5H2.5V11" />
   </svg>
 );
+export const IconMark = () => (
+  <svg {...base}>
+    <path d="M4.5 2.5h7v11l-3.5-2.5-3.5 2.5z" />
+  </svg>
+);
+export const IconMore = () => (
+  <svg {...base}>
+    <path d="M3.5 8h.01M8 8h.01M12.5 8h.01" strokeWidth={2.2} />
+  </svg>
+);

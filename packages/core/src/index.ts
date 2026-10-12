@@ -1,4 +1,4 @@
-export type { ChatMessage, ChatOptions, Delta, FetchLike, ImageInput, LLMProvider, Role } from "./llm/types.js";
+export type { ChatMessage, ChatOptions, Delta, ContentPart, FetchLike, ImageInput, LLMProvider, Role } from "./llm/types.js";
 export { LLMError, type LLMErrorCode } from "./llm/errors.js";
 export { OpenAICompatibleProvider, buildOpenAIBody, type OpenAICompatibleConfig } from "./llm/openai-compatible.js";
 export {
@@ -53,3 +53,16 @@ export {
 } from "./notes/export.js";
 export { DbTooNewError, MIGRATIONS, migrate, type MigratableDb } from "./db/migrate.js";
 export * from "./conversations/tree.js";
+export {
+  MARK_LIMITS,
+  MarkStore,
+  buildBatchMessage,
+  isCaptureSha,
+  parseAnchor,
+  type LoadedMark,
+  type Mark,
+  type MarkAnchor,
+  type MarkDb,
+  type RegionAnchor,
+  type TextAnchor
+} from "./marks/index.js";

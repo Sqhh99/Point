@@ -6,9 +6,15 @@ export interface ImageInput {
   base64: string;
 }
 
+/** Ordered content for multimodal messages (text and images interleaved). */
+export type ContentPart = { type: "text"; text: string } | { type: "image"; image: ImageInput };
+
 export interface ChatMessage {
   role: Role;
+  /** Plain-text form; always set (used for history, export, and text-only providers). */
   content: string;
+  /** When set, providers send these parts in order instead of `content` (+ `images`). */
+  parts?: ContentPart[];
   /** Only sent to models whose provider config has `capabilities.vision`. */
   images?: ImageInput[];
 }

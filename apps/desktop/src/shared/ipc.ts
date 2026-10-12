@@ -1,4 +1,4 @@
-import type { ChatMessage, DocType, Note, NoteInput, NoteMeta, ParsedDoc, ProviderId, ProviderPreset, TaskKind } from "@point/core";
+import type { ChatMessage, DocType, Mark, MarkAnchor, Note, NoteInput, NoteMeta, ParsedDoc, ProviderId, ProviderPreset, TaskKind } from "@point/core";
 
 export interface ProviderSettings {
   id: ProviderId;
@@ -93,6 +93,8 @@ export interface TaskRequest {
   page?: number;
   /** Continue this conversation; a new one is created when omitted. */
   conversationId?: string;
+  /** 「一起问」: ids of marks (in the user's selection order); main loads their text / images. */
+  marks?: string[];
   /** sha256 of a region capture in `.point/captures/` to attach as an image. */
   image?: string;
   /** Re-run without storing a new user message (重新生成 / 重试). */
@@ -102,6 +104,8 @@ export interface TaskRequest {
 /** Stored on the user message of a task so the UI can show the quote card and re-run it. */
 export interface MessageMeta {
   request: Omit<TaskRequest, "conversationId" | "regenerate">;
+  /** Snapshot of the marks sent with 「一起问」, in order (validated anchors from the database). */
+  marks?: MarkAnchor[];
   docTitle?: string;
 }
 
@@ -154,6 +158,12 @@ export interface PointAPI {
     action(a: WindowAction): Promise<void>;
     /** Fires with the new maximized state; returns an unsubscribe. */
     onMaximized(cb: (maximized: boolean) => void): () => void;
+  };
+  marks: {
+    list(docId: string): Promise<Mark[]>;
+    create(docId: string, anchor: MarkAnchor, note?: string): Promise<Mark>;
+    updateNote(id: string, note: string): Promise<Mark>;
+    remove(id: string): Promise<void>;
   };
   capture: {
     /** Captures `rect` (CSS px of this window) into the workspace; resolves with the sha only. */
@@ -254,5 +264,9 @@ export const IPC = {
   notesExportCurrent: "notes:exportCurrent",
   notesExportAll: "notes:exportAll",
   convExport: "conversations:export",
-  captureRegion: "capture:region"
+  captureRegion: "capture:region",
+  marksList: "marks:list",
+  marksCreate: "marks:create",
+  marksUpdateNote: "marks:updateNote",
+  marksRemove: "marks:remove"
 } as const;

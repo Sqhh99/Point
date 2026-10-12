@@ -18,6 +18,14 @@ type OpenAIContent = string | ({ type: "text"; text: string } | { type: "image_u
 /** OpenAI chat/completions body. Messages with images use the content-parts form (`image_url` data URLs). */
 export function buildOpenAIBody(messages: ChatMessage[], opts: Pick<ChatOptions, "model" | "temperature" | "maxTokens">): Record<string, unknown> {
   const out = messages.map((m): { role: string; content: OpenAIContent } => {
+    if (m.parts?.length) {
+      return {
+        role: m.role,
+        content: m.parts.map((p) =>
+          p.type === "text" ? { type: "text" as const, text: p.text } : { type: "image_url" as const, image_url: { url: `data:${p.image.mime};base64,${p.image.base64}` } }
+        )
+      };
+    }
     if (!m.images?.length) return { role: m.role, content: m.content };
     return {
       role: m.role,

@@ -5,7 +5,8 @@ import { dragRect, type Box } from "./layout";
 interface Props {
   /** Area that can be captured (client px), usually the reader column. */
   bounds: Box;
-  onDone(r: CaptureResult): void;
+  /** `rect` is the dragged rectangle in client px. */
+  onDone(r: CaptureResult, rect: Box): void;
   onCancel(): void;
   onError(message: string): void;
 }
@@ -38,7 +39,7 @@ export function CaptureOverlay({ bounds, onDone, onCancel, onError }: Props) {
     await nextFrame();
     await nextFrame();
     try {
-      onDone(await window.point.capture.region(r));
+      onDone(await window.point.capture.region(r), r);
     } catch (e) {
       onError((e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ""));
     }
