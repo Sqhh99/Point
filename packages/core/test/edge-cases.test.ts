@@ -241,10 +241,13 @@ describe("doc parser edge cases", () => {
     expect(docTypeOf("x.txt")).toBeUndefined();
   });
 
-  // KNOWN BUG (see PR body): a file with no extension whose whole name is "pdf"/"md"/"docx"
-  // is classified as that type, because docTypeOf uses split(".").pop() on the full name.
-  it.fails("docTypeOf: extension-less names are not documents (known bug)", () => {
+  it("docTypeOf: extension-less names are not documents", () => {
     expect(docTypeOf("pdf")).toBeUndefined();
+    expect(docTypeOf("md")).toBeUndefined();
+    expect(docTypeOf("docx")).toBeUndefined();
+    expect(docTypeOf("/tmp/a.pdf/notes")).toBeUndefined();
+    expect(docTypeOf("C:\\docs.v2\\pdf")).toBeUndefined();
+    expect(docTypeOf("/tmp/dir/paper.pdf")).toBe("pdf");
   });
 
   it("empty markdown gives no blocks and the fallback title", async () => {

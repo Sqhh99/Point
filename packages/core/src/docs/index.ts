@@ -6,7 +6,10 @@ import type { DocType, ParsedDoc } from "./types.js";
 export const DOC_EXTENSIONS: Record<DocType, string[]> = { pdf: ["pdf"], docx: ["docx"], md: ["md", "markdown"] };
 
 export function docTypeOf(fileName: string): DocType | undefined {
-  const ext = fileName.toLowerCase().split(".").pop() ?? "";
+  const base = fileName.split(/[\\/]/).pop() ?? "";
+  const dot = base.lastIndexOf(".");
+  if (dot === -1) return undefined;
+  const ext = base.slice(dot + 1).toLowerCase();
   return (Object.keys(DOC_EXTENSIONS) as DocType[]).find((t) => DOC_EXTENSIONS[t].includes(ext));
 }
 
