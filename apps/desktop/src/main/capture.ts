@@ -1,7 +1,7 @@
 import { ipcMain } from "electron";
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
-import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join, relative, isAbsolute } from "node:path";
 import type { ImageInput } from "@point/core";
 import { IPC, type CaptureRect, type CaptureResult } from "../shared/ipc.js";
@@ -41,7 +41,10 @@ export function toCaptureRect(raw: unknown): CaptureRect {
   return { x, y, width, height };
 }
 
-/** `<root>/.point/captures`, refusing it when its real path leaves the workspace (e.g. a symlinked folder). */
+/**
+ * Real path of `<root>/.point/captures`, refused when it leaves the workspace (e.g. the folder is a
+ * symlink to somewhere else). Used by both read and write.
+ */
 function capturesDir(root: string, create: boolean): string {
   const dir = join(root, ".point", "captures");
   if (create) mkdirSync(dir, { recursive: true });
@@ -49,19 +52,36 @@ function capturesDir(root: string, create: boolean): string {
   const realDir = fs.realpathSync.native(dir);
   const rel = relative(realRoot, realDir);
   if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) throw new Error("截图目录不在工作区内");
-  return dir;
+  return realDir;
 }
 
-/** Stores PNG bytes under their sha256 (idempotent) and returns the sha. */
+const lstatOrNull = (p: string) => {
+  try {
+    return fs.lstatSync(p);
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Stores PNG bytes under their sha256 (idempotent) and returns the sha. The temp file is created with
+ * `wx` (never opens an existing path or link) under a random name inside the verified captures dir,
+ * then renamed onto `<sha>.png`; rename replaces a symlink itself instead of writing through it.
+ */
 export function writeCapture(root: string, png: Buffer): string {
   if (png.byteLength === 0) throw new Error("截图为空");
   const sha = createHash("sha256").update(png).digest("hex");
-  capturesDir(root, true);
-  const file = capturePath(root, sha);
-  if (!existsSync(file)) {
-    const tmp = `${file}.${randomUUID()}.tmp`;
-    writeFileSync(tmp, png, { flag: "wx" });
+  const dir = capturesDir(root, true);
+  const file = join(dir, `${assertCaptureSha(sha)}.png`);
+  const existing = lstatOrNull(file);
+  if (existing && !existing.isSymbolicLink()) return sha; // already stored (a dir here is left alone, nothing written)
+  const tmp = join(dir, `.${randomUUID()}.tmp`);
+  writeFileSync(tmp, png, { flag: "wx" });
+  try {
     renameSync(tmp, file);
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    throw err;
   }
   return sha;
 }
@@ -89,10 +109,10 @@ export function readRegularFile(file: string, deps: FsDeps = fs): Buffer {
 
 /** Every refusal (bad sha, outside dir, symlink, dir, swapped, missing) looks like a missing capture. */
 export function readCapture(root: string, sha: unknown): Buffer {
-  const file = capturePath(root, sha);
+  assertCaptureSha(sha);
   try {
-    capturesDir(root, false);
-    return readRegularFile(file);
+    // Any lstat/open/fstat failure (ENOENT, EISDIR, ELOOP, ENOTDIR, swapped inode, dir outside) = missing.
+    return readRegularFile(join(capturesDir(root, false), `${sha as string}.png`));
   } catch {
     throw new Error("截图不存在或已被删除");
   }

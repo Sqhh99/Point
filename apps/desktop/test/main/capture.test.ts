@@ -260,3 +260,48 @@ describe("readCapture never follows links or swapped files", () => {
     expect(() => capture.readCapture(root, "d".repeat(64))).toThrow("截图不存在或已被删除");
   });
 });
+
+describe("writeCapture stays inside the verified captures dir", () => {
+  const canSymlink = process.platform !== "win32";
+
+  it("temp files are created inside captures and cleaned up by the rename", () => {
+    const root = tmp("point-cap-w-");
+    const sha = capture.writeCapture(root, PNG);
+    expect(readdirSync(join(root, ".point", "captures"))).toEqual([`${sha}.png`]);
+  });
+
+  it.runIf(canSymlink)("a <sha>.png symlink is replaced, never written through", () => {
+    const root = tmp("point-cap-wl-");
+    const outside = join(tmp("point-cap-target-"), "victim.png");
+    writeFileSync(outside, "ORIGINAL");
+    mkdirSync(join(root, ".point", "captures"), { recursive: true });
+    const file = join(root, ".point", "captures", `${shaOf(PNG)}.png`);
+    symlinkSync(outside, file);
+    expect(capture.writeCapture(root, PNG)).toBe(shaOf(PNG));
+    expect(readFileSync(outside, "utf8")).toBe("ORIGINAL");
+    expect(fs.lstatSync(file).isFile()).toBe(true);
+    expect(capture.readCapture(root, shaOf(PNG))).toEqual(PNG);
+  });
+
+  it.runIf(canSymlink)("a captures dir symlinked outside is refused for writes", () => {
+    const root = tmp("point-cap-wd-");
+    const elsewhere = tmp("point-cap-wd-out-");
+    mkdirSync(join(root, ".point"), { recursive: true });
+    symlinkSync(elsewhere, join(root, ".point", "captures"), "dir");
+    expect(() => capture.writeCapture(root, PNG)).toThrow("截图目录不在工作区内");
+    expect(readdirSync(elsewhere)).toEqual([]);
+  });
+
+  it.runIf(canSymlink)("ELOOP / ENOTDIR read as missing", () => {
+    const root = tmp("point-cap-loop-");
+    const dir = join(root, ".point", "captures");
+    mkdirSync(dir, { recursive: true });
+    const a = join(dir, `${"1".repeat(64)}.png`);
+    symlinkSync(a, a);
+    expect(() => capture.readCapture(root, "1".repeat(64))).toThrow("截图不存在或已被删除");
+    const r2 = tmp("point-cap-nd-");
+    mkdirSync(join(r2, ".point"), { recursive: true });
+    writeFileSync(join(r2, ".point", "captures"), "not a dir");
+    expect(() => capture.readCapture(r2, "1".repeat(64))).toThrow("截图不存在或已被删除");
+  });
+});
