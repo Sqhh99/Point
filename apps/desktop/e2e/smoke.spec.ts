@@ -32,6 +32,19 @@ test("launches and opens the main window", async () => {
   await expect(win.locator("#app")).toBeAttached();
 });
 
+test("custom title bar replaces the native frame", async () => {
+  const win = await app.firstWindow();
+  const bar = win.getByTestId("titlebar");
+  await expect(bar).toBeVisible();
+  expect((await bar.boundingBox())?.height).toBe(36);
+  if (process.platform !== "darwin") {
+    await expect(bar.getByRole("button", { name: "最小化" })).toBeVisible();
+    await expect(bar.getByRole("button", { name: "关闭" })).toBeVisible();
+  }
+  await win.screenshot({ path: join(import.meta.dirname, "..", "test-results", "titlebar.png") });
+  await expect(win.evaluate(() => window.point.window.action("setBounds" as never))).rejects.toThrow();
+});
+
 test("renderer is isolated from Node", async () => {
   const win = await app.firstWindow();
   const globals = await win.evaluate(() => ({

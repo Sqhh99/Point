@@ -4,6 +4,7 @@ import { runSmoke } from "./smoke.js";
 import { registerDocsIpc } from "./docs-ipc.js";
 import { registerIpc } from "./ipc.js";
 import { registerTasksIpc } from "./tasks-ipc.js";
+import { registerWindowIpc, titleBarOptions, watchMaximized } from "./window-ipc.js";
 import { notifyIfUpdateAvailable } from "./update-check.js";
 import { closeWorkspace, restoreWorkspace } from "./workspace.js";
 
@@ -19,6 +20,7 @@ function createWindow(): void {
     height: 800,
     minWidth: 900,
     minHeight: 600,
+    ...titleBarOptions(process.platform),
     webPreferences: {
       preload: join(import.meta.dirname, "../preload/index.cjs"),
       contextIsolation: true,
@@ -26,6 +28,7 @@ function createWindow(): void {
       sandbox: true
     }
   });
+  watchMaximized(win);
   if (process.env.ELECTRON_RENDERER_URL) {
     win.loadURL(process.env.ELECTRON_RENDERER_URL);
   } else {
@@ -37,6 +40,7 @@ app.whenReady().then(() => {
   registerIpc();
   registerDocsIpc();
   registerTasksIpc();
+  registerWindowIpc();
   restoreWorkspace();
   createWindow();
   void notifyIfUpdateAvailable();

@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { DocMeta, WorkspaceInfo } from "../shared/ipc";
 import { AIPanel, type TaskTrigger } from "./AIPanel";
 import { Library } from "./Library";
 import { Reader } from "./Reader";
 import { Settings } from "./Settings";
+import { TitleBar } from "./TitleBar";
+import { clampChatWidth, isToggleLibraryKey } from "./layout";
 
 const api = window.point;
 
@@ -16,6 +18,32 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [trigger, setTrigger] = useState<TaskTrigger | null>(null);
   const [docTitle, setDocTitle] = useState<string | null>(null);
+  const [chatWidth, setChatWidth] = useState(() => clampChatWidth(localStorage.getItem("point.chatWidth")));
+  const drag = useRef<{ x: number; w: number } | null>(null);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (isToggleLibraryKey(e, api.platform)) {
+        e.preventDefault();
+        setLibraryOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const startResize = (e: React.PointerEvent) => {
+    drag.current = { x: e.clientX, w: chatWidth };
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  };
+  const onResize = (e: React.PointerEvent) => {
+    if (!drag.current) return;
+    setChatWidth(clampChatWidth(drag.current.w + drag.current.x - e.clientX));
+  };
+  const endResize = () => {
+    drag.current = null;
+    localStorage.setItem("point.chatWidth", String(chatWidth));
+  };
 
   const refresh = useCallback(async () => {
     setWorkspace(await api.workspace.get());
@@ -47,7 +75,9 @@ export function App() {
   });
 
   return (
-    <div className={`desk${libraryOpen ? "" : " library-collapsed"}`}>
+    <div className="shell">
+    <TitleBar workspace={workspace.path} fileName={view === "settings" ? "设置" : docTitle} onOpenWorkspace={chooseWorkspace} onImport={importDocs} />
+    <div className={`desk${libraryOpen ? "" : " library-collapsed"}`} style={{ "--chat-width": `${chatWidth}px` } as React.CSSProperties}>
       <Library
         open={libraryOpen}
         onToggle={() => setLibraryOpen((o) => !o)}
@@ -78,6 +108,7 @@ export function App() {
           />
         )}
       </main>
+      <div className="col-resizer" role="separator" aria-orientation="vertical" aria-label="调整对话面板宽度" onPointerDown={startResize} onPointerMove={onResize} onPointerUp={endResize} />
       <AIPanel
         trigger={trigger}
         docId={activeId}
@@ -85,6 +116,7 @@ export function App() {
         hasWorkspace={!!workspace.path}
         onOpenSettings={() => setView("settings")}
       />
+    </div>
     </div>
   );
 }
