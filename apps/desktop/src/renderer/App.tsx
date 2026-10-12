@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { DocMeta, WorkspaceInfo } from "../shared/ipc";
+import type { DocMeta, OpenResult, WorkspaceInfo } from "../shared/ipc";
 import { AIPanel, type TaskTrigger } from "./AIPanel";
 import { Library } from "./Library";
 import { Reader } from "./Reader";
 import { Settings } from "./Settings";
 import { TitleBar } from "./TitleBar";
-import { clampChatWidth, isToggleLibraryKey } from "./layout";
+import { clampChatWidth, isToggleLibraryKey, openShortcutOf } from "./layout";
 
 const api = window.point;
 
@@ -23,6 +23,12 @@ export function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const o = openShortcutOf(e, api.platform);
+      if (o) {
+        e.preventDefault();
+        (o === "file" ? shortcuts.current.openFile : shortcuts.current.chooseWorkspace)();
+        return;
+      }
       if (isToggleLibraryKey(e, api.platform)) {
         e.preventDefault();
         setLibraryOpen((o) => !o);
@@ -59,11 +65,19 @@ export function App() {
     fn().catch((e: Error) => setError(e.message));
   };
 
-  const chooseWorkspace = run(async () => {
-    await api.workspace.choose();
-    setActiveId(null);
+  const applyOpen = async (r: OpenResult) => {
     await refresh();
-  });
+    setActiveId(r.doc?.id ?? null);
+    setView("reader");
+  };
+  const chooseWorkspace = run(async () => applyOpen(await api.open.workspace()));
+  const openFile = run(async () => applyOpen(await api.open.file()));
+  const openRecent = (i: number) => run(async () => applyOpen(await api.open.recentAt(i)))();
+  const opened = useRef(applyOpen);
+  opened.current = applyOpen;
+  useEffect(() => api.open.onOpened((r) => void opened.current(r).catch((e: Error) => setError(e.message))), []);
+  const shortcuts = useRef({ chooseWorkspace, openFile });
+  shortcuts.current = { chooseWorkspace, openFile };
 
   const importDocs = run(async () => {
     const added = await api.docs.import();
@@ -76,7 +90,7 @@ export function App() {
 
   return (
     <div className="shell">
-    <TitleBar workspace={workspace.path} fileName={view === "settings" ? "设置" : docTitle} onOpenWorkspace={chooseWorkspace} onImport={importDocs} />
+    <TitleBar workspace={workspace.path} fileName={view === "settings" ? "设置" : docTitle} onOpenWorkspace={chooseWorkspace} onOpenFile={openFile} onImport={importDocs} />
     <div className={`desk${libraryOpen ? "" : " library-collapsed"}`} style={{ "--chat-width": `${chatWidth}px` } as React.CSSProperties}>
       <Library
         open={libraryOpen}
@@ -90,6 +104,7 @@ export function App() {
         }}
         onChooseWorkspace={chooseWorkspace}
         onImport={importDocs}
+        onOpenFile={openFile}
         onOpenSettings={() => setView("settings")}
         settingsActive={view === "settings"}
       />
@@ -103,6 +118,9 @@ export function App() {
           <Reader
             docId={activeId}
             hasWorkspace={!!workspace.path}
+            onOpenWorkspace={chooseWorkspace}
+            onOpenFile={openFile}
+            onOpenRecent={openRecent}
             onDocLoaded={(d) => setDocTitle(d?.title ?? null)}
             onAction={(kind, sel) => setTrigger((t) => ({ seq: (t?.seq ?? 0) + 1, kind, sel }))}
           />

@@ -79,6 +79,7 @@ button.link.active { color: var(--accent); }
 .library-head { display: flex; align-items: center; gap: 4px; padding: 10px 8px; }
 .workspace-name { border: none; font-weight: 600; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; padding: 4px 6px; }
 .library-actions { padding: 0 12px 8px; }
+.library-actions { display: flex; flex-direction: column; gap: 4px; }
 .library-actions button { width: 100%; }
 .doc-list { list-style: none; margin: 0; padding: 0 6px; flex: 1; overflow-y: auto; }
 .doc { display: flex; gap: 8px; align-items: baseline; width: 100%; border: none; text-align: left; padding: 7px 8px; }
@@ -214,3 +215,16 @@ button.link.active { color: var(--accent); }
 .export-toast { font-size: 12px; white-space: nowrap; animation: pop-in 0.12s ease-out; }
 .export-toast.ok { color: var(--success); }
 .export-toast.err { color: var(--danger); display: inline-flex; align-items: center; gap: 2px; }
+
+.empty-state { max-width: 440px; margin: 15vh auto 0; padding: 0 24px; text-align: center; }
+.empty-state h2 { font-size: 16px; font-weight: 600; margin: 0 0 8px; }
+.empty-state .muted { color: var(--muted); font-size: 13px; margin: 0 0 24px; }
+.empty-actions { display: flex; gap: 8px; justify-content: center; }
+.empty-actions button { height: 32px; padding: 0 12px; border-radius: 8px; display: inline-flex; gap: 8px; align-items: center; }
+.empty-actions button.primary { background: var(--accent); color: var(--bg-elevated); border-color: var(--accent); }
+.empty-actions kbd { font-family: var(--ui-font); font-size: 11px; opacity: 0.7; }
+.recent-list { list-style: none; margin: 24px 0 0; padding: 0; text-align: left; border-top: 1px solid var(--line); }
+.recent-list button { width: 100%; display: flex; gap: 8px; padding: 8px 4px; border: 0; background: transparent; border-radius: 6px; text-align: left; }
+.recent-list button:hover { background: var(--line); }
+.recent-kind { color: var(--muted); font-size: 11px; width: 40px; flex: none; }
+.recent-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
