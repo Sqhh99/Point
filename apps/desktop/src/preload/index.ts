@@ -3,6 +3,14 @@ import { IPC, type ChatEvent, type PointAPI, type TaskEvent } from "../shared/ip
 
 const api: PointAPI = {
   platform: process.platform,
+  window: {
+    action: (a) => ipcRenderer.invoke(IPC.windowAction, a),
+    onMaximized: (cb) => {
+      const listener = (_e: IpcRendererEvent, m: boolean) => cb(m);
+      ipcRenderer.on(IPC.windowMaximized, listener);
+      return () => ipcRenderer.removeListener(IPC.windowMaximized, listener);
+    }
+  },
   settings: {
     get: () => ipcRenderer.invoke(IPC.settingsGet),
     update: (patch) => ipcRenderer.invoke(IPC.settingsUpdate, patch),

@@ -97,8 +97,20 @@ export type ExportResult =
   | { ok: false; canceled: true }
   | { ok: false; canceled?: false; message: string };
 
+/** The only window actions the renderer may request; anything else is rejected in main. */
+export const WINDOW_ACTIONS = ["minimize", "toggleMaximize", "close"] as const;
+export type WindowAction = (typeof WINDOW_ACTIONS)[number];
+export function isWindowAction(a: unknown): a is WindowAction {
+  return typeof a === "string" && (WINDOW_ACTIONS as readonly string[]).includes(a);
+}
+
 export interface PointAPI {
   platform: string;
+  window: {
+    action(a: WindowAction): Promise<void>;
+    /** Fires with the new maximized state; returns an unsubscribe. */
+    onMaximized(cb: (maximized: boolean) => void): () => void;
+  };
   settings: {
     get(): Promise<SettingsView>;
     update(patch: ProviderPatch): Promise<SettingsView>;
@@ -147,6 +159,8 @@ export interface PointAPI {
 }
 
 export const IPC = {
+  windowAction: "window:action",
+  windowMaximized: "window:maximized",
   settingsGet: "settings:get",
   settingsUpdate: "settings:update",
   settingsSetKey: "settings:setKey",
