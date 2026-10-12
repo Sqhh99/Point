@@ -262,10 +262,28 @@ describe("doc parser edge cases", () => {
     expect(d.blocks[2]).toMatchObject({ text: "<div>raw</div>" });
   });
 
-  it("corrupt docx / pdf reject instead of hanging", async () => {
-    await expect(parseDocx(enc.encode("not a zip"))).rejects.toThrow();
-    await expect(parsePdf(enc.encode("%PDF-1.4 garbage"))).rejects.toThrow();
-  });
+  // Tiny fixed corrupt samples. The first call cold-loads the zip / pdf.js
+  // parsers, which can exceed vitest's 5s default on Windows runners, so
+  // these cases get their own 20s budget; they still must reject.
+  const CORRUPT_TIMEOUT = 20_000;
+  const NOT_ZIP = new Uint8Array([0x6e, 0x6f, 0x74, 0x7a]); // "notz"
+  const TRUNCATED_ZIP = new Uint8Array([0x50, 0x4b, 0x03, 0x04]); // "PK\x03\x04" header only
+  const BAD_PDF = enc.encode("%PDF-1.4\n%%EOF");
+
+  it.each([
+    ["empty", new Uint8Array()],
+    ["not a zip", NOT_ZIP],
+    ["truncated zip header", TRUNCATED_ZIP],
+  ])("corrupt docx (%s) rejects instead of hanging", async (_n, bytes) => {
+    await expect(parseDocx(bytes)).rejects.toThrow();
+  }, CORRUPT_TIMEOUT);
+
+  it.each([
+    ["empty", new Uint8Array()],
+    ["header + EOF only", BAD_PDF],
+  ])("corrupt pdf (%s) rejects instead of hanging", async (_n, bytes) => {
+    await expect(parsePdf(bytes)).rejects.toThrow();
+  }, CORRUPT_TIMEOUT);
 
   it("docx via parseDocument unescapes markdown punctuation", async () => {
     const d = await parseDocument("docx", await makeDocx([{ text: "1. a*b (c)" }]), "f");
