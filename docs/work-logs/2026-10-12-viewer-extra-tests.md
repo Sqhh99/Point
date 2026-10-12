@@ -32,6 +32,23 @@
 3. （macOS，等 CI 确认）`resolveOpenTarget` 用的是 `realpathSync`（JS 实现），它保留调用方传入的大小写；而 darwin 上 `path.relative` 区分大小写，所以 `…/SCRATCH` 不会被识别成 scratch 目录。修法可以改用 `realpathSync.native`。
 
 ## 6. 追加：合入 #34 的 typecheck 修复（2026-10-12）
-- 用普通 merge commit 合入 \`origin/feat/viewers\`（包含 \`6187aab\`，修了 \`open.test.ts\` 的类型），没有 rebase，也没有 force-push。
-- 本地 Linux：\`pnpm lint\`、\`pnpm typecheck\` 通过；\`pnpm test\` 通过：core 137；main 266，其中 262 通过、4 个由平台条件跳过。
-- 两个平台的 CI 结果，以及 macOS 上 scratch 大小写那条 \`it.fails\` 的结论，CI 跑完后补在这里或 PR 评论里。
+- 用普通 merge commit 合入 `origin/feat/viewers`（包含 `6187aab`），没有 rebase，也没有 force-push。
+- 本地 Linux：lint、typecheck 通过；core 137；main 262 通过、4 跳过。
+- **CI run 38279933704：**
+  - check (windows-latest) 通过：core 137；main 263 通过、3 跳过（3 个只在 POSIX 上跑的用例）。
+  - check (macos-latest) 失败：main 263 通过、1 失败、2 跳过（2 个只在 win32 上跑的用例）。失败的是 #34 自带 `open.test.ts` 的「a dropped folder becomes the workspace…」：期望 `/var/...`，实际是 `/private/var/...`。
+  - 两个平台的 e2e、package 都没跑（check 失败）。
+  - macOS 上 scratch 大小写那条 `it.fails` 通过了，说明那条用例在 macOS 上确实失败，bug 3 在 macOS 上真实存在；Windows 上同一用例作为普通 `it` 通过。
+
+## 7. 追加：#34 修复后把 it.fails 改回 it（2026-10-12）
+- 用普通 merge commit 合入 `origin/feat/viewers`（`614264c`：GBK/UTF-16 CSV、过期的最近记录序号、打开错误的提示文案；`ee902a6`：`realpathSync.native`，测试里 macOS 的 `/private/var`）。
+- 4 条 `it.fails` 全部改回普通 `it`，没有仍然失败的：
+  - CSV UTF-16LE、GBK：现在能正确解码。
+  - 序号过期：`openRecentAt(i, expected)` 现在要传入期望的路径；序号对不上时报「无效的最近记录」，不会打开别的文件。
+  - macOS 用不同大小写的 scratch 路径：现在会被拒绝（CI 上验证）。
+- 按新行为调整的断言：
+  - 所有 `openAt` 都带上期望的路径。
+  - 原来的「移走再移回能重新打开」改成：点击已被移走的条目，提示「找不到这个文件，可能已被移动或删除。」，并从最近列表移除。
+  - 新增：序号对、但期望的路径不对或没传时被拒绝。
+- 本地 Linux：`pnpm lint`、`pnpm typecheck` 通过；`pnpm test` 通过：core 138；main 269，其中 265 通过、4 个由平台条件跳过。本 PR 的两个文件：`viewer-extra` 36 个，`open-extra` 61 个。
+- 两个平台的 CI 结果见 PR 评论或下一节。

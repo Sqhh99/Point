@@ -119,14 +119,11 @@ describe("csv", () => {
     expect(tables(parseXlsx(enc("id\n00123\n"), "t"))[0]).toEqual([["id"], ["00123"]]);
   });
 
-  // Bug: everything that is not zip/OLE is decoded as UTF-8. Excel's "Unicode Text"/UTF-16 CSV
-  // (BOM FF FE) comes out as mojibake with NUL characters.
-  it.fails("UTF-16LE with BOM", () => {
+  it("UTF-16LE with BOM", () => {
     expect(tables(parseXlsx(utf16le("名字,备注\r\n张三,你好\r\n"), "t"))[0]).toEqual(expected);
   });
 
-  // Bug: Excel on Chinese Windows saves "CSV (逗号分隔)" as GBK; decoding it as UTF-8 garbles every Chinese cell.
-  it.fails("GBK (Excel default on Chinese Windows)", () => {
+  it("GBK (Excel default on Chinese Windows)", () => {
     // "名字,备注\r\n张三,你好\r\n" in GBK
     const gbk = new Uint8Array([0xc3, 0xfb, 0xd7, 0xd6, 0x2c, 0xb1, 0xb8, 0xd7, 0xa2, 0x0d, 0x0a, 0xd5, 0xc5, 0xc8, 0xfd, 0x2c, 0xc4, 0xe3, 0xba, 0xc3, 0x0d, 0x0a]);
     expect(tables(parseXlsx(gbk, "t"))[0]).toEqual(expected);

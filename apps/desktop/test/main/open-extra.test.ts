@@ -17,7 +17,8 @@ const tmp = (p: string) => realpathSync(mkdtempSync(join(tmpdir(), p)));
 const s = () => new FakeSender();
 type OpenResult = import("../../src/shared/ipc.js").OpenResult;
 type RecentItem = import("../../src/shared/ipc.js").RecentItem;
-const openAt = (i: unknown) => invoke(IPC.openRecentAt, s(), i) as Promise<OpenResult>;
+const openAt = (i: unknown, expected?: unknown) => invoke(IPC.openRecentAt, s(), i, expected) as Promise<OpenResult>;
+const MISSING = "找不到这个文件，可能已被移动或删除。";
 const recentPaths = async () => ((await invoke(IPC.openRecent, s())) as RecentItem[]).map((r) => r.path);
 const file = (name = "a.md", body = "# 标题\n\n正文") => {
   const f = join(tmp("point-src-"), name);
@@ -159,9 +160,8 @@ describe.runIf(caseInsensitive)("resolveOpenTarget: case variants on case-insens
     const f = file("Mixed.md");
     expect(resolveOpenTarget(f.replace("Mixed", "mixed")).kind).toBe("file");
   });
-  // macOS bug: realpathSync (JS) keeps the caller's casing and path.relative is case-sensitive on darwin,
-  // so …/SCRATCH is not recognised as the scratch folder. (Windows' path.relative ignores case.)
-  (process.platform === "darwin" ? it.fails : it)("scratch opened with different case is still rejected", () => {
+  // Was a macOS bug (realpathSync kept the caller's casing); fixed with realpathSync.native.
+  it("scratch opened with different case is still rejected", () => {
     mkdirSync(scratchRoot(), { recursive: true });
     expect(() => resolveOpenTarget(variant(scratchRoot()))).toThrow("无效的路径");
   });
@@ -177,13 +177,13 @@ describe("recent by index (extra)", () => {
   it.each([[-1], [-0.5], [1.5], [NaN], [Infinity], [-Infinity], ["0"], [" 0"], [[0]], [{ valueOf: (): number => 0 }], [undefined], [2 ** 53], [3]])(
     "rejects %s",
     async (i) => {
-      await seed(3);
-      await expect(openAt(i)).rejects.toThrow("无效的最近记录");
+      const [first] = await seed(3);
+      await expect(openAt(i, first)).rejects.toThrow("无效的最近记录");
     }
   );
   it("-0 is index 0", async () => {
     const files = await seed(2);
-    const r = await openAt(-0);
+    const r = await openAt(-0, files[0]);
     expect(r.doc?.type).toBe("md");
     expect((await recentPaths())[0]).toBe(files[0]);
   });
@@ -194,23 +194,29 @@ describe("recent by index (extra)", () => {
     expect(recent).not.toContain(newest);
     expect(recent).toHaveLength(1);
   });
-  it("an entry moved away and back opens again", async () => {
-    const [newest] = await seed(1);
+  it("clicking an entry whose file was moved shows the missing copy and drops it from the list", async () => {
+    const [newest] = await seed(2);
     renameSync(newest!, newest + ".bak");
-    await expect(openAt(0)).rejects.toThrow("无效的最近记录");
+    await expect(openAt(0, newest)).rejects.toThrow(MISSING);
+    expect(await recentPaths()).not.toContain(newest);
     renameSync(newest + ".bak", newest!);
-    expect((await openAt(0)).doc?.type).toBe("md");
+    // it was removed, so even after moving back it stays out until opened again
+    expect(await recentPaths()).not.toContain(newest);
   });
-  // Bug: indexes refer to the list *after* dropping missing files, recomputed on every call. If an earlier
-  // entry disappears between showing the list and the click, index i silently opens a different file.
-  it.fails("a stale index never opens a different file than the one shown", async () => {
-    const [a, b] = await seed(3);
+
+  it("a right index with the wrong / missing expected path is refused", async () => {
+    const [a, b] = await seed(2);
+    for (const exp of [b, undefined, null, 0, "/not/in/recent.md"]) await expect(openAt(0, exp)).rejects.toThrow("无效的最近记录");
+    expect((await openAt(0, a)).doc?.type).toBe("md");
+  });
+  it("a stale index never opens a different file than the one shown", async () => {
+    const [a, b, c] = await seed(3);
     const shown = await recentPaths();
-    expect(shown[1]).toBe(b);
+    expect(shown).toEqual([a, b, c]);
     rmSync(a!); // user deletes the newest file while the menu is open
-    await openAt(1); // click "b"
-    const after = await recentPaths();
-    expect(after[0]).toBe(b); // whatever was opened moves to the top
+    await expect(openAt(1, b)).rejects.toThrow("无效的最近记录"); // index 1 is now c: refused, not opened
+    expect(await recentPaths()).toEqual([b, c]);
+    expect(ws.workspacePath()).toBeNull();
   });
 });
 
