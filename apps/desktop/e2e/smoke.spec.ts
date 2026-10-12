@@ -338,8 +338,3 @@ test("exports the current note as md and all notes as a zip", async () => {
   expect(conv).toContain("type: conversation");
   expect(conv).toContain("### AI");
 });
-
-test("TEMP: deliberate failure to verify trace upload", async () => {
-  const win = await app.firstWindow();
-  await expect(win.getByTestId("does-not-exist")).toBeVisible({ timeout: 2000 });
-});
