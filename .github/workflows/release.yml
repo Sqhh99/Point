@@ -68,6 +68,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           shopt -s nullglob
-          files=( *-setup.exe *.dmg *.dmg.blockmap latest-mac.yml )
+          files=( *-setup.exe *.dmg *.dmg.blockmap latest*.yml )
           ls -l "${files[@]}"
           gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
