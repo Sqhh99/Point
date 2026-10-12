@@ -32,6 +32,8 @@ test.beforeAll(async () => {
   await app.context().tracing.start({ screenshots: true, snapshots: true });
 });
 
+// Playwright requires the fixtures argument to be destructured.
+// eslint-disable-next-line no-empty-pattern
 test.afterEach(async ({}, testInfo) => {
   if (testInfo.status === testInfo.expectedStatus) return;
   failed = true;
@@ -41,6 +43,8 @@ test.afterEach(async ({}, testInfo) => {
     .catch(() => undefined);
 });
 
+// Playwright requires the fixtures argument to be destructured.
+// eslint-disable-next-line no-empty-pattern
 test.afterAll(async ({}, testInfo) => {
   await app
     ?.context()
