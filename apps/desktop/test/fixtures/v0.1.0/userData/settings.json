@@ -1,0 +1,14 @@
+{
+  "activeProvider": "glm",
+  "providers": {
+    "glm": {
+      "baseURL": "https://open.bigmodel.cn/api/paas/v4",
+      "model": "glm-4-plus",
+      "encKey": "ZW5jOjc5NjU2YjJkODQ5YWU3OWY5Y2U3YWY5OGU2OGRiOGU0MmQ2NTcyNzU3NDc4Njk2NjJkNmI3Mw=="
+    },
+    "deepseek": {
+      "baseURL": "https://api.deepseek.com/v1",
+      "model": "deepseek-chat"
+    }
+  }
+}
