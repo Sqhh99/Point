@@ -13,7 +13,8 @@ const ws = await import("../../src/main/workspace.js");
 const { registerOpenIpc, openPath, resolveOpenTarget, scratchRoot, interceptDrops } = await import("../../src/main/open-ipc.js");
 registerOpenIpc();
 
-const tmp = (p: string) => realpathSync(mkdtempSync(join(tmpdir(), p)));
+// .native: on Windows runners tmpdir() is an 8.3 short path (RUNNER~1); the app returns the long form.
+const tmp = (p: string) => realpathSync.native(mkdtempSync(join(tmpdir(), p)));
 const s = () => new FakeSender();
 type OpenResult = import("../../src/shared/ipc.js").OpenResult;
 type RecentItem = import("../../src/shared/ipc.js").RecentItem;

@@ -51,4 +51,13 @@
   - 原来的「移走再移回能重新打开」改成：点击已被移走的条目，提示「找不到这个文件，可能已被移动或删除。」，并从最近列表移除。
   - 新增：序号对、但期望的路径不对或没传时被拒绝。
 - 本地 Linux：`pnpm lint`、`pnpm typecheck` 通过；`pnpm test` 通过：core 138；main 269，其中 265 通过、4 个由平台条件跳过。本 PR 的两个文件：`viewer-extra` 36 个，`open-extra` 61 个。
-- 两个平台的 CI 结果见 PR 评论或下一节。
+- **CI run 38280550300：**
+  - check (macos-latest) 通过：core 138；main 267 通过、2 跳过（2 个只在 win32 上跑的用例）。scratch 大小写那条改成普通 it 后在 macOS 上通过。
+  - check (windows-latest) 失败：main 20 失败、246 通过、3 跳过。20 个失败里 16 个是本 PR 的 `open-extra`，4 个是 #34 的 `open.test.ts`。原因相同：Windows runner 上 `tmpdir()` 返回 8.3 短路径（`RUNNER~1`），测试用 JS 版的 `realpathSync` 保留了短路径，而产品用 `.native` 返回长路径（`runneradmin`），路径比较和最近记录的期望路径都对不上。属于测试问题，不是产品 bug。
+  - 两个平台的 e2e、package 都没跑（check 失败）。
+
+## 8. 追加：测试临时目录改用 realpathSync.native（2026-10-12）
+- `open-extra.test.ts` 的 `tmp` 改为 `realpathSync.native(mkdtempSync(...))`。`viewer-extra.test.ts` 不创建临时目录，不用改。
+- 推送前 `feat/viewers` 没有新提交（仍是 `ee902a6`），所以 #34 的 `open.test.ts` 在 Windows 上预计还会因为短路径失败 4 个，需要 功能实现 修。
+- 本地 Linux：`pnpm lint`、`pnpm typecheck` 通过；`pnpm test` 通过：core 138；main 265 通过、4 跳过。
+- 这次推送后的 CI 结果写在 PR 评论里。

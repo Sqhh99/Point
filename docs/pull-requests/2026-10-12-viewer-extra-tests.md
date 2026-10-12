@@ -33,7 +33,10 @@ Related to #34
 - [x] `pnpm lint` 和 `pnpm typecheck` 通过（合入 #34 的 `6187aab` 之后）
 - [x] `pnpm test` 通过（core 138；main 265 通过、4 个由平台条件跳过）
 - [ ] `pnpm e2e` 通过 —— 没跑，本 PR 不改 e2e
-- [ ] Windows 和 macOS 上的 CI 全绿 —— 上一次 run 38279933704：Windows check 通过，macOS check 失败（#34 自带测试的 `/private/var` 问题，`ee902a6` 已修），e2e、package 没跑；这次合并后的 run 等 CI
+- [ ] Windows 和 macOS 上的 CI 全绿 —— 还没有全绿：
+  - run 38279933704：Windows check 通过；macOS check 失败（#34 测试里 `/private/var` 的问题）。
+  - run 38280550300：macOS check 通过（main 267 通过、2 跳过）；Windows check 失败（8.3 短路径，本 PR 16 个、#34 的 `open.test.ts` 4 个）。
+  - 本次把测试的临时目录改成 `realpathSync.native` 后再跑，结果写在 PR 评论里。
 - [ ] 在应用里实际走过受影响的流程 —— 不适用
 
 ## 检查项
