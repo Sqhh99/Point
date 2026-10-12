@@ -6,22 +6,33 @@ directories:
 files:
   - out/**/*
   - package.json
-# @point/core is bundled into out/ by electron-vite, so no node_modules are shipped.
-npmRebuild: false
+  # @point/core, pdfjs-dist, mammoth and remark are bundled into out/ by electron-vite.
+  # Only the native SQLite binding (and its tiny loader deps) ship as node_modules.
+  - node_modules/better-sqlite3/package.json
+  - node_modules/better-sqlite3/lib/**
+  - node_modules/better-sqlite3/build/Release/better_sqlite3.node
+  - node_modules/bindings/**
+  - node_modules/file-uri-to-path/**
+# Rebuild better-sqlite3 for each target arch (x64 + arm64) against Electron's ABI.
+npmRebuild: true
 asar: true
+asarUnpack:
+  - "**/*.node"
 artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+# Arches (x64 + arm64) come from scripts/package.mjs, one electron-builder run per arch:
+# a multi-arch run reused one arch's better_sqlite3.node for the other on macOS.
 win:
-  target:
-    - target: nsis
-      arch: [x64, arm64]
+  target: nsis
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
 mac:
   category: public.app-category.education
-  target:
-    - target: dmg
-      arch: [x64, arm64]
+  target: dmg
+# Linux is not shipped; `dir` exists only so packaging can be smoke-tested locally.
+linux:
+  target: dir
+  executableName: point
 publish:
   provider: github
   owner: Sqhh99

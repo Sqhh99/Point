@@ -10,3 +10,15 @@ export {
   type ProviderPreset
 } from "./llm/presets.js";
 export const VERSION = "0.1.0";
+export {
+  DOC_EXTENSIONS,
+  docTypeOf,
+  parseDocument,
+  parseDocx,
+  parseMarkdown,
+  parsePdf,
+  type Block,
+  type DocType,
+  type OutlineItem,
+  type ParsedDoc
+} from "./docs/index.js";

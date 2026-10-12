@@ -1,4 +1,5 @@
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
+import react from "@vitejs/plugin-react";
 import { resolve } from "node:path";
 
 // Bundle @point/core from source so the app never depends on its dist/ at runtime.
@@ -13,5 +14,5 @@ export default defineConfig({
     // Sandboxed preloads cannot be ESM: emit CommonJS as out/preload/index.cjs.
     build: { rollupOptions: { output: { format: "cjs", entryFileNames: "[name].cjs" } } }
   },
-  renderer: { resolve: { alias } }
+  renderer: { plugins: [react()], resolve: { alias } }
 });

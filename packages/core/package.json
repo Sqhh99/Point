@@ -8,5 +8,16 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@types/mdast": "^4.0.4",
+    "mammoth": "^1.13.0",
+    "pdfjs-dist": "4.10.38",
+    "remark-gfm": "^4.0.1",
+    "remark-parse": "^11.0.0",
+    "unified": "^11.0.5"
+  },
+  "devDependencies": {
+    "jszip": "^3.10.2"
   }
 }

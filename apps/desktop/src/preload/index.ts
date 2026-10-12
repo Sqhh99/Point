@@ -17,6 +17,15 @@ const api: PointAPI = {
       ipcRenderer.on(IPC.chatEvent, listener);
       return () => ipcRenderer.removeListener(IPC.chatEvent, listener);
     }
+  },
+  workspace: {
+    get: () => ipcRenderer.invoke(IPC.workspaceGet),
+    choose: () => ipcRenderer.invoke(IPC.workspaceChoose)
+  },
+  docs: {
+    list: () => ipcRenderer.invoke(IPC.docsList),
+    import: () => ipcRenderer.invoke(IPC.docsImport),
+    get: (id) => ipcRenderer.invoke(IPC.docsGet, id)
   }
 };
 

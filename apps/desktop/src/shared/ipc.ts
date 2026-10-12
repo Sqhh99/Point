@@ -1,4 +1,4 @@
-import type { ChatMessage, ProviderId, ProviderPreset } from "@point/core";
+import type { ChatMessage, DocType, ParsedDoc, ProviderId, ProviderPreset } from "@point/core";
 
 export interface ProviderSettings {
   id: ProviderId;
@@ -28,6 +28,19 @@ export type ChatEvent =
   | { requestId: string; type: "done" }
   | { requestId: string; type: "error"; code: string; message: string };
 
+export interface DocMeta {
+  id: string;
+  title: string;
+  type: DocType;
+  /** Path relative to the workspace root, e.g. `docs/<id>.pdf`. */
+  path: string;
+  importedAt: string;
+}
+
+export interface WorkspaceInfo {
+  path: string | null;
+}
+
 export interface PointAPI {
   platform: string;
   settings: {
@@ -41,6 +54,17 @@ export interface PointAPI {
     cancel(requestId: string): Promise<void>;
     onEvent(cb: (e: ChatEvent) => void): () => void;
   };
+  workspace: {
+    get(): Promise<WorkspaceInfo>;
+    /** Opens a folder picker; resolves to the (possibly unchanged) workspace. */
+    choose(): Promise<WorkspaceInfo>;
+  };
+  docs: {
+    list(): Promise<DocMeta[]>;
+    /** Opens a file picker (pdf/docx/md) and copies the picks into the workspace. */
+    import(): Promise<DocMeta[]>;
+    get(id: string): Promise<ParsedDoc>;
+  };
 }
 
 export const IPC = {
@@ -50,5 +74,10 @@ export const IPC = {
   settingsTest: "settings:test",
   chatStart: "chat:start",
   chatCancel: "chat:cancel",
-  chatEvent: "chat:event"
+  chatEvent: "chat:event",
+  workspaceGet: "workspace:get",
+  workspaceChoose: "workspace:choose",
+  docsList: "docs:list",
+  docsImport: "docs:import",
+  docsGet: "docs:get"
 } as const;
