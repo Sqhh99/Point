@@ -1,16 +1,41 @@
 name: Release
 
+# Push a tag `v<version>` (or `v<version>-<suffix>` for a test draft) matching
+# apps/desktop/package.json. One job creates the draft release, then each platform
+# builds both arches once, verifies them, and uploads its files with a single
+# `gh release upload` (no electron-builder publish, so nothing is uploaded twice).
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  release:
-    name: release (${{ matrix.os }})
+  draft:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check tag matches app version
+        shell: bash
+        run: |
+          v=$(node -p "require('./apps/desktop/package.json').version")
+          case "${GITHUB_REF_NAME}" in
+            "v$v"|"v$v-"*) ;;
+            *) echo "tag ${GITHUB_REF_NAME} does not match v$v"; exit 1 ;;
+          esac
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pre=""; case "${GITHUB_REF_NAME}" in *-*) pre="--prerelease" ;; esac
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
+            gh release create "$GITHUB_REF_NAME" --draft $pre --verify-tag \
+              --title "Point ${GITHUB_REF_NAME}" --generate-notes
+
+  build:
+    name: build (${{ matrix.os }})
+    needs: draft
     strategy:
       fail-fast: false
       matrix:
@@ -24,14 +49,17 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Check tag matches app version
-        if: startsWith(github.ref, 'refs/tags/')
+      - run: pnpm --filter @point/desktop run package
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - run: pnpm --filter @point/desktop run verify:package
+      - name: Upload to draft release
         shell: bash
-        run: |
-          v=$(node -p "require('./apps/desktop/package.json').version")
-          [ "v$v" = "${GITHUB_REF_NAME}" ] || { echo "tag ${GITHUB_REF_NAME} != v$v"; exit 1; }
-      - name: Build and publish draft release
-        run: pnpm --filter @point/desktop run release
+        working-directory: apps/desktop/release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          shopt -s nullglob
+          files=( *.exe *.dmg *.blockmap latest*.yml )
+          ls -l "${files[@]}"
+          gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber

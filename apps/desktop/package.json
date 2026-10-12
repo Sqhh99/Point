@@ -10,7 +10,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "e2e": "playwright test",
     "package": "electron-vite build && node scripts/package.mjs --publish never",
-    "release": "electron-vite build && node scripts/package.mjs --publish always",
     "postinstall": "electron-builder install-app-deps",
     "verify:package": "node scripts/verify-package.mjs"
   },
@@ -28,6 +27,7 @@
     "electron": "^32.2.0",
     "electron-builder": "^25.1.8",
     "electron-vite": "^2.3.0",
+    "js-yaml": "^4.3.2",
     "marked": "^18.1.0",
     "mermaid": "^12.1.0",
     "react": "^19.3.0",
