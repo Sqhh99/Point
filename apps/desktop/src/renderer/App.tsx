@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ActiveModel, CaptureResult, DocMeta, OpenResult, WorkspaceInfo } from "../shared/ipc";
-import { AIPanel, type TaskTrigger } from "./AIPanel";
+import type { Mark, MarkAnchor } from "@point/core";
+import { AIPanel, type BatchTrigger, type TaskTrigger } from "./AIPanel";
 import { Library } from "./Library";
 import { Reader } from "./Reader";
 import { Settings } from "./Settings";
@@ -22,6 +23,10 @@ export function App() {
   const [chatWidth, setChatWidth] = useState(() => clampChatWidth(localStorage.getItem("point.chatWidth")));
   const [model, setModel] = useState<ActiveModel | null>(null);
   const [capture, setCapture] = useState<(CaptureResult & { seq: number }) | null>(null);
+  const [marks, setMarks] = useState<Mark[]>([]);
+  const [checked, setChecked] = useState<string[]>([]);
+  const [batch, setBatch] = useState<BatchTrigger | null>(null);
+  const [locate, setLocate] = useState<{ blockId: string; seq: number } | null>(null);
   const drag = useRef<{ x: number; w: number } | null>(null);
 
   useEffect(() => {
@@ -62,6 +67,32 @@ export function App() {
   useEffect(() => {
     refresh().catch((e: Error) => setError(e.message));
   }, [refresh]);
+
+  const loadMarks = useCallback(async (docId: string | null) => {
+    setMarks(docId ? await api.marks.list(docId) : []);
+  }, []);
+  useEffect(() => {
+    setChecked([]);
+    loadMarks(activeId).catch((e: Error) => setError(e.message));
+  }, [activeId, loadMarks]);
+
+  const addMark = (anchor: MarkAnchor) => {
+    if (!activeId) return;
+    setError(null);
+    api.marks
+      .create(activeId, anchor)
+      .then(() => loadMarks(activeId))
+      .catch((e: Error) => setError(e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "")));
+  };
+  const removeMark = (id: string) => {
+    setChecked((c) => c.filter((x) => x !== id));
+    api.marks.remove(id).then(() => loadMarks(activeId), (e: Error) => setError(e.message));
+  };
+  const batchAsk = () => {
+    const picked = checked.map((id) => marks.find((m) => m.id === id)).filter((m): m is Mark => !!m);
+    if (picked.length) setBatch((b) => ({ seq: (b?.seq ?? 0) + 1, marks: picked }));
+    setChecked([]);
+  };
 
   // Re-read after leaving settings: the active model or its vision flag may have changed.
   useEffect(() => {
@@ -116,6 +147,15 @@ export function App() {
         onOpenFile={openFile}
         onOpenSettings={() => setView("settings")}
         settingsActive={view === "settings"}
+        marks={marks}
+        checked={checked}
+        onToggleMark={(id) => setChecked((c) => (c.includes(id) ? c.filter((x) => x !== id) : [...c, id]))}
+        onLocateMark={(m) => {
+          setView("reader");
+          if (m.anchor.blockId) setLocate((l) => ({ blockId: m.anchor.blockId!, seq: (l?.seq ?? 0) + 1 }));
+        }}
+        onRemoveMark={removeMark}
+        onBatchAsk={batchAsk}
       />
       <main className="center">
         {error && (
@@ -135,6 +175,10 @@ export function App() {
             vision={!!model?.vision}
             onCapture={(r) => setCapture((c) => ({ ...r, seq: (c?.seq ?? 0) + 1 }))}
             onCaptureError={setError}
+            onMark={addMark}
+            onRegionExplain={(r) => setTrigger((t) => ({ seq: (t?.seq ?? 0) + 1, kind: "explain", sel: { text: "", context: "", page: r.page }, image: r.sha }))}
+            marks={marks}
+            locate={locate}
           />
         )}
       </main>
@@ -146,6 +190,7 @@ export function App() {
         hasWorkspace={!!workspace.path}
         vision={!!model?.vision}
         capture={capture}
+        batch={batch}
         onOpenSettings={() => setView("settings")}
       />
     </div>

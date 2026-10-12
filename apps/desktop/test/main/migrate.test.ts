@@ -11,7 +11,7 @@ describe("migrate", () => {
     const db = new Database(":memory:");
     expect(migrate(db)).toBe(MIGRATIONS.length);
     expect(version(db)).toBe(MIGRATIONS.length);
-    expect(tables(db)).toEqual(["branch_origin", "conversations", "docs", "messages"]);
+    expect(tables(db)).toEqual(["branch_origin", "conversations", "docs", "marks", "messages"]);
   });
 
   it("adopts a v0.1.0 database (user_version 0, no meta column) without touching its rows", () => {
@@ -39,7 +39,7 @@ describe("migrate", () => {
     const db = new Database(":memory:");
     migrate(db);
     const before = tables(db);
-    expect(() => migrate(db, [...MIGRATIONS, "CREATE TABLE marks (id TEXT); SELECT nope FROM missing;"])).toThrow();
+    expect(() => migrate(db, [...MIGRATIONS, "CREATE TABLE zz_probe (id TEXT); SELECT nope FROM missing;"])).toThrow();
     expect(version(db)).toBe(MIGRATIONS.length);
     expect(tables(db)).toEqual(before);
   });

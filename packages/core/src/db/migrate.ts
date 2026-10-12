@@ -1,5 +1,6 @@
 import init from "./migrations/001_init.js";
 import branches from "./migrations/002_branches.js";
+import marks from "./migrations/003_marks.js";
 
 /** The subset of better-sqlite3 the migrator needs, so core stays free of native deps. */
 export interface MigratableDb {
@@ -10,7 +11,7 @@ export interface MigratableDb {
 }
 
 /** Ordered list; migration N (1-based) brings the schema to user_version N. Append only, never edit. */
-export const MIGRATIONS: readonly string[] = [init, branches];
+export const MIGRATIONS: readonly string[] = [init, branches, marks];
 
 export class DbTooNewError extends Error {
   constructor(

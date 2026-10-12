@@ -29,7 +29,11 @@ export class FakeProvider implements LLMProvider {
     const last = messages.at(-1);
     const prompt = last?.content ?? "";
     if (prompt.includes("RATE-LIMIT-PROBE")) throw new LLMError("rate_limit", "请求过于频繁 (429): fake", 429);
-    const answer = prompt.includes("XSS-PROBE") ? FAKE_XSS_ANSWER : last?.images?.length ? FAKE_IMAGE_ANSWER : FAKE_ANSWER;
+    const parts = last?.parts;
+    const marksAnswer = parts
+      ? `**模拟回答**：已收到 ${parts.filter((p) => p.type === "text" && p.text.startsWith("标记 ")).length} 个标记（图片 ${parts.filter((p) => p.type === "image").length} 张）。`
+      : null;
+    const answer = marksAnswer ?? (prompt.includes("XSS-PROBE") ? FAKE_XSS_ANSWER : last?.images?.length ? FAKE_IMAGE_ANSWER : FAKE_ANSWER);
     const chunks = answer.match(/[\s\S]{1,12}/g) ?? [];
     for (const text of chunks) {
       if (opts.signal?.aborted) {

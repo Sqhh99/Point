@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { TaskKind } from "@point/core";
+import type { Mark, MarkAnchor, TaskKind } from "@point/core";
 import type { CaptureResult, MessageMeta, StoredMessage, TaskEvent, TaskRequest } from "../shared/ipc";
 import { Markdown } from "./Markdown";
 import { NotesPanel, type NoteFlash } from "./NotesPanel";
@@ -11,6 +11,14 @@ export interface TaskTrigger {
   seq: number;
   kind: TaskKind;
   sel: SelectionInfo;
+  /** Region capture sha (解读 on a region). */
+  image?: string;
+}
+
+/** 「一起问」 from the marks list: the picked marks, in the order they were checked. */
+export interface BatchTrigger {
+  seq: number;
+  marks: Mark[];
 }
 
 interface Props {
@@ -22,6 +30,7 @@ interface Props {
   vision: boolean;
   /** Latest region capture; a new seq attaches it to the composer. */
   capture: (CaptureResult & { seq: number }) | null;
+  batch: BatchTrigger | null;
   onOpenSettings(): void;
 }
 
@@ -92,9 +101,23 @@ function Lightbox({ sha, onClose }: { sha: string; onClose(): void }) {
   );
 }
 
+function MarksCard({ marks, docTitle, onOpenImage }: { marks: MarkAnchor[]; docTitle?: string; onOpenImage(sha: string): void }) {
+  return (
+    <blockquote className="quote-card" data-testid="quote-card">
+      <ol className="quote-marks">
+        {marks.map((a, i) => (
+          <li key={i}>{a.kind === "text" ? <span className="quote-mark-text">{a.text}</span> : <BubbleImage sha={a.sha} onOpen={onOpenImage} />}</li>
+        ))}
+      </ol>
+      {docTitle && <div className="quote-source">《{docTitle}》</div>}
+    </blockquote>
+  );
+}
+
 function QuoteCard({ meta, onOpenImage }: { meta: MessageMeta; onOpenImage(sha: string): void }) {
   const [open, setOpen] = useState(false);
   const { selection, page, image } = meta.request;
+  if (meta.marks?.length) return <MarksCard marks={meta.marks} docTitle={meta.docTitle} onOpenImage={onOpenImage} />;
   if (!selection?.trim() && !image) return null;
   const source = [meta.docTitle ? `《${meta.docTitle}》` : null, page ? `第 ${page} 页` : null].filter(Boolean).join(" · ");
   return (
@@ -112,7 +135,8 @@ function QuoteCard({ meta, onOpenImage }: { meta: MessageMeta; onOpenImage(sha: 
   );
 }
 
-export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, capture, onOpenSettings }: Props) {
+export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, capture, batch, onOpenSettings }: Props) {
+  const [batchMarks, setBatchMarks] = useState<Mark[] | null>(null);
   const [image, setImage] = useState<CaptureResult | null>(null);
   const [viewing, setViewing] = useState<string | null>(null);
   const closeViewer = useCallback(() => setViewing(null), []);
@@ -216,9 +240,10 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
   );
 
   const run = useCallback(
-    (kind: TaskKind, sel: SelectionInfo | null, q?: string, img?: string) =>
+    (kind: TaskKind, sel: SelectionInfo | null, q?: string, img?: string, markIds?: string[]) =>
       start({
         image: img,
+        marks: markIds,
         kind,
         selection: sel?.text ?? "",
         context: sel?.context,
@@ -247,7 +272,7 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
       return;
     }
     setTab(trigger.kind === "note" ? "notes" : "chat");
-    void run(trigger.kind, trigger.sel);
+    void run(trigger.kind, trigger.sel, undefined, trigger.image);
     // Only react to new triggers.
   }, [trigger?.seq]);
 
@@ -258,9 +283,27 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
     setTimeout(() => inputRef.current?.focus(), 0);
   }, [capture?.seq]);
 
+  useEffect(() => {
+    if (!batch) return;
+    setTab("chat");
+    setBatchMarks(batch.marks);
+    setAttached(null);
+    setImage(null);
+    setTimeout(() => inputRef.current?.focus(), 0);
+  }, [batch?.seq]);
+
   const send = () => {
     const q = question.trim();
     if (!q || draft) return;
+    if (batchMarks) {
+      const ids = batchMarks.map((m) => m.id);
+      const req: TaskRequest = { kind: "ask", selection: "", question: q, marks: ids };
+      if (batchMarks.some((m) => m.anchor.kind === "region") && !vision) return setFailure({ code: "no_vision", message: NO_VISION_TEXT, request: req });
+      setQuestion("");
+      void run("ask", null, q, undefined, ids);
+      setBatchMarks(null);
+      return;
+    }
     const req: TaskRequest = { kind: "ask", selection: attached?.text ?? "", question: q, image: image?.sha };
     // Checked again in main; this keeps the question and the image so the user can switch models.
     if (image && !vision) return setFailure({ code: "no_vision", message: NO_VISION_TEXT, request: req });
@@ -390,6 +433,14 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
             )}
           </div>
           <div className="composer">
+            {batchMarks && (
+              <div className="attached" data-testid="attached-marks">
+                <span>一起问 {batchMarks.length} 个标记</span>
+                <button className="link" onClick={() => setBatchMarks(null)} aria-label="移除标记">
+                  ×
+                </button>
+              </div>
+            )}
             {attached && (
               <div className="attached">
                 <span title={attached.text}>引用：{attached.text.slice(0, 60)}</span>

@@ -165,6 +165,14 @@ test("settings page is reachable from the library", async () => {
   await win.getByRole("button", { name: "返回阅读" }).click();
 });
 
+/** After a region capture the floating bar appears on the region; 问 AI attaches it to the composer. */
+async function askRegion(win: Awaited<ReturnType<ElectronApplication["firstWindow"]>>): Promise<void> {
+  const bar = win.locator('[aria-label="选区操作"][data-kind="region"]');
+  await expect(bar.getByRole("button")).toHaveText(["问 AI", "标记", "解读"]);
+  await bar.getByRole("button", { name: "问 AI" }).click();
+  await expect(bar).toBeHidden();
+}
+
 /** Selects the text of the reader paragraph containing `needle` and fires mouseup like a user drag. */
 async function selectInReader(win: Awaited<ReturnType<ElectronApplication["firstWindow"]>>, needle: string): Promise<void> {
   await win.getByTestId("reader").evaluate((article, text) => {
@@ -189,12 +197,15 @@ test("selection task streams an answer, inserts it into a note, and draws a diag
   await selectInReader(win, "熵是系统无序程度的度量");
   const toolbar = win.getByRole("toolbar", { name: "选区操作" });
   await expect(toolbar).toBeVisible();
-  await expect(toolbar.getByRole("button")).toHaveText(["解读概念", "记笔记", "画图表", "问 AI"]);
+  // Design v0.2: 问 AI · 标记 · 解读, with 记笔记 / 画图表 under 更多.
+  await expect(toolbar.getByRole("button")).toHaveText(["问 AI", "标记", "解读", ""]);
+  await toolbar.getByRole("button", { name: "更多" }).click();
+  await expect(toolbar.getByRole("button")).toHaveText(["问 AI", "标记", "解读", "记笔记", "画图表"]);
   await win.keyboard.press("Escape");
   await expect(toolbar).toBeHidden();
 
   await selectInReader(win, "熵是系统无序程度的度量");
-  await toolbar.getByRole("button", { name: "解读概念" }).click();
+  await toolbar.getByRole("button", { name: "解读", exact: true }).click();
   await expect(toolbar).toBeHidden();
 
   const log = win.getByTestId("chat-log");
@@ -229,6 +240,7 @@ test("selection task streams an answer, inserts it into a note, and draws a diag
   await expect(win.getByTestId("note-flash")).toBeHidden({ timeout: 5_000 });
 
   await selectInReader(win, "广延量");
+  await toolbar.getByRole("button", { name: "更多" }).click();
   await toolbar.getByRole("button", { name: "画图表" }).click();
   await expect(win.getByRole("tab", { name: "对话" })).toHaveAttribute("aria-selected", "true");
   await expect(log.locator('[data-role="user"]').last()).toHaveText("画图表");
@@ -335,6 +347,57 @@ test("exports the current note as md and all notes as a zip", async () => {
   expect(conv).toContain("### AI");
 });
 
+test("select text → 标记 creates a mark; 一起问 sends two marks as one question", async () => {
+  const win = await app.firstWindow();
+  await win.getByRole("tab", { name: "对话" }).click();
+  await win.getByTestId("doc-list").getByRole("button", { name: /熵的定义/ }).click();
+  const reader = win.getByTestId("reader");
+  await expect(reader.locator("h1")).toHaveText("熵的定义");
+  const panel = win.getByTestId("marks");
+  await expect(panel.getByTestId("batch-ask")).toBeDisabled();
+
+  const toolbar = win.getByRole("toolbar", { name: "选区操作" });
+  await selectInReader(win, "熵是系统无序程度的度量");
+  await toolbar.getByRole("button", { name: "标记" }).click();
+  await expect(toolbar).toBeHidden();
+  const items = panel.getByTestId("mark-item");
+  await expect(items).toHaveCount(1);
+  await expect(items.first()).toContainText("熵是系统无序程度的度量");
+  await expect(reader.locator(".block.marked")).toHaveCount(1);
+
+  await selectInReader(win, "广延量");
+  await toolbar.getByRole("button", { name: "标记" }).click();
+  await expect(items).toHaveCount(2);
+  await expect(reader.locator(".block.marked")).toHaveCount(2);
+
+  // Check in reverse order: the question keeps the checked order.
+  await items.nth(1).getByRole("checkbox").check();
+  await items.nth(0).getByRole("checkbox").check();
+  await expect(panel.getByTestId("batch-ask")).toHaveText("一起问（2）");
+
+  // PR screenshot: marks list + floating bar on a fresh selection.
+  await selectInReader(win, "熵是系统无序程度的度量");
+  await expect(toolbar).toBeVisible();
+  await win.screenshot({ path: join(import.meta.dirname, "..", "test-results", "marks.png") });
+  await win.keyboard.press("Escape");
+
+  await panel.getByTestId("batch-ask").click();
+  await expect(win.getByTestId("attached-marks")).toHaveText(/一起问 2 个标记/);
+  await expect(panel.getByTestId("batch-ask")).toHaveText("一起问（0）");
+  const input = win.getByPlaceholder(/问点什么/);
+  await input.fill("这两处有什么关系？");
+  await input.press("Enter");
+  const log = win.getByTestId("chat-log");
+  await expect(log.locator('[data-role="assistant"]').last()).toContainText("已收到 2 个标记（图片 0 张）");
+  const card = log.getByTestId("quote-card").last();
+  await expect(card.locator(".quote-marks li")).toHaveText(["广延量", "熵是系统无序程度的度量。"]);
+  await expect(win.getByTestId("attached-marks")).toBeHidden();
+
+  // Click a mark → jumps back to its block.
+  await items.nth(1).locator(".mark-body").click();
+  await expect(reader.locator(".block.located")).toHaveCount(1);
+});
+
 test("status bar shows workspace, doc and model; region capture attaches a screenshot to a question", async () => {
   const win = await app.firstWindow();
   const ws = (await win.evaluate(() => window.point.workspace.get())).path!;
@@ -363,6 +426,7 @@ test("status bar shows workspace, doc and model; region capture attaches a scree
   await win.mouse.move(box.x + 200, box.y + 140, { steps: 5 });
   await expect(win.getByTestId("capture-rect")).toBeVisible();
   await win.mouse.up();
+  await askRegion(win);
   await expect(overlay).toBeHidden();
   const attached = win.getByTestId("attached-image");
   const thumb = attached.locator("img");
@@ -378,6 +442,7 @@ test("status bar shows workspace, doc and model; region capture attaches a scree
   await win.mouse.down();
   await win.mouse.move(box.x + 200, box.y + 140, { steps: 5 });
   await win.mouse.up();
+  await askRegion(win);
   await expect(thumb).toBeVisible();
 
   const captures = readdirSync(join(ws, ".point", "captures"));
@@ -405,6 +470,7 @@ test("status bar shows workspace, doc and model; region capture attaches a scree
   await win.mouse.down();
   await win.mouse.move(box.x + 260, box.y + 120, { steps: 5 });
   await win.mouse.up();
+  await askRegion(win);
   await expect.poll(() => thumb.evaluate((i: HTMLImageElement) => i.naturalWidth)).toBeGreaterThan(0);
   await bubble.scrollIntoViewIfNeeded();
   await win.screenshot({ path: join(import.meta.dirname, "..", "test-results", "capture-thumbs.png") });
@@ -453,6 +519,7 @@ test("status bar shows workspace, doc and model; region capture attaches a scree
   await win.mouse.down();
   await win.mouse.move(box.x + 170, box.y + 110, { steps: 5 });
   await win.mouse.up();
+  await askRegion(win);
   const missingThumb = attached.getByTestId("capture-missing");
   await expect(missingThumb).toHaveText("截图已失效");
   expect((await missingThumb.boundingBox())?.height).toBe(48);
