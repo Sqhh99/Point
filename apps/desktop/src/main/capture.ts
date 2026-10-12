@@ -7,13 +7,13 @@ import type { ImageInput } from "@point/core";
 import { IPC, type CaptureRect, type CaptureResult } from "../shared/ipc.js";
 import { need, workspacePath } from "./workspace.js";
 
-/** Captures are stored by content hash; the renderer only ever names one by this sha. */
-const SHA = /^[0-9a-f]{64}$/;
-
-/** True only for a 64-char lowercase hex sha256. Rejects uppercase, `../`, separators, other lengths and non-strings. */
-export function isCaptureSha(v: unknown): v is string {
-  return typeof v === "string" && SHA.test(v);
-}
+/**
+ * Captures are stored by content hash; the renderer only ever names one by this sha.
+ * `isCaptureSha` (core) is true only for 64 lowercase hex chars: it rejects uppercase, `../`,
+ * separators, other lengths and non-strings. Re-exported here so main has one entry point.
+ */
+import { isCaptureSha } from "@point/core";
+export { isCaptureSha };
 
 export function assertCaptureSha(v: unknown): string {
   if (!isCaptureSha(v)) throw new Error("无效的截图标识");

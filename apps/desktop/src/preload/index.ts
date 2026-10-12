@@ -11,6 +11,12 @@ const api: PointAPI = {
       return () => ipcRenderer.removeListener(IPC.windowMaximized, listener);
     }
   },
+  marks: {
+    list: (docId) => ipcRenderer.invoke(IPC.marksList, docId),
+    create: (docId, anchor, note) => ipcRenderer.invoke(IPC.marksCreate, docId, anchor, note),
+    updateNote: (id, note) => ipcRenderer.invoke(IPC.marksUpdateNote, id, note),
+    remove: (id) => ipcRenderer.invoke(IPC.marksRemove, id)
+  },
   capture: {
     region: (rect) => ipcRenderer.invoke(IPC.captureRegion, rect)
   },

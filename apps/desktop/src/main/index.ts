@@ -1,6 +1,7 @@
 import { app, BrowserWindow } from "electron";
 import { join } from "node:path";
 import { bindCaptureProtocol, registerCaptureIpc, registerCaptureScheme } from "./capture.js";
+import { registerMarksIpc } from "./marks-ipc.js";
 import { runSmoke } from "./smoke.js";
 import { registerDocsIpc } from "./docs-ipc.js";
 import { registerIpc } from "./ipc.js";
@@ -49,6 +50,7 @@ app.whenReady().then(() => {
   registerTasksIpc();
   registerWindowIpc();
   registerCaptureIpc();
+  registerMarksIpc();
   restoreWorkspace();
   createWindow();
   void notifyIfUpdateAvailable();

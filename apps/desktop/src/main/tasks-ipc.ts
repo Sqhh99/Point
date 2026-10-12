@@ -20,6 +20,7 @@ import { errInfo, providerFor } from "./ipc.js";
 import { docTitle, need } from "./workspace.js";
 import { assertCaptureSha, captureImage } from "./capture.js";
 import { assertVisionAllowed, withImage } from "./vision.js";
+import { buildBatchMessage, loadBatch } from "./marks-ipc.js";
 
 const KINDS = Object.keys(TASK_LABELS) as TaskKind[];
 const running = new Map<string, AbortController>();
@@ -37,6 +38,7 @@ function validate(raw: unknown): TaskRequest {
     docId: str(r.docId, 64),
     page: typeof r.page === "number" && Number.isInteger(r.page) && r.page > 0 ? r.page : undefined,
     conversationId: str(r.conversationId, 64),
+    marks: r.marks === undefined || r.marks === null ? undefined : (Array.isArray(r.marks) ? r.marks : []).map((v) => str(v, 64) ?? "").slice(0, 21),
     image: r.image === undefined || r.image === null ? undefined : assertCaptureSha(r.image),
     regenerate: r.regenerate === true,
     parentId: r.parentId === null ? null : str(r.parentId, 64),
@@ -118,7 +120,10 @@ export function registerTasksIpc(): void {
     const req = validate(raw);
     // Gate before anything is stored: an image on a text-only model is a clear error, not a silent drop.
     // Without an image the provider is resolved lazily so a missing key still streams back as an "auth" event.
-    const llm = req.image ? providerFor() : undefined;
+    if (req.marks && (req.kind !== "ask" || req.image)) throw new Error("一起问只能和问题一起发送");
+    const batch = req.marks ? loadBatch(req.marks, req.docId) : undefined;
+    const needsVision = !!req.image || !!batch?.hasImage;
+    const llm = needsVision ? providerFor() : undefined;
     if (llm) assertVisionAllowed(llm.vision, true);
     const image = req.image ? captureImage(ws.root, req.image) : undefined;
     const title = req.docId ? docTitle(req.docId) : undefined;
@@ -128,15 +133,17 @@ export function registerTasksIpc(): void {
     const place = placement(conversationId, { ...req, regenerate });
     const history = place.history;
     // Build first so invalid input (empty selection, missing question) fails before anything is stored.
-    const messages = withImage(
+    let messages = withImage(
       buildTaskMessages({ kind: req.kind, selection: req.selection, context: req.context, question: req.question, docTitle: title, history, hasImage: !!image }),
       image
     );
+    // 「一起问」: the question turn becomes ONE user message whose parts follow the marks' selection order.
+    if (batch) messages = [...messages.slice(0, -1), buildBatchMessage(req.question ?? "", batch.loaded, title)];
     if (!conversationId) {
       const sel = req.selection.trim().replace(/\s+/g, " ");
       conversationId = createConversation(`${TASK_LABELS[req.kind]}：${sel.slice(0, 30) || req.question?.slice(0, 30) || (image ? "截图" : "")}`, req.docId).id;
     }
-    const meta = { request: { kind: req.kind, selection: req.selection, context: req.context, question: req.question, docId: req.docId, page: req.page, image: req.image }, docTitle: title };
+    const meta = { request: { kind: req.kind, selection: req.selection, context: req.context, question: req.question, docId: req.docId, page: req.page, image: req.image, marks: batch?.marks.map((m) => m.id) }, docTitle: title, marks: batch?.marks.map((m) => m.anchor) };
     const userMessage = place.answerTo
       ? undefined
       : req.branch

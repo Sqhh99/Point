@@ -1,24 +1,42 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Block, ParsedDoc, TaskKind } from "@point/core";
+import type { Block, Mark, MarkAnchor, ParsedDoc, TaskKind } from "@point/core";
 import type { JSX } from "react";
 import type { CaptureResult } from "../shared/ipc";
 import { CaptureOverlay } from "./Capture";
 import { EmptyState } from "./EmptyState";
-import { IconAsk, IconCapture, IconDiagram, IconExplain, IconNote } from "./icons";
+import { IconAsk, IconCapture, IconDiagram, IconExplain, IconMark, IconMore, IconNote } from "./icons";
 import { isCaptureKey, type Box } from "./layout";
 
 export interface SelectionInfo {
   text: string;
   context: string;
   page?: number;
+  blockId?: string;
 }
 
-const ACTIONS: { kind: TaskKind; label: string; Icon: () => JSX.Element }[] = [
-  { kind: "explain", label: "解读概念", Icon: IconExplain },
-  { kind: "note", label: "记笔记", Icon: IconNote },
-  { kind: "diagram", label: "画图表", Icon: IconDiagram },
-  { kind: "ask", label: "问 AI", Icon: IconAsk }
+/** A finished region capture, with where it sits in the document. */
+export interface RegionInfo extends CaptureResult {
+  page?: number;
+  blockId?: string;
+}
+
+type BarAction = "ask" | "mark" | "explain" | "note" | "diagram";
+// Design v0.2: 「问 AI · 标记 · 解读」; 记笔记 / 画图表 stay reachable under 「更多」 for text.
+const MAIN_ACTIONS: { id: BarAction; label: string; Icon: () => JSX.Element }[] = [
+  { id: "ask", label: "问 AI", Icon: IconAsk },
+  { id: "mark", label: "标记", Icon: IconMark },
+  { id: "explain", label: "解读", Icon: IconExplain }
 ];
+const MORE_ACTIONS: { id: BarAction; label: string; Icon: () => JSX.Element }[] = [
+  { id: "note", label: "记笔记", Icon: IconNote },
+  { id: "diagram", label: "画图表", Icon: IconDiagram }
+];
+
+function blockAt(el: Element | null): { blockId?: string; page?: number } {
+  const b = el?.closest("[data-block-id]");
+  const page = Number(el?.closest("[data-page]")?.getAttribute("data-page"));
+  return { blockId: b?.getAttribute("data-block-id") ?? undefined, page: Number.isInteger(page) && page > 0 ? page : undefined };
+}
 
 const TOOLBAR_H = 36;
 const GAP = 8;
@@ -99,15 +117,23 @@ interface ReaderProps {
   onAction(kind: TaskKind, sel: SelectionInfo): void;
   /** Whether the current model accepts images; capture is disabled otherwise. */
   vision: boolean;
+  /** 问 AI on a region: attach it to the composer. */
   onCapture(r: CaptureResult): void;
   onCaptureError(message: string): void;
+  onMark(anchor: MarkAnchor): void;
+  /** 解读 on a region. */
+  onRegionExplain(r: RegionInfo): void;
+  marks: Mark[];
+  /** Scroll to a block (from the marks list); a new seq re-runs. */
+  locate: { blockId: string; seq: number } | null;
 }
 
-export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorkspace, onOpenFile, onOpenRecent, vision, onCapture, onCaptureError }: ReaderProps) {
+export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorkspace, onOpenFile, onOpenRecent, vision, onCapture, onCaptureError, onMark, onRegionExplain, marks, locate }: ReaderProps) {
   const [capture, setCapture] = useState<Box | null>(null);
+  const [more, setMore] = useState(false);
   const [doc, setDoc] = useState<ParsedDoc | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [toolbar, setToolbar] = useState<{ top: number; left: number; sel: SelectionInfo } | null>(null);
+  const [toolbar, setToolbar] = useState<{ top: number; left: number; sel?: SelectionInfo; region?: RegionInfo } | null>(null);
   const articleRef = useRef<HTMLElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const timer = useRef<number | undefined>(undefined);
@@ -115,6 +141,7 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
   const close = useCallback(() => {
     window.clearTimeout(timer.current);
     setToolbar(null);
+    setMore(false);
   }, []);
 
   const measure = useCallback(() => {
@@ -133,7 +160,8 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
     const top = (roomAbove ? r.top - box.top - GAP - TOOLBAR_H : r.bottom - box.top + GAP) + scroller.scrollTop;
     const half = (toolbarRef.current?.offsetWidth ?? 340) / 2 + 4;
     const left = Math.min(Math.max(r.left - box.left + r.width / 2, half), box.width - half);
-    setToolbar({ top, left, sel: { text, context: contextOf(range), page: pageOf(range) } });
+    const where = blockAt(range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement);
+    setToolbar({ top, left, sel: { text, context: contextOf(range), page: pageOf(range), blockId: where.blockId } });
   }, []);
 
   const onSelectEnd = useCallback(() => {
@@ -156,7 +184,7 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
     const onDown = (e: MouseEvent) => {
       if (!toolbarRef.current?.contains(e.target as Node)) close();
     };
-    const onSel = () => window.getSelection()?.isCollapsed && close();
+    const onSel = () => !toolbar.region && window.getSelection()?.isCollapsed && close();
     document.addEventListener("keydown", onKey);
     document.addEventListener("mousedown", onDown);
     document.addEventListener("selectionchange", onSel);
@@ -170,6 +198,47 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
   }, [toolbar, close]);
 
   useEffect(() => () => window.clearTimeout(timer.current), []);
+
+  // Jump back to a mark's block and flash it briefly.
+  useEffect(() => {
+    if (!locate || !doc) return;
+    const el = articleRef.current?.querySelector(`[data-block-id="${CSS.escape(locate.blockId)}"]`)?.closest(".block");
+    if (!el) return;
+    el.scrollIntoView({ block: "center" });
+    el.classList.add("located");
+    const t = window.setTimeout(() => el.classList.remove("located"), 1200);
+    return () => window.clearTimeout(t);
+  }, [locate?.seq, doc]);
+
+  /** Same floating bar for a region: above the captured rectangle (below when there is no room). */
+  const showRegionBar = (r: CaptureResult, rect: Box) => {
+    const scroller = articleRef.current?.parentElement;
+    if (!scroller) return onCapture(r);
+    const box = scroller.getBoundingClientRect();
+    const where = blockAt(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+    const roomAbove = rect.y - box.top >= TOOLBAR_H + GAP;
+    const top = (roomAbove ? rect.y - box.top - GAP - TOOLBAR_H : rect.y + rect.height - box.top + GAP) + scroller.scrollTop;
+    const half = 130;
+    const left = Math.min(Math.max(rect.x - box.left + rect.width / 2, half), box.width - half);
+    setToolbar({ top, left, region: { ...r, ...where } });
+  };
+
+  const run = (id: BarAction) => {
+    if (!toolbar) return;
+    const { sel, region } = toolbar;
+    close();
+    if (region) {
+      if (id === "ask") onCapture(region);
+      else if (id === "mark") onMark({ kind: "region", sha: region.sha, width: region.width, height: region.height, blockId: region.blockId, page: region.page });
+      else if (id === "explain") onRegionExplain(region);
+      return;
+    }
+    if (!sel) return;
+    if (id === "mark") {
+      onMark({ kind: "text", text: sel.text, blockId: sel.blockId, page: sel.page, context: sel.context });
+      window.getSelection()?.removeAllRanges();
+    } else onAction(id, sel);
+  };
 
   const startCapture = useCallback(() => {
     const scroller = articleRef.current?.parentElement;
@@ -221,6 +290,7 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
   if (error) return <div className="placeholder">无法打开文档：{error}</div>;
   if (!doc) return <div className="placeholder">正在解析…</div>;
 
+  const marked = new Set(marks.map((m) => m.anchor.blockId).filter((x): x is string => !!x));
   let lastPage: number | undefined;
   const mod = window.point.platform === "darwin" ? "⌘⇧S" : "Ctrl+Shift+S";
   return (
@@ -245,9 +315,9 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
       <CaptureOverlay
         bounds={capture}
         onCancel={() => setCapture(null)}
-        onDone={(r) => {
+        onDone={(r, rect) => {
           setCapture(null);
-          onCapture(r);
+          showRegionBar(r, rect);
         }}
         onError={(m) => {
           setCapture(null);
@@ -261,24 +331,24 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
         className="selection-toolbar"
         role="toolbar"
         aria-label="选区操作"
+        data-kind={toolbar.region ? "region" : "text"}
         style={{ top: toolbar.top, left: toolbar.left }}
         onMouseDown={(e) => {
           // Keep the text selection while clicking a button.
           if ((e.target as HTMLElement).closest("button")) e.preventDefault();
         }}
       >
-        {ACTIONS.map(({ kind, label, Icon }) => (
-          <button
-            key={kind}
-            onClick={() => {
-              onAction(kind, toolbar.sel);
-              close();
-            }}
-          >
+        {[...MAIN_ACTIONS, ...(more && toolbar.sel ? MORE_ACTIONS : [])].map(({ id, label, Icon }) => (
+          <button key={id} onClick={() => run(id)}>
             <Icon />
             <span>{label}</span>
           </button>
         ))}
+        {toolbar.sel && !more && (
+          <button onClick={() => setMore(true)} aria-label="更多" title="记笔记 · 画图表">
+            <IconMore />
+          </button>
+        )}
       </div>
     )}
     <article className="reader" data-testid="reader" ref={articleRef} onMouseUp={onSelectEnd} onKeyUp={(e) => e.key !== "Escape" && onSelectEnd()}>
@@ -286,7 +356,7 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
         const marker = b.page !== undefined && b.page !== lastPage ? b.page : undefined;
         lastPage = b.page ?? lastPage;
         return (
-          <div key={b.id} className="block">
+          <div key={b.id} className={marked.has(b.id) ? "block marked" : "block"}>
             {marker !== undefined && marker > 1 && <div className="page-marker">第 {marker} 页</div>}
             <BlockView b={b} />
           </div>
