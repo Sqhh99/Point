@@ -117,14 +117,14 @@ describe("scheme registration + per-webContents workspace", () => {
     ws.openWorkspace(root);
     const sha = capture.writeCapture(root, PNG);
     const { wc, handlers } = fakeWc();
-    expect(capture.workspaceForWebContents(wc as never)).toBeNull();
+    expect(capture.workspaceForSession(wc.session as never)).toBeNull();
     capture.bindCaptureProtocol(wc as never);
-    expect(capture.workspaceForWebContents(wc as never)).toBe(root);
+    expect(capture.workspaceForSession(wc.session as never)).toBe(root);
     const h = handlers.get("point-capture")!;
     expect(h(new Request(url(sha))).status).toBe(200);
     expect(h(new Request(url(sha), { method: "POST", body: "x" })).status).toBe(404);
     wc.destroy();
-    expect(capture.workspaceForWebContents(wc as never)).toBeNull();
+    expect(capture.workspaceForSession(wc.session as never)).toBeNull();
     expect(h(new Request(url(sha))).status).toBe(404);
     ws.closeWorkspace();
   });

@@ -107,9 +107,9 @@ describe("point-capture:// 404 cases", () => {
     expect(capture.captureResponse(root, url("c".repeat(64))).status).toBe(404);
   });
 
-  // Bug: only the final file is lstat'ed (capture.ts captureResponse → lstatSync(file)). If `.point/captures`
+  // Was a bug (fixed in #36/#38): only the final file was lstat'ed (capture.ts captureResponse → lstatSync(file)). If `.point/captures`
   // (or `.point`) is itself a symlink to another folder, a regular file there is served.
-  it.runIf(canSymlink).fails("captures directory symlinked outside the workspace → 404", () => {
+  it.runIf(canSymlink)("captures directory symlinked outside the workspace → 404", () => {
     const root = tmp();
     const elsewhere = tmp();
     const sha = capture.writeCapture(elsewhere, PNG); // real file at elsewhere/.point/captures/<sha>.png
@@ -223,9 +223,9 @@ describe("protocol handler: methods and per-webContents workspace", () => {
     const a = fakeWc(sesA);
     capture.bindCaptureProtocol(a as never);
     expect(sesA.handlers.get("point-capture")!(new Request(url(sha))).status).toBe(200);
-    // B never bound: its session has no handler, and workspaceForWebContents(B) is null
+    // B never bound: its session has no handler, and workspaceForSession(B's session) is null
     expect(sesB.handlers.has("point-capture")).toBe(false);
-    expect(capture.workspaceForWebContents(fakeWc(sesB) as never)).toBeNull();
+    expect(capture.workspaceForSession(sesB as never)).toBeNull();
     a.destroy();
   });
 
@@ -245,8 +245,8 @@ describe("protocol handler: methods and per-webContents workspace", () => {
     expect(h(new Request(url(sha))).status).toBe(404);
   });
 
-  it.each([[null], [undefined]])("workspaceForWebContents(%s) is null", (wc) => {
-    expect(capture.workspaceForWebContents(wc)).toBeNull();
+  it.each([[null], [undefined]])("workspaceForSession(%s) is null", (ses) => {
+    expect(capture.workspaceForSession(ses)).toBeNull();
   });
 });
 

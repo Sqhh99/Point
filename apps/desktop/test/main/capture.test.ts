@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import * as fs from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -218,5 +219,89 @@ describe("settings: capabilities.vision", () => {
     } finally {
       delete process.env.POINT_FAKE_LLM;
     }
+  });
+});
+
+describe("readCapture never follows links or swapped files", () => {
+  const canSymlink = process.platform !== "win32";
+
+  it.runIf(canSymlink)("a .point/captures symlinked outside the workspace is not read", () => {
+    const root = tmp("point-cap-rl-");
+    const elsewhere = tmp("point-cap-out-");
+    writeFileSync(join(elsewhere, `${shaOf(PNG)}.png`), PNG);
+    mkdirSync(join(root, ".point"), { recursive: true });
+    symlinkSync(elsewhere, join(root, ".point", "captures"), "dir");
+    expect(() => capture.readCapture(root, shaOf(PNG))).toThrow("截图不存在或已被删除");
+  });
+
+  it("refuses when the opened fd is a different inode than the lstat (swap between check and open)", () => {
+    const root = tmp("point-cap-ino-");
+    const sha = capture.writeCapture(root, PNG);
+    const file = capture.capturePath(root, sha);
+    const real = fs.fstatSync.bind(fs);
+    const closeSpy = vi.fn(fs.closeSync);
+    const deps = { ...fs, closeSync: closeSpy, fstatSync: ((fd: number) => Object.assign(real(fd), { ino: 999999999 })) as typeof fs.fstatSync };
+    expect(() => capture.readRegularFile(file, deps)).toThrow("文件在读取时被替换");
+    expect(closeSpy).toHaveBeenCalledOnce();
+    expect(capture.readRegularFile(file)).toEqual(PNG);
+  });
+
+  it.runIf(canSymlink)("opens with O_NOFOLLOW on POSIX", () => {
+    const root = tmp("point-cap-nf-");
+    const sha = capture.writeCapture(root, PNG);
+    const openSpy = vi.fn(fs.openSync);
+    capture.readRegularFile(capture.capturePath(root, sha), { ...fs, openSync: openSpy as typeof fs.openSync });
+    expect((openSpy.mock.calls[0][1] as number) & fs.constants.O_NOFOLLOW).toBe(fs.constants.O_NOFOLLOW);
+  });
+
+  it("a directory or a symlink file is refused like a missing capture", () => {
+    const root = tmp("point-cap-dir-");
+    mkdirSync(join(root, ".point", "captures", `${"d".repeat(64)}.png`), { recursive: true });
+    expect(() => capture.readCapture(root, "d".repeat(64))).toThrow("截图不存在或已被删除");
+  });
+});
+
+describe("writeCapture stays inside the verified captures dir", () => {
+  const canSymlink = process.platform !== "win32";
+
+  it("temp files are created inside captures and cleaned up by the rename", () => {
+    const root = tmp("point-cap-w-");
+    const sha = capture.writeCapture(root, PNG);
+    expect(readdirSync(join(root, ".point", "captures"))).toEqual([`${sha}.png`]);
+  });
+
+  it.runIf(canSymlink)("a <sha>.png symlink is replaced, never written through", () => {
+    const root = tmp("point-cap-wl-");
+    const outside = join(tmp("point-cap-target-"), "victim.png");
+    writeFileSync(outside, "ORIGINAL");
+    mkdirSync(join(root, ".point", "captures"), { recursive: true });
+    const file = join(root, ".point", "captures", `${shaOf(PNG)}.png`);
+    symlinkSync(outside, file);
+    expect(capture.writeCapture(root, PNG)).toBe(shaOf(PNG));
+    expect(readFileSync(outside, "utf8")).toBe("ORIGINAL");
+    expect(fs.lstatSync(file).isFile()).toBe(true);
+    expect(capture.readCapture(root, shaOf(PNG))).toEqual(PNG);
+  });
+
+  it.runIf(canSymlink)("a captures dir symlinked outside is refused for writes", () => {
+    const root = tmp("point-cap-wd-");
+    const elsewhere = tmp("point-cap-wd-out-");
+    mkdirSync(join(root, ".point"), { recursive: true });
+    symlinkSync(elsewhere, join(root, ".point", "captures"), "dir");
+    expect(() => capture.writeCapture(root, PNG)).toThrow("截图目录不在工作区内");
+    expect(readdirSync(elsewhere)).toEqual([]);
+  });
+
+  it.runIf(canSymlink)("ELOOP / ENOTDIR read as missing", () => {
+    const root = tmp("point-cap-loop-");
+    const dir = join(root, ".point", "captures");
+    mkdirSync(dir, { recursive: true });
+    const a = join(dir, `${"1".repeat(64)}.png`);
+    symlinkSync(a, a);
+    expect(() => capture.readCapture(root, "1".repeat(64))).toThrow("截图不存在或已被删除");
+    const r2 = tmp("point-cap-nd-");
+    mkdirSync(join(r2, ".point"), { recursive: true });
+    writeFileSync(join(r2, ".point", "captures"), "not a dir");
+    expect(() => capture.readCapture(r2, "1".repeat(64))).toThrow("截图不存在或已被删除");
   });
 });
