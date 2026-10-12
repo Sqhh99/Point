@@ -40,14 +40,68 @@ export const NO_VISION_TEXT = "当前模型不支持图片。请在「设置」�
 
 const stripIpcPrefix = (m: string) => m.replace(/^Error invoking remote method '[^']+': (Error: )?/, "");
 
-function QuoteCard({ meta }: { meta: MessageMeta }) {
+export const captureUrl = (sha: string) => `point-capture://${sha}`;
+
+/** A capture image; a 404 (deleted file, other workspace) becomes a same-size 「截图已失效」 box. */
+function CaptureImg({ sha, alt, onBroken }: { sha: string; alt: string; onBroken?(): void }) {
+  const [broken, setBroken] = useState(false);
+  if (broken)
+    return (
+      <span className="capture-missing" data-testid="capture-missing" role="img" aria-label="截图已失效">
+        截图已失效
+      </span>
+    );
+  return (
+    <img
+      src={captureUrl(sha)}
+      alt={alt}
+      onError={() => {
+        setBroken(true);
+        onBroken?.();
+      }}
+    />
+  );
+}
+
+function BubbleImage({ sha, onOpen }: { sha: string; onOpen(sha: string): void }) {
+  const [broken, setBroken] = useState(false);
+  if (broken)
+    return (
+      <div className="quote-image missing" data-testid="bubble-image">
+        <CaptureImg sha={sha} alt="截图" />
+      </div>
+    );
+  return (
+    <button className="quote-image" data-testid="bubble-image" onClick={() => onOpen(sha)} title="查看大图">
+      <CaptureImg sha={sha} alt="截图" onBroken={() => setBroken(true)} />
+    </button>
+  );
+}
+
+/** Full-size view of a screenshot; Esc or any click closes it. */
+function Lightbox({ sha, onClose }: { sha: string; onClose(): void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div className="lightbox" data-testid="lightbox" role="dialog" aria-label="截图大图" onClick={onClose}>
+      <img src={captureUrl(sha)} alt="截图" />
+    </div>
+  );
+}
+
+function QuoteCard({ meta, onOpenImage }: { meta: MessageMeta; onOpenImage(sha: string): void }) {
   const [open, setOpen] = useState(false);
   const { selection, page, image } = meta.request;
   if (!selection?.trim() && !image) return null;
   const source = [meta.docTitle ? `《${meta.docTitle}》` : null, page ? `第 ${page} 页` : null].filter(Boolean).join(" · ");
   return (
     <blockquote className={`quote-card${open ? " open" : ""}`} data-testid="quote-card">
-      {image && <div className="quote-image">[截图]</div>}
+      {image && (
+        <BubbleImage sha={image} onOpen={onOpenImage} />
+      )}
       {selection?.trim() && (
         <button className="quote-text" onClick={() => setOpen((o) => !o)} title={open ? "收起" : "展开"}>
           {selection.trim()}
@@ -60,6 +114,8 @@ function QuoteCard({ meta }: { meta: MessageMeta }) {
 
 export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, capture, onOpenSettings }: Props) {
   const [image, setImage] = useState<CaptureResult | null>(null);
+  const [viewing, setViewing] = useState<string | null>(null);
+  const closeViewer = useCallback(() => setViewing(null), []);
   const [tab, setTab] = useState<"chat" | "notes">("chat");
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<StoredMessage[]>([]);
@@ -249,6 +305,7 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
 
   return (
     <aside className="ai-panel" aria-label="AI 面板">
+      {viewing && <Lightbox sha={viewing} onClose={closeViewer} />}
       <div className="tabs" role="tablist">
         <button role="tab" aria-selected={tab === "chat"} onClick={() => setTab("chat")}>
           对话
@@ -278,7 +335,7 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
             {messages.map((m) =>
               m.role === "user" ? (
                 <div key={m.id} className="turn">
-                  {m.meta && <QuoteCard meta={m.meta} />}
+                  {m.meta && <QuoteCard meta={m.meta} onOpenImage={setViewing} />}
                   <div className="msg user" data-role="user">
                     {m.content}
                   </div>
@@ -342,9 +399,9 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
               </div>
             )}
             {image && (
-              <div className="attached" data-testid="attached-image">
-                <span>已附截图（{image.width}×{image.height}）</span>
-                <button className="link" onClick={() => setImage(null)} aria-label="移除截图">
+              <div className="attached-thumb" data-testid="attached-image">
+                <CaptureImg key={image.sha} sha={image.sha} alt={`截图 ${image.width}×${image.height}`} />
+                <button className="thumb-remove" onClick={() => setImage(null)} aria-label="移除截图">
                   ×
                 </button>
               </div>

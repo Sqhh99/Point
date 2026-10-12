@@ -1,6 +1,6 @@
 import { app, BrowserWindow } from "electron";
 import { join } from "node:path";
-import { registerCaptureIpc } from "./capture.js";
+import { bindCaptureProtocol, registerCaptureIpc, registerCaptureScheme } from "./capture.js";
 import { runSmoke } from "./smoke.js";
 import { registerDocsIpc } from "./docs-ipc.js";
 import { registerIpc } from "./ipc.js";
@@ -15,6 +15,8 @@ if (process.env.POINT_SMOKE_OUT) runSmoke(process.env.POINT_SMOKE_OUT);
 
 // Lets e2e tests isolate settings from the real profile.
 if (process.env.POINT_USER_DATA) app.setPath("userData", process.env.POINT_USER_DATA);
+
+registerCaptureScheme();
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -31,6 +33,7 @@ function createWindow(): void {
     }
   });
   watchMaximized(win);
+  bindCaptureProtocol(win.webContents);
   interceptDrops(win);
   if (process.env.ELECTRON_RENDERER_URL) {
     win.loadURL(process.env.ELECTRON_RENDERER_URL);
