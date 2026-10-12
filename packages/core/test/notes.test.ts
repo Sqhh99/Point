@@ -59,3 +59,17 @@ describe("NoteStore", () => {
     expect(parseNote("# 标题\n正文", "x")).toMatchObject({ id: "x", title: "x", tags: [], body: "# 标题\n正文" });
   });
 });
+
+describe("NoteStore with number-like ids", () => {
+  // randomUUID().slice(0, 8) is all digits about 2.3% of the time; YAML must keep it a string.
+  it.each(["37259515", "00000001", "1234e567", "12345678"])("round-trips id %s as a string", (id) => {
+    const d = mkdtempSync(join(tmpdir(), "point-notes-num-"));
+    const s = new NoteStore(d, { newId: () => id });
+    const note = s.create({ title: "t", body: "b" });
+    const raw = readFileSync(join(d, `${id}.md`), "utf8");
+    expect(raw).toMatch(new RegExp(`^---\\nid: "${id}"\\n`));
+    expect(s.read(id)).toEqual(note);
+    expect(s.read(id).id).toBe(id);
+    expect(s.list().map((m) => m.id)).toEqual([id]);
+  });
+});
