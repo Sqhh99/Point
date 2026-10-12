@@ -47,3 +47,4 @@ export {
   type NoteExportEntry
 } from "./notes/export.js";
 export { DbTooNewError, MIGRATIONS, migrate, type MigratableDb } from "./db/migrate.js";
+export * from "./conversations/tree.js";

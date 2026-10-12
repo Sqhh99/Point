@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { ChatMessage, TaskKind } from "@point/core";
+import { mainLeaf, pathTo, spanMatches, type BranchOrigin, type ChatMessage, type TaskKind } from "@point/core";
 import type { ConversationMeta, MessageMeta, StoredMessage } from "../shared/ipc.js";
 import { need } from "./workspace.js";
 
 type ConvRow = { id: string; title: string; doc_id: string | null; created_at: string; updated_at: string };
-type MsgRow = { id: string; conversation_id: string; role: "user" | "assistant"; content: string; kind: TaskKind | null; meta: string | null; created_at: string };
+type MsgRow = { id: string; conversation_id: string; parent_id: string | null; role: "user" | "assistant"; content: string; kind: TaskKind | null; meta: string | null; created_at: string };
 
 const conv = (r: ConvRow): ConversationMeta => ({ id: r.id, title: r.title, docId: r.doc_id ?? undefined, createdAt: r.created_at, updatedAt: r.updated_at });
 function parseMeta(raw: string | null): MessageMeta | undefined {
@@ -19,6 +19,7 @@ function parseMeta(raw: string | null): MessageMeta | undefined {
 const msg = (r: MsgRow): StoredMessage => ({
   id: r.id,
   conversationId: r.conversation_id,
+  parentId: r.parent_id,
   role: r.role,
   content: r.content,
   kind: r.kind ?? undefined,
@@ -45,8 +46,31 @@ export function getMessages(conversationId: string): StoredMessage[] {
   return (need().db.prepare("SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at, rowid").all(conversationId) as MsgRow[]).map(msg);
 }
 
-export function historyFor(conversationId: string, dropTrailingTurn = false): ChatMessage[] {
+type OriginRow = { child_msg_id: string; source_msg_id: string; start: number; end: number; quote: string };
+const origin = (r: OriginRow): BranchOrigin => ({ childId: r.child_msg_id, sourceId: r.source_msg_id, start: r.start, end: r.end, quote: r.quote });
+
+export function getOrigins(conversationId: string): BranchOrigin[] {
+  return (
+    need()
+      .db.prepare("SELECT o.* FROM branch_origin o JOIN messages m ON m.id = o.child_msg_id WHERE m.conversation_id = ?")
+      .all(conversationId) as OriginRow[]
+  ).map(origin);
+}
+
+/** Every message plus every branch origin, for the breadcrumb and branch tree. */
+export function getTree(conversationId: string): { messages: StoredMessage[]; origins: BranchOrigin[] } {
+  return { messages: getMessages(conversationId), origins: getOrigins(conversationId) };
+}
+
+/** Root → leaf messages of one thread. Without a leaf: the main thread. Sibling branches never appear. */
+export function threadOf(conversationId: string, leafId?: string): StoredMessage[] {
   const all = getMessages(conversationId);
+  const leaf = leafId ?? mainLeaf(all, getOrigins(conversationId))?.id;
+  return leaf ? pathTo(all, leaf).filter((m) => m.conversationId === conversationId) : [];
+}
+
+export function historyFor(conversationId: string, dropTrailingTurn = false, leafId?: string): ChatMessage[] {
+  const all = threadOf(conversationId, leafId);
   if (dropTrailingTurn) {
     // Regenerating: drop the last assistant answer(s) and the user turn being re-asked.
     while (all.at(-1)?.role === "assistant") all.pop();
@@ -55,15 +79,38 @@ export function historyFor(conversationId: string, dropTrailingTurn = false): Ch
   return all.map((m) => ({ role: m.role, content: m.content }));
 }
 
-export function addMessage(conversationId: string, role: "user" | "assistant", content: string, kind?: TaskKind, meta?: MessageMeta): StoredMessage {
+/** Appends after `parentId`, or after the end of the main thread when omitted. */
+export function addMessage(conversationId: string, role: "user" | "assistant", content: string, kind?: TaskKind, meta?: MessageMeta, parentId?: string): StoredMessage {
   const now = new Date().toISOString();
-  const row: MsgRow = { id: randomUUID(), conversation_id: conversationId, role, content, kind: kind ?? null, meta: meta ? JSON.stringify(meta) : null, created_at: now };
+  const parent = parentId ?? threadOf(conversationId).at(-1)?.id ?? null;
+  if (parent && !belongs(parent, conversationId)) throw new Error("parent message is not in this conversation");
+  const row: MsgRow = { id: randomUUID(), conversation_id: conversationId, parent_id: parent, role, content, kind: kind ?? null, meta: meta ? JSON.stringify(meta) : null, created_at: now };
   const db = need().db;
   db.transaction(() => {
-    db.prepare("INSERT INTO messages (id, conversation_id, role, content, kind, meta, created_at) VALUES (@id, @conversation_id, @role, @content, @kind, @meta, @created_at)").run(row);
+    db.prepare("INSERT INTO messages (id, conversation_id, parent_id, role, content, kind, meta, created_at) VALUES (@id, @conversation_id, @parent_id, @role, @content, @kind, @meta, @created_at)").run(row);
     db.prepare("UPDATE conversations SET updated_at = ? WHERE id = ?").run(now, conversationId);
   })();
   return msg(row);
+}
+
+function belongs(messageId: string, conversationId: string): boolean {
+  return !!need().db.prepare("SELECT 1 FROM messages WHERE id = ? AND conversation_id = ?").get(messageId, conversationId);
+}
+
+/**
+ * Forks a branch from span [start, end) (UTF-16, of the stored markdown) of an assistant answer:
+ * stores the first user message of the branch and where it came from, atomically.
+ */
+export function createBranch(sourceId: string, span: { start: number; end: number; quote: string }, content: string, kind?: TaskKind, meta?: MessageMeta): StoredMessage {
+  const db = need().db;
+  const src = db.prepare("SELECT * FROM messages WHERE id = ?").get(sourceId) as MsgRow | undefined;
+  if (!src || src.role !== "assistant") throw new Error("branches start from an assistant answer");
+  if (!spanMatches(src.content, span.start, span.end, span.quote)) throw new Error("quote does not match the answer at that position");
+  return db.transaction(() => {
+    const child = addMessage(src.conversation_id, "user", content, kind, meta, sourceId);
+    db.prepare("INSERT INTO branch_origin (child_msg_id, source_msg_id, start, end, quote) VALUES (?, ?, ?, ?, ?)").run(child.id, sourceId, span.start, span.end, span.quote);
+    return child;
+  })();
 }
 
 export function deleteConversation(id: string): void {
@@ -71,8 +118,8 @@ export function deleteConversation(id: string): void {
 }
 
 /** Deletes the answer(s) after the last user turn, so 重新生成 / 重试 replaces rather than appends. */
-export function dropTrailingAssistant(conversationId: string): void {
-  const all = getMessages(conversationId);
+export function dropTrailingAssistant(conversationId: string, leafId?: string): void {
+  const all = threadOf(conversationId, leafId);
   const stmt = need().db.prepare("DELETE FROM messages WHERE id = ?");
   for (let m = all.pop(); m?.role === "assistant"; m = all.pop()) stmt.run(m.id);
 }
