@@ -36,7 +36,8 @@ Related to #34
 - [ ] Windows 和 macOS 上的 CI 全绿 —— 还没有全绿：
   - run 38279933704：Windows check 通过；macOS check 失败（#34 测试里 `/private/var` 的问题）。
   - run 38280550300：macOS check 通过（main 267 通过、2 跳过）；Windows check 失败（8.3 短路径，本 PR 16 个、#34 的 `open.test.ts` 4 个）。
-  - 本次把测试的临时目录改成 `realpathSync.native` 后再跑，结果写在 PR 评论里。
+  - run 38280997549（`4d10d75`）：macOS check 通过；Windows check 只有 #34 `open.test.ts` 的 4 个失败（短路径），本 PR 的测试全部通过。
+  - 合入 `9615c0f` 后的新 run：推送前写的这一条，结果以 PR 页面上的 checks 为准。
 - [ ] 在应用里实际走过受影响的流程 —— 不适用
 
 ## 检查项

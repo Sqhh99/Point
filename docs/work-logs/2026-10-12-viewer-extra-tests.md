@@ -60,4 +60,12 @@
 - `open-extra.test.ts` 的 `tmp` 改为 `realpathSync.native(mkdtempSync(...))`。`viewer-extra.test.ts` 不创建临时目录，不用改。
 - 推送前 `feat/viewers` 没有新提交（仍是 `ee902a6`），所以 #34 的 `open.test.ts` 在 Windows 上预计还会因为短路径失败 4 个，需要 功能实现 修。
 - 本地 Linux：`pnpm lint`、`pnpm typecheck` 通过；`pnpm test` 通过：core 138；main 265 通过、4 跳过。
-- 这次推送后的 CI 结果写在 PR 评论里。
+- **CI run 38280997549（`4d10d75`）：**
+  - check (macos-latest) 通过：core 138；main 267 通过、2 跳过（只在 win32 上跑的用例）。
+  - check (windows-latest) 失败：本 PR 的 `viewer-extra` 36 个、`open-extra` 61 个（3 跳过，只在 POSIX 上跑的用例）全部通过；只有 #34 的 `open.test.ts` 有 4 个失败（8.3 短路径）。
+  - e2e、package 都没跑。
+
+## 9. 追加：合入 9615c0f（2026-10-12）
+- 用普通 merge commit 合入 `origin/feat/viewers`（`9615c0f`：#34 的 `open.test.ts` 临时目录也改用 `realpathSync.native`）。
+- 本地 Linux：`pnpm lint`、`pnpm typecheck` 通过；`pnpm test` 通过：core 138；main 265 通过、4 跳过（2 个只在 win32 上跑，2 个只在大小写不敏感的卷上跑）。
+- 这次推送会触发新的 CI run，等 Windows、macOS 两个平台的 check、e2e、package 结果。这一条在推送前写好，结果以 PR 页面上的 checks 为准。
