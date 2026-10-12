@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as XLSX from "xlsx";
-import { XLSX_MAX_ROWS, docTypeOf, parseDocument, parseXlsx } from "../src/index.js";
+import { XLSX_MAX_ROWS, decodeCsv, docTypeOf, parseDocument, parseXlsx } from "../src/index.js";
 
 function book(sheets: Record<string, unknown[][]>): Uint8Array {
   const wb = XLSX.utils.book_new();
@@ -52,5 +52,14 @@ describe("xlsx", () => {
       expect(JSON.stringify(table)).toContain("张三");
       expect(JSON.stringify(table)).toContain("姓名");
     }
+  });
+
+  it("decodes GBK and UTF-16 CSV", () => {
+    // "张三" in GBK: D5 C5 C8 FD
+    const gbk = new Uint8Array([0xd5, 0xc5, 0xc8, 0xfd, 0x2c, 0x39, 0x30, 0x0a]);
+    expect(decodeCsv(gbk)).toBe("张三,90\n");
+    const u16 = new Uint8Array([0xff, 0xfe, ...Array.from("张三,90").flatMap((c) => [c.charCodeAt(0) & 0xff, c.charCodeAt(0) >> 8])]);
+    expect(decodeCsv(u16)).toBe("张三,90");
+    expect(JSON.stringify(parseXlsx(gbk, "s").blocks)).toContain("张三");
   });
 });

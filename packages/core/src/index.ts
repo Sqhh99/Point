@@ -19,6 +19,7 @@ export {
   parsePdf,
   parseXlsx,
   XLSX_MAX_ROWS,
+  decodeCsv,
   type Block,
   type DocType,
   type OutlineItem,

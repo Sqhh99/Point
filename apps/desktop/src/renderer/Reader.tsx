@@ -91,7 +91,7 @@ interface ReaderProps {
   hasWorkspace: boolean;
   onOpenWorkspace(): void;
   onOpenFile(): void;
-  onOpenRecent(index: number): void;
+  onOpenRecent(index: number, path: string): void;
   onDocLoaded?(doc: ParsedDoc | null): void;
   onAction(kind: TaskKind, sel: SelectionInfo): void;
 }

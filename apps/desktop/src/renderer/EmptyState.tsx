@@ -6,7 +6,7 @@ const api = window.point;
 interface Props {
   onOpenWorkspace(): void;
   onOpenFile(): void;
-  onOpenRecent(index: number): void;
+  onOpenRecent(index: number, path: string): void;
 }
 
 export function EmptyState(p: Props) {
@@ -33,7 +33,7 @@ export function EmptyState(p: Props) {
         <ul className="recent-list" aria-label="最近打开">
           {recent.map((r, i) => (
             <li key={`${r.kind}:${r.path}`}>
-              <button onClick={() => p.onOpenRecent(i)} title={r.path}>
+              <button onClick={() => p.onOpenRecent(i, r.path)} title={r.path}>
                 <span className="recent-kind">{r.kind === "workspace" ? "工作区" : "文件"}</span>
                 <span className="recent-name">{r.name}</span>
               </button>

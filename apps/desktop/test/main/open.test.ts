@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -48,7 +49,8 @@ describe("single-file mode", () => {
     const root = tmp("point-ws-");
     await openPath(mdFile());
     await openPath(root);
-    expect(ws.workspacePath()).toBe(root);
+    // resolveOpenTarget returns the real path (macOS: /var -> /private/var)
+    expect(ws.workspacePath()).toBe(realpathSync(root));
     const recent = (await invoke(IPC.openRecent, s())) as RecentItem[];
     expect(recent.map((x: { kind: string }) => x.kind)).toEqual(["workspace", "file"]);
     expect(recent.some((x: { path: string }) => x.path === scratchRoot())).toBe(false);
@@ -96,9 +98,11 @@ describe("recent by index", () => {
     const f = mdFile();
     await openPath(f);
     ws.closeWorkspace();
-    const r = (await invoke(IPC.openRecentAt, s(), 0)) as OpenResult;
+    const r = (await invoke(IPC.openRecentAt, s(), 0, realpathSync(f))) as OpenResult;
     expect(r.doc?.type).toBe("md");
-    for (const bad of [-1, 1, 99, 0.5, "0", null, "/etc/passwd"]) await expect(invoke(IPC.openRecentAt, s(), bad)).rejects.toThrow("无效的最近记录");
+    for (const bad of [-1, 1, 99, 0.5, "0", null, "/etc/passwd"]) await expect(invoke(IPC.openRecentAt, s(), bad, realpathSync(f))).rejects.toThrow("无效的最近记录");
+    await expect(invoke(IPC.openRecentAt, s(), 0, "/somewhere/else.md")).rejects.toThrow("无效的最近记录");
+    await expect(invoke(IPC.openRecentAt, s(), 0)).rejects.toThrow("无效的最近记录");
   });
 });
 
@@ -116,5 +120,30 @@ describe("recent list", () => {
   it("a corrupt recent.json reads as empty", async () => {
     writeFileSync(join(state.userData, "recent.json"), "{ bad");
     expect(await invoke(IPC.openRecent, s())).toEqual([]);
+  });
+});
+
+describe("open error copy", () => {
+  it("0-byte file and deleted recent use the spec copy; the stale recent is dropped", async () => {
+    const { OPEN_ERROR } = await import("../../src/main/open-errors.js");
+    const { rmSync } = await import("node:fs");
+    const empty = join(tmp("point-src-"), "e.md");
+    writeFileSync(empty, "");
+    await expect(openPath(empty)).rejects.toThrow(OPEN_ERROR.empty);
+    const f = mdFile();
+    await openPath(f);
+    const p = realpathSync(f);
+    rmSync(p);
+    await expect(invoke(IPC.openRecentAt, s(), 0, p)).rejects.toThrow(OPEN_ERROR.missing);
+    expect(((await invoke(IPC.openRecent, s())) as RecentItem[]).some((r) => r.path === p)).toBe(false);
+  });
+
+  it("maps parser failures without leaking the raw message", async () => {
+    const { OPEN_ERROR, friendlyParseError } = await import("../../src/main/open-errors.js");
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(friendlyParseError(Object.assign(new Error("No password given"), { name: "PasswordException" }), 10).message).toBe(OPEN_ERROR.encrypted);
+    expect(friendlyParseError(new Error("Invalid PDF structure"), 10).message).toBe(OPEN_ERROR.corrupt);
+    expect(friendlyParseError(new Error("x"), 0).message).toBe(OPEN_ERROR.empty);
+    spy.mockRestore();
   });
 });

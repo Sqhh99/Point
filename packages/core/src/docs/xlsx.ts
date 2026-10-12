@@ -10,8 +10,8 @@ export function parseXlsx(data: Uint8Array, fallbackTitle = "未命名"): Parsed
   const opts = { cellFormula: false, cellHTML: false } as const;
   const wb = isBinaryWorkbook(data)
     ? XLSX.read(data, { ...opts, type: "array" })
-    : // CSV: SheetJS guesses a legacy codepage for raw bytes, which garbles UTF-8 (e.g. Chinese), so decode first.
-      XLSX.read(new TextDecoder("utf-8").decode(data).replace(/^\uFEFF/, ""), { ...opts, type: "string" });
+    : // CSV: SheetJS guesses a legacy codepage for raw bytes, which garbles Chinese, so decode it ourselves.
+      XLSX.read(decodeCsv(data), { ...opts, type: "string" });
   const blocks: BlockInput[] = [];
   for (const name of wb.SheetNames) {
     const sheet = wb.Sheets[name];
@@ -33,4 +33,19 @@ function isBinaryWorkbook(d: Uint8Array): boolean {
   const zip = d[0] === 0x50 && d[1] === 0x4b;
   const ole = d[0] === 0xd0 && d[1] === 0xcf && d[2] === 0x11 && d[3] === 0xe0;
   return zip || ole;
+}
+
+/**
+ * CSV text: a BOM wins (UTF-8, UTF-16LE/BE — Excel's "Unicode text" export); otherwise strict UTF-8,
+ * falling back to GB18030 (a superset of GBK), which is what Excel writes on Chinese Windows.
+ */
+export function decodeCsv(d: Uint8Array): string {
+  if (d[0] === 0xef && d[1] === 0xbb && d[2] === 0xbf) return new TextDecoder("utf-8").decode(d.subarray(3));
+  if (d[0] === 0xff && d[1] === 0xfe) return new TextDecoder("utf-16le").decode(d.subarray(2));
+  if (d[0] === 0xfe && d[1] === 0xff) return new TextDecoder("utf-16be").decode(d.subarray(2));
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(d);
+  } catch {
+    return new TextDecoder("gb18030").decode(d);
+  }
 }

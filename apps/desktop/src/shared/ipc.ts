@@ -152,8 +152,11 @@ export interface PointAPI {
     workspace(): Promise<OpenResult>;
     /** Single-file picker; without a workspace the file goes into a private scratch workspace. */
     file(): Promise<OpenResult>;
-    /** The recent entry at `index` in main's own list; the renderer never sends a path. */
-    recentAt(index: number): Promise<OpenResult>;
+    /**
+     * The recent entry at `index` in main's own list. `path` is only the menu's copy, used to detect a
+     * stale menu: main opens its own stored path, and refuses when they no longer match.
+     */
+    recentAt(index: number, path: string): Promise<OpenResult>;
     recent(): Promise<RecentItem[]>;
     /** Fires when main opened something on its own, e.g. a file or folder dropped onto the window. */
     onOpened(cb: (r: OpenResult) => void): () => void;
