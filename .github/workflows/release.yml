@@ -43,12 +43,20 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      # node-gyp 9 (better-sqlite3 rebuild) imports distutils, removed in Python 3.12.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Ensure Inno Setup 6
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
       - run: pnpm --filter @point/desktop run package
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
@@ -60,6 +68,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           shopt -s nullglob
-          files=( *.exe *.dmg *.blockmap latest*.yml )
+          files=( *-setup.exe *.dmg *.dmg.blockmap latest-mac.yml )
           ls -l "${files[@]}"
           gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber

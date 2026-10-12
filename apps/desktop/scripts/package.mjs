@@ -20,6 +20,14 @@ const feeds = join(release, ".feeds");
 rmSync(feeds, { recursive: true, force: true });
 const bin = process.platform === "win32" ? "electron-builder.cmd" : "electron-builder";
 
+// Windows installer: Inno Setup wraps electron-builder's unpacked dir (win target is `dir`).
+function buildInno(arch) {
+  const version = JSON.parse(readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8")).version;
+  const src = join(release, arch === "x64" ? "win-unpacked" : `win-${arch}-unpacked`);
+  const iscc = process.env.ISCC ?? join(process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)", "Inno Setup 6", "ISCC.exe");
+  execFileSync(iscc, [`/DAppVersion=${version}`, `/DArch=${arch}`, `/DSourceDir=${src}`, `/DOutputDir=${release}`, join(import.meta.dirname, "..", "installer", "point.iss")], { stdio: "inherit" });
+}
+
 for (const arch of archs) {
   rmSync(join(sqliteDir, "build"), { recursive: true, force: true });
   rmSync(join(sqliteDir, "prebuilds"), { recursive: true, force: true });
@@ -28,6 +36,7 @@ for (const arch of archs) {
     shell: process.platform === "win32",
     env: { ...process.env, npm_config_arch: arch, npm_config_target_arch: arch }
   });
+  if (process.platform === "win32") buildInno(arch);
   // Each run rewrites latest*.yml with only its own arch; keep a copy per arch.
   mkdirSync(join(feeds, arch), { recursive: true });
   for (const f of readdirSync(release).filter((n) => /^latest.*\.yml$/.test(n))) {
