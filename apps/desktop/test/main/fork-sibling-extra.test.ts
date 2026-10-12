@@ -89,13 +89,37 @@ describe("siblingOf validation: rejected with zero writes", () => {
     expect(counts()).toEqual(n);
   });
 
-  // tasks-ipc.ts:49 maps a non-string siblingOf to "", and placement() (tasks-ipc.ts:72) only checks
-  // `req.siblingOf` for truthiness when there is no conversation, so a malformed siblingOf without a
-  // conversationId is silently ignored: a new conversation and message are written.
-  it.fails("malformed siblingOf without a conversation is rejected too, nothing written", async () => {
+  // Fixed: tasks:run type-checks siblingOf / parentId at entry (no coercion to ""), regardless of conversationId.
+  it("malformed siblingOf without a conversation is rejected too, nothing written", async () => {
     const n = counts();
     await expect(run({ siblingOf: 123 })).rejects.toThrow();
     expect(counts()).toEqual(n);
+  });
+});
+
+describe("tasks:run entry type checks for siblingOf / parentId (fix/branch-count)", () => {
+  it.each([
+    ["siblingOf number", { siblingOf: 123 }],
+    ["siblingOf empty", { siblingOf: "" }],
+    ["siblingOf null", { siblingOf: null }],
+    ["siblingOf object", { siblingOf: { id: "x" } }],
+    ["siblingOf too long", { siblingOf: "x".repeat(65) }],
+    ["parentId number", { parentId: 0 }],
+    ["parentId empty", { parentId: "" }],
+    ["parentId false", { parentId: false }],
+    ["parentId array", { parentId: ["a"] }]
+  ])("%s is rejected with or without a conversation, nothing written", async (_n, bad) => {
+    const first = await ask({ question: "类型检查" });
+    const n = counts();
+    await expect(run(bad)).rejects.toThrow(/无效的 (siblingOf|parentId)/);
+    await expect(run({ ...bad, conversationId: first.started.conversationId })).rejects.toThrow(/无效的 (siblingOf|parentId)/);
+    expect(counts()).toEqual(n);
+  });
+
+  it("parentId: null is still allowed (new first question)", async () => {
+    const first = await ask({ question: "首问" });
+    const r = await ask({ question: "新首问", conversationId: first.started.conversationId, parentId: null });
+    expect(r.user.parentId).toBeNull();
   });
 });
 
@@ -216,10 +240,9 @@ describe("⑂ n 个分支 count (designer: distinct source passages)", () => {
     expect(siblingsOf(t.messages, t.origins, b1.id).map((m) => m.id)).toEqual([b1.id]);
   });
 
-  // Observable count = what AIPanel.tsx:582 renders: branchesFrom(origins, answer).length (tree.ts:177
-  // returns one origin per question). Spec: group by source answer id + start + end + quote (the
-  // siblingsOf key), so a passage re-asked several times counts once.
-  it.fails("passage A asked 3x (original + 2 re-asks) plus passage B shows 「⑂ 2 个分支」", async () => {
+  // Fixed: branchesFrom groups through groupBySpan (the siblingsOf key: source + start + end + quote),
+  // so a passage re-asked several times counts once in AIPanel's chip.
+  it("passage A asked 3x (original + 2 re-asks) plus passage B shows 「⑂ 2 个分支」", async () => {
     const { conv, q, b } = await withSpan();
     const r1 = await ask({ question: "同段改问1", conversationId: conv, siblingOf: b.user.id });
     await ask({ question: "同段改问2", conversationId: conv, siblingOf: r1.user.id });

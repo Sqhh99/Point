@@ -280,7 +280,7 @@ button.link.active { color: var(--accent); }
 .branch-tree button:hover { background: var(--hover); }
 .branch-tree button.current { background: var(--highlight); font-weight: 600; }
 .branch-chip-wrap { position: relative; margin-top: 6px; }
-.branch-chip { border: 1px solid var(--line); background: none; border-radius: 999px; padding: 1px 8px; font-size: 12px; color: var(--accent); }
+.branch-chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--line); background: none; border-radius: 999px; padding: 1px 8px; font-size: 12px; color: var(--accent); }
 .branch-menu { position: absolute; z-index: 10; left: 0; top: 24px; list-style: none; margin: 0; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); min-width: 200px; }
 .branch-menu button { width: 100%; border: none; background: none; text-align: left; padding: 4px 8px; border-radius: 6px; font-size: 13px; color: var(--text); }
 .branch-menu button:hover { background: var(--hover); }
@@ -299,8 +299,9 @@ button.link.active { color: var(--accent); }
 .mark-page { margin-left: auto; font-size: 11px; color: var(--muted); flex: none; }
 .mark-remove { visibility: hidden; padding: 0 4px; }
 .mark-item:hover .mark-remove, .mark-remove:focus-visible { visibility: visible; }
-.mark-actions { padding: 8px 16px 0; }
-.mark-actions button { width: 100%; height: 28px; }
+.mark-actions { flex: none; padding: 8px 16px 0; margin-bottom: 12px; }
+.mark-list { flex: 1 1 auto; min-height: 0; }
+.mark-actions button { width: 100%; height: 28px; padding: 0 12px; display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
 .mark-actions button:disabled { opacity: 0.45; }
 /* Marked paragraph: --accent at 12% plus a 2px --accent underline. Text selection keeps the system default highlight (no selection pseudo-element override). */
 .reader .block.marked > :not(.page-marker) { background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 0 -2px 0 var(--accent); border-radius: 4px 4px 0 0; }

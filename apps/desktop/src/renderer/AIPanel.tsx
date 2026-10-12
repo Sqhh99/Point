@@ -3,6 +3,7 @@ import type { Mark, MarkAnchor, TaskKind } from "@point/core";
 // Pure tree helpers only: the core barrel also pulls in Node modules that cannot load in the renderer.
 import { branchTree, branchesFrom, breadcrumb, defaultLeaf, latestLeaf, pathTo, siblingsOf, type BranchOrigin, type BranchTreeNode } from "@point/core/tree";
 import type { CaptureResult, MessageMeta, StoredMessage, TaskEvent, TaskRequest } from "../shared/ipc";
+import { IconBranch } from "./icons";
 import { Markdown } from "./Markdown";
 import { NotesPanel, type NoteFlash } from "./NotesPanel";
 import type { SelectionInfo } from "./Reader";
@@ -579,20 +580,22 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
                   {branches.length > 0 && (
                     <div className="branch-chip-wrap">
                       <button className="branch-chip" data-testid="branch-chip" onClick={() => setChipOpen(chipOpen === m.id ? null : m.id)} aria-expanded={chipOpen === m.id}>
-                        ⑂ {branches.length} 个分支
+                        <IconBranch />
+                        <span>{branches.length} 个分支</span>
                       </button>
                       {chipOpen === m.id && (
                         <ul className="branch-menu" role="menu">
-                          {branches.map((o) => (
-                            <li key={o.childId}>
+                          {branches.map((g) => (
+                            <li key={g.origins[0].childId}>
                               <button
                                 role="menuitem"
                                 onClick={() => {
                                   setChipOpen(null);
-                                  switchTo(o.childId);
+                                  // One entry per span; enter its newest ask (the switcher shows the others).
+                                  switchTo(g.origins.at(-1)!.childId);
                                 }}
                               >
-                                「{o.quote.slice(0, 40)}」
+                                「{g.quote.slice(0, 40)}」
                               </button>
                             </li>
                           ))}

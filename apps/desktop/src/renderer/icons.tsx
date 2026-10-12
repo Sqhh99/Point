@@ -40,3 +40,12 @@ export const IconMore = () => (
     <path d="M3.5 8h.01M8 8h.01M12.5 8h.01" strokeWidth={2.2} />
   </svg>
 );
+/** Branch (fork) mark for 「n 个分支」: drawn, so it never depends on a font having ⑂. */
+export const IconBranch = () => (
+  <svg {...base} width={12} height={12} className="icon-branch">
+    <circle cx="4.5" cy="3.5" r="1.5" />
+    <circle cx="4.5" cy="12.5" r="1.5" />
+    <circle cx="11.5" cy="5" r="1.5" />
+    <path d="M4.5 5v6M11.5 6.5c0 2.5-2 3.5-5 4.2" />
+  </svg>
+);

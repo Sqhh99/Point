@@ -434,7 +434,15 @@ test("regenerate makes sibling answers with a ‹ n/m › switcher; branches fro
   await expect(answers).toHaveCount(3);
   await win.screenshot({ path: join(import.meta.dirname, "..", "test-results", "branch-ui.png") });
   await crumbs.getByRole("button", { name: "主线" }).click();
-  await expect(log.getByTestId("branch-chip").last()).toHaveText("⑂ 1 个分支");
+  const chip = log.getByTestId("branch-chip").last();
+  await expect(chip).toHaveText("1 个分支");
+  await expect(chip.locator("svg.icon-branch")).toBeVisible();
+  // PR screenshot: drawn branch icon on the chip + 「一起问（n）」 with its bottom margin.
+  await chip.scrollIntoViewIfNeeded();
+  const ask = win.getByTestId("batch-ask");
+  expect((await ask.boundingBox())!.height).toBeGreaterThanOrEqual(28);
+  expect(await ask.evaluate((b) => b.scrollHeight <= b.clientHeight + 1)).toBe(true);
+  await win.screenshot({ path: join(import.meta.dirname, "..", "test-results", "branch-count.png") });
   await expect(answers).toHaveCount(2);
   await log.getByTestId("branch-chip").last().click();
   await log.getByRole("menuitem").first().click();
@@ -468,6 +476,10 @@ test("select text → 标记 creates a mark; 一起问 sends two marks as one qu
   await items.nth(1).getByRole("checkbox").check();
   await items.nth(0).getByRole("checkbox").check();
   await expect(panel.getByTestId("batch-ask")).toHaveText("一起问（2）");
+  // Not clipped: the button sits fully inside the marks group with a 12px bottom margin.
+  const btnBox = (await panel.getByTestId("batch-ask").boundingBox())!;
+  const groupBox = (await panel.boundingBox())!;
+  expect(groupBox.y + groupBox.height - (btnBox.y + btnBox.height)).toBeGreaterThanOrEqual(12);
 
   // PR screenshot: marks list + floating bar on a fresh selection.
   await selectInReader(win, "熵是系统无序程度的度量");
