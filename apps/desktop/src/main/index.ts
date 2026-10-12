@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { runSmoke } from "./smoke.js";
 import { registerDocsIpc } from "./docs-ipc.js";
 import { registerIpc } from "./ipc.js";
+import { registerTasksIpc } from "./tasks-ipc.js";
 import { closeWorkspace, restoreWorkspace } from "./workspace.js";
 
 // Packaging check: open a temp SQLite DB through the native module, report, exit.
@@ -34,6 +35,7 @@ function createWindow(): void {
 app.whenReady().then(() => {
   registerIpc();
   registerDocsIpc();
+  registerTasksIpc();
   restoreWorkspace();
   createWindow();
   app.on("activate", () => {

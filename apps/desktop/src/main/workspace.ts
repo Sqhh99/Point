@@ -3,7 +3,7 @@ import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, extname, join, resolve, sep } from "node:path";
-import { docTypeOf, parseDocument, type ParsedDoc } from "@point/core";
+import { NoteStore, docTypeOf, parseDocument, type ParsedDoc } from "@point/core";
 import type { DocMeta } from "../shared/ipc.js";
 
 /**
@@ -14,7 +14,7 @@ import type { DocMeta } from "../shared/ipc.js";
  */
 const stateFile = () => join(app.getPath("userData"), "workspace.json");
 
-let current: { root: string; db: Database.Database } | null = null;
+let current: { root: string; db: Database.Database; notes: NoteStore } | null = null;
 
 function openDb(root: string): Database.Database {
   mkdirSync(join(root, ".point"), { recursive: true });
@@ -27,6 +27,26 @@ function openDb(root: string): Database.Database {
     path TEXT NOT NULL,
     imported_at TEXT NOT NULL
   )`);
+  db.exec(`CREATE TABLE IF NOT EXISTS conversations (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    doc_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS messages (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    kind TEXT,
+    meta TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS messages_by_conversation ON messages(conversation_id, created_at);`);
+  db.pragma("foreign_keys = ON");
+  const cols = db.prepare("PRAGMA table_info(messages)").all() as { name: string }[];
+  if (!cols.some((c) => c.name === "meta")) db.exec("ALTER TABLE messages ADD COLUMN meta TEXT");
   return db;
 }
 
@@ -34,7 +54,7 @@ export function openWorkspace(root: string): string {
   const abs = resolve(root);
   for (const d of ["docs", "notes"]) mkdirSync(join(abs, d), { recursive: true });
   current?.db.close();
-  current = { root: abs, db: openDb(abs) };
+  current = { root: abs, db: openDb(abs), notes: new NoteStore(join(abs, "notes")) };
   writeFileSync(stateFile(), JSON.stringify({ path: abs }));
   return abs;
 }
@@ -57,9 +77,13 @@ export function closeWorkspace(): void {
   current = null;
 }
 
-function need() {
+export function need() {
   if (!current) throw new Error("请先选择工作区文件夹");
   return current;
+}
+
+export function docTitle(id: string): string | undefined {
+  return (current?.db.prepare("SELECT title FROM docs WHERE id = ?").get(id) as { title: string } | undefined)?.title;
 }
 
 type Row = { id: string; title: string; type: DocMeta["type"]; path: string; imported_at: string };

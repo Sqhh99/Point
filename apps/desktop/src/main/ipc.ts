@@ -1,7 +1,8 @@
 import { ipcMain, type WebContents } from "electron";
 import { randomUUID } from "node:crypto";
-import { LLMError, createProvider, getPreset, type ChatMessage, type ProviderId } from "@point/core";
+import { LLMError, createProvider, getPreset, type ChatMessage, type LLMProvider, type ProviderId } from "@point/core";
 import { IPC, type ChatEvent, type ProviderPatch, type TestResult } from "../shared/ipc.js";
+import { FakeProvider, fakeEnabled } from "./fake-llm.js";
 import { resolveProvider, setKey, update, view } from "./settings.js";
 
 const running = new Map<string, AbortController>();
@@ -10,13 +11,14 @@ function assertProviderId(id: unknown): asserts id is ProviderId {
   if (typeof id !== "string" || !getPreset(id)) throw new Error("无效的模型服务");
 }
 
-function errInfo(err: unknown): { code: string; message: string } {
+export function errInfo(err: unknown): { code: string; message: string } {
   if (err instanceof LLMError) return { code: err.code, message: err.message };
   const e = err as { code?: unknown; message?: string };
   return { code: typeof e.code === "string" ? e.code : "unknown", message: e.message ?? String(err) };
 }
 
-function providerFor(id?: ProviderId) {
+export function providerFor(id?: ProviderId): { model: string; provider: LLMProvider } {
+  if (fakeEnabled()) return { model: "fake", provider: new FakeProvider() };
   const cfg = resolveProvider(id);
   return { model: cfg.model, provider: createProvider({ id: cfg.id, apiKey: cfg.apiKey, baseURL: cfg.baseURL }) };
 }

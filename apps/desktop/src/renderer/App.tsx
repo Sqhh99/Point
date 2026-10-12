@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { DocMeta, WorkspaceInfo } from "../shared/ipc";
-import { AIPanel } from "./AIPanel";
+import { AIPanel, type TaskTrigger } from "./AIPanel";
 import { Library } from "./Library";
 import { Reader } from "./Reader";
 import { Settings } from "./Settings";
@@ -14,6 +14,8 @@ export function App() {
   const [view, setView] = useState<"reader" | "settings">("reader");
   const [libraryOpen, setLibraryOpen] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [trigger, setTrigger] = useState<TaskTrigger | null>(null);
+  const [docTitle, setDocTitle] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setWorkspace(await api.workspace.get());
@@ -67,9 +69,22 @@ export function App() {
             {error}
           </div>
         )}
-        {view === "settings" ? <Settings onClose={() => setView("reader")} /> : <Reader docId={activeId} hasWorkspace={!!workspace.path} />}
+        {view === "settings" ? <Settings onClose={() => setView("reader")} /> : (
+          <Reader
+            docId={activeId}
+            hasWorkspace={!!workspace.path}
+            onDocLoaded={(d) => setDocTitle(d?.title ?? null)}
+            onAction={(kind, sel) => setTrigger((t) => ({ seq: (t?.seq ?? 0) + 1, kind, sel }))}
+          />
+        )}
       </main>
-      <AIPanel />
+      <AIPanel
+        trigger={trigger}
+        docId={activeId}
+        docTitle={docTitle}
+        hasWorkspace={!!workspace.path}
+        onOpenSettings={() => setView("settings")}
+      />
     </div>
   );
 }

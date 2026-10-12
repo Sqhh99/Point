@@ -1,5 +1,43 @@
-import { useEffect, useState } from "react";
-import type { Block, ParsedDoc } from "@point/core";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { Block, ParsedDoc, TaskKind } from "@point/core";
+import type { JSX } from "react";
+import { IconAsk, IconDiagram, IconExplain, IconNote } from "./icons";
+
+export interface SelectionInfo {
+  text: string;
+  context: string;
+  page?: number;
+}
+
+const ACTIONS: { kind: TaskKind; label: string; Icon: () => JSX.Element }[] = [
+  { kind: "explain", label: "解读概念", Icon: IconExplain },
+  { kind: "note", label: "记笔记", Icon: IconNote },
+  { kind: "diagram", label: "画图表", Icon: IconDiagram },
+  { kind: "ask", label: "问 AI", Icon: IconAsk }
+];
+
+const TOOLBAR_H = 36;
+const GAP = 8;
+const SHOW_DELAY_MS = 120;
+
+function pageOf(range: Range): number | undefined {
+  const el = (range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement)?.closest("[data-page]");
+  const n = Number(el?.getAttribute("data-page"));
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
+/** Text of the blocks just before and after the selection, for prompt context. */
+function contextOf(range: Range): string {
+  const blockOf = (n: Node) => (n instanceof Element ? n : n.parentElement)?.closest(".block") ?? null;
+  const first = blockOf(range.startContainer);
+  const last = blockOf(range.endContainer);
+  const parts = [first?.previousElementSibling, first, last !== first ? last : null, last?.nextElementSibling];
+  return parts
+    .filter((e): e is Element => !!e)
+    .map((e) => e.textContent?.trim() ?? "")
+    .filter(Boolean)
+    .join("\n\n");
+}
 
 function BlockView({ b }: { b: Block }) {
   const common = { "data-block-id": b.id, "data-page": b.page };
@@ -47,18 +85,94 @@ function BlockView({ b }: { b: Block }) {
   }
 }
 
-export function Reader({ docId, hasWorkspace }: { docId: string | null; hasWorkspace: boolean }) {
+interface ReaderProps {
+  docId: string | null;
+  hasWorkspace: boolean;
+  onDocLoaded?(doc: ParsedDoc | null): void;
+  onAction(kind: TaskKind, sel: SelectionInfo): void;
+}
+
+export function Reader({ docId, hasWorkspace, onDocLoaded, onAction }: ReaderProps) {
   const [doc, setDoc] = useState<ParsedDoc | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [toolbar, setToolbar] = useState<{ top: number; left: number; sel: SelectionInfo } | null>(null);
+  const articleRef = useRef<HTMLElement>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const timer = useRef<number | undefined>(undefined);
+
+  const close = useCallback(() => {
+    window.clearTimeout(timer.current);
+    setToolbar(null);
+  }, []);
+
+  const measure = useCallback(() => {
+    const article = articleRef.current;
+    const s = window.getSelection();
+    if (!article || !s || s.isCollapsed || s.rangeCount === 0) return setToolbar(null);
+    const range = s.getRangeAt(0);
+    if (!article.contains(range.commonAncestorContainer)) return setToolbar(null);
+    const text = s.toString().trim();
+    if (text.length < 2) return setToolbar(null);
+    const scroller = article.parentElement!;
+    const r = range.getBoundingClientRect();
+    const box = scroller.getBoundingClientRect();
+    // Above the selection with an 8px gap; flip below when there is no room above.
+    const roomAbove = r.top - box.top >= TOOLBAR_H + GAP;
+    const top = (roomAbove ? r.top - box.top - GAP - TOOLBAR_H : r.bottom - box.top + GAP) + scroller.scrollTop;
+    const half = (toolbarRef.current?.offsetWidth ?? 340) / 2 + 4;
+    const left = Math.min(Math.max(r.left - box.left + r.width / 2, half), box.width - half);
+    setToolbar({ top, left, sel: { text, context: contextOf(range), page: pageOf(range) } });
+  }, []);
+
+  const onSelectEnd = useCallback(() => {
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(measure, SHOW_DELAY_MS);
+  }, [measure]);
+
+  // Dismiss on Esc, outside click, scroll, or when the selection collapses.
+  useEffect(() => {
+    if (!toolbar) return;
+    const scroller = articleRef.current?.parentElement;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") return close();
+      // Tab moves into the toolbar; native focus order then walks its buttons, Enter triggers.
+      if (e.key === "Tab" && !toolbarRef.current?.contains(document.activeElement)) {
+        e.preventDefault();
+        toolbarRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+      }
+    };
+    const onDown = (e: MouseEvent) => {
+      if (!toolbarRef.current?.contains(e.target as Node)) close();
+    };
+    const onSel = () => window.getSelection()?.isCollapsed && close();
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("selectionchange", onSel);
+    scroller?.addEventListener("scroll", close, { passive: true });
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("selectionchange", onSel);
+      scroller?.removeEventListener("scroll", close);
+    };
+  }, [toolbar, close]);
+
+  useEffect(() => () => window.clearTimeout(timer.current), []);
 
   useEffect(() => {
     setDoc(null);
     setError(null);
+    close();
+    onDocLoaded?.(null);
     if (!docId) return;
     let live = true;
     window.point.docs
       .get(docId)
-      .then((d) => live && setDoc(d))
+      .then((d) => {
+        if (!live) return;
+        setDoc(d);
+        onDocLoaded?.(d);
+      })
       .catch((e: Error) => live && setError(e.message));
     return () => {
       live = false;
@@ -71,7 +185,34 @@ export function Reader({ docId, hasWorkspace }: { docId: string | null; hasWorks
 
   let lastPage: number | undefined;
   return (
-    <article className="reader" data-testid="reader">
+    <>
+    {toolbar && (
+      <div
+        ref={toolbarRef}
+        className="selection-toolbar"
+        role="toolbar"
+        aria-label="选区操作"
+        style={{ top: toolbar.top, left: toolbar.left }}
+        onMouseDown={(e) => {
+          // Keep the text selection while clicking a button.
+          if ((e.target as HTMLElement).closest("button")) e.preventDefault();
+        }}
+      >
+        {ACTIONS.map(({ kind, label, Icon }) => (
+          <button
+            key={kind}
+            onClick={() => {
+              onAction(kind, toolbar.sel);
+              close();
+            }}
+          >
+            <Icon />
+            <span>{label}</span>
+          </button>
+        ))}
+      </div>
+    )}
+    <article className="reader" data-testid="reader" ref={articleRef} onMouseUp={onSelectEnd} onKeyUp={(e) => e.key !== "Escape" && onSelectEnd()}>
       {doc.blocks.map((b) => {
         const marker = b.page !== undefined && b.page !== lastPage ? b.page : undefined;
         lastPage = b.page ?? lastPage;
@@ -84,5 +225,6 @@ export function Reader({ docId, hasWorkspace }: { docId: string | null; hasWorks
       })}
       {doc.blocks.length === 0 && <div className="placeholder">这篇文档没有可提取的文字</div>}
     </article>
+    </>
   );
 }
