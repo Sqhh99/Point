@@ -79,10 +79,17 @@ export function historyFor(conversationId: string, dropTrailingTurn = false, lea
   return all.map((m) => ({ role: m.role, content: m.content }));
 }
 
-/** Appends after `parentId`, or after the end of the main thread when omitted. */
-export function addMessage(conversationId: string, role: "user" | "assistant", content: string, kind?: TaskKind, meta?: MessageMeta, parentId?: string): StoredMessage {
-  const now = new Date().toISOString();
-  const parent = parentId ?? threadOf(conversationId).at(-1)?.id ?? null;
+/** Appends after `parentId`, as a new first message when `null`, or after the end of the main thread when omitted. */
+/** Strictly increasing timestamps, so siblings created within one millisecond still sort by creation. */
+let lastStamp = 0;
+function stamp(): string {
+  lastStamp = Math.max(Date.now(), lastStamp + 1);
+  return new Date(lastStamp).toISOString();
+}
+
+export function addMessage(conversationId: string, role: "user" | "assistant", content: string, kind?: TaskKind, meta?: MessageMeta, parentId?: string | null): StoredMessage {
+  const now = stamp();
+  const parent = parentId === null ? null : (parentId ?? threadOf(conversationId).at(-1)?.id ?? null);
   if (parent && !belongs(parent, conversationId)) throw new Error("parent message is not in this conversation");
   const row: MsgRow = { id: randomUUID(), conversation_id: conversationId, parent_id: parent, role, content, kind: kind ?? null, meta: meta ? JSON.stringify(meta) : null, created_at: now };
   const db = need().db;
@@ -91,6 +98,11 @@ export function addMessage(conversationId: string, role: "user" | "assistant", c
     db.prepare("UPDATE conversations SET updated_at = ? WHERE id = ?").run(now, conversationId);
   })();
   return msg(row);
+}
+
+export function getMessage(id: string): StoredMessage | undefined {
+  const r = need().db.prepare("SELECT * FROM messages WHERE id = ?").get(id) as MsgRow | undefined;
+  return r ? msg(r) : undefined;
 }
 
 function belongs(messageId: string, conversationId: string): boolean {
@@ -115,11 +127,4 @@ export function createBranch(sourceId: string, span: { start: number; end: numbe
 
 export function deleteConversation(id: string): void {
   need().db.prepare("DELETE FROM conversations WHERE id = ?").run(id);
-}
-
-/** Deletes the answer(s) after the last user turn, so 重新生成 / 重试 replaces rather than appends. */
-export function dropTrailingAssistant(conversationId: string, leafId?: string): void {
-  const all = threadOf(conversationId, leafId);
-  const stmt = need().db.prepare("DELETE FROM messages WHERE id = ?");
-  for (let m = all.pop(); m?.role === "assistant"; m = all.pop()) stmt.run(m.id);
 }

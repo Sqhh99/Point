@@ -335,6 +335,78 @@ test("exports the current note as md and all notes as a zip", async () => {
   expect(conv).toContain("### AI");
 });
 
+test("regenerate makes sibling answers with a ‹ n/m › switcher; branches from answers and questions", async () => {
+  const win = await app.firstWindow();
+  await win.getByRole("tab", { name: "对话" }).click();
+  const newConv = win.getByRole("button", { name: "新对话" });
+  if (await newConv.isVisible()) await newConv.click();
+  const input = win.locator(".composer textarea");
+  const log = win.getByTestId("chat-log");
+  const answers = log.locator('[data-role="assistant"]');
+  await input.fill("什么是熵？");
+  await input.press("Enter");
+  await expect(answers).toHaveCount(1);
+  await expect(answers.first()).toContainText("这是 Point 测试用的固定输出");
+  await expect(log.getByTestId("sibling-switch")).toHaveCount(0);
+
+  await answers.first().hover();
+  await answers.first().getByRole("button", { name: "重新生成" }).click();
+  await expect(answers.first()).toContainText("这是 Point 测试用的固定输出");
+  const sw = answers.first().getByTestId("sibling-switch");
+  await expect(sw).toContainText("2/2");
+  await expect(sw.getByRole("button", { name: "下一条" })).toBeDisabled();
+  await expect(answers).toHaveCount(1);
+
+  // Follow-up under answer 2, then switch to answer 1: only that answer's descendants show.
+  await input.fill("继续说");
+  await input.press("Enter");
+  await expect(answers).toHaveCount(2);
+  await sw.getByRole("button", { name: "上一条" }).click();
+  await expect(sw).toContainText("1/2");
+  await expect(answers).toHaveCount(1);
+  await expect(log.locator('[data-role="user"]')).toHaveText(["什么是熵？"]);
+  await win.keyboard.press("Alt+ArrowRight");
+  await expect(sw).toContainText("2/2");
+  await expect(log.locator('[data-role="user"]')).toHaveText(["什么是熵？", "继续说"]);
+
+  // 从这里分支 on a question: ask something else in its place → switcher on the question.
+  const q2 = log.locator(".turn").nth(1);
+  await q2.hover();
+  await q2.getByRole("button", { name: "从这里分支" }).click();
+  await expect(win.getByTestId("fork-draft")).toBeVisible();
+  await input.fill("换个问法");
+  await input.press("Enter");
+  await expect(log.locator('[data-role="user"]')).toHaveText(["什么是熵？", "换个问法"]);
+  await expect(q2.getByTestId("sibling-switch")).toContainText("2/2");
+  await expect(answers).toHaveCount(2);
+
+  // 追问分支 from a span of an answer → breadcrumb + chip.
+  await answers.last().evaluate((el) => {
+    const li = [...el.querySelectorAll("li")].find((e) => e.textContent?.includes("要点一"))!;
+    const range = document.createRange();
+    range.selectNodeContents(li);
+    const sel = window.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(range);
+    el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  });
+  await win.getByRole("toolbar", { name: "回答选区操作" }).getByRole("button", { name: "追问分支" }).click();
+  await expect(win.getByTestId("branch-draft")).toContainText("要点一");
+  await input.fill("为什么？");
+  await input.press("Enter");
+  const crumbs = win.getByTestId("crumbs");
+  await expect(crumbs).toContainText("主线");
+  await expect(crumbs).toContainText("「要点一");
+  await expect(answers).toHaveCount(3);
+  await win.screenshot({ path: join(import.meta.dirname, "..", "test-results", "branch-ui.png") });
+  await crumbs.getByRole("button", { name: "主线" }).click();
+  await expect(log.getByTestId("branch-chip").last()).toHaveText("⑂ 1 个分支");
+  await expect(answers).toHaveCount(2);
+  await log.getByTestId("branch-chip").last().click();
+  await log.getByRole("menuitem").first().click();
+  await expect(answers).toHaveCount(3);
+});
+
 test("status bar shows workspace, doc and model; region capture attaches a screenshot to a question", async () => {
   const win = await app.firstWindow();
   const ws = (await win.evaluate(() => window.point.workspace.get())).path!;
@@ -439,14 +511,16 @@ test("status bar shows workspace, doc and model; region capture attaches a scree
     ipcMain.removeHandler("capture:region");
     ipcMain.handle("capture:region", () => ({ sha, width: 140, height: 60 }));
     ipcMain.removeHandler("tasks:run");
+    // The panel re-reads the conversation tree after each start (⑥), so the stub serves that too.
+    let stored: unknown[] = [];
     ipcMain.handle("tasks:run", (_e, req: { question?: string }) => {
       const now = new Date().toISOString();
-      return {
-        requestId: "stub-req",
-        conversationId: "stub-conv",
-        userMessage: { id: "stub-msg", conversationId: "stub-conv", parentId: null, role: "user", content: req.question ?? "", kind: "ask", meta: { request: { kind: "ask", selection: "", question: req.question, image: sha } }, createdAt: now }
-      };
+      const userMessage = { id: "stub-msg", conversationId: "stub-conv", parentId: null, role: "user", content: req.question ?? "", kind: "ask", meta: { request: { kind: "ask", selection: "", question: req.question, image: sha } }, createdAt: now };
+      stored = [userMessage];
+      return { requestId: "stub-req", conversationId: "stub-conv", userMessage };
     });
+    ipcMain.removeHandler("conversations:tree");
+    ipcMain.handle("conversations:tree", () => ({ messages: stored, origins: [] }));
   }, gone);
   await win.getByTestId("capture-button").click();
   await win.mouse.move(box.x + 30, box.y + 50);

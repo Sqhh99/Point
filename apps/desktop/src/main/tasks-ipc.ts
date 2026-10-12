@@ -1,9 +1,21 @@
 import { ipcMain, type WebContents } from "electron";
 import { randomUUID } from "node:crypto";
-import { TASK_LABELS, buildTaskMessages, describeTask, parseTaskOutput, type TaskKind } from "@point/core";
+import { TASK_LABELS, buildTaskMessages, describeTask, parseTaskOutput, type ChatMessage, type TaskKind } from "@point/core";
 import { exportAllNotes, exportConversation, exportNote } from "./export.js";
 import { IPC, type TaskEvent, type TaskRequest, type TaskStarted } from "../shared/ipc.js";
-import { addMessage, createConversation, dropTrailingAssistant, deleteConversation, getMessages, hasConversation, historyFor, listConversations } from "./conversations.js";
+import {
+  addMessage,
+  createBranch,
+  createConversation,
+  deleteConversation,
+  getMessage,
+  getMessages,
+  getTree,
+  hasConversation,
+  historyFor,
+  listConversations,
+  threadOf
+} from "./conversations.js";
 import { errInfo, providerFor } from "./ipc.js";
 import { docTitle, need } from "./workspace.js";
 import { assertCaptureSha, captureImage } from "./capture.js";
@@ -26,11 +38,58 @@ function validate(raw: unknown): TaskRequest {
     page: typeof r.page === "number" && Number.isInteger(r.page) && r.page > 0 ? r.page : undefined,
     conversationId: str(r.conversationId, 64),
     image: r.image === undefined || r.image === null ? undefined : assertCaptureSha(r.image),
-    regenerate: r.regenerate === true
+    regenerate: r.regenerate === true,
+    parentId: r.parentId === null ? null : str(r.parentId, 64),
+    branch: branchOf(r.branch)
   };
 }
 
-async function stream(sender: WebContents, requestId: string, conversationId: string, req: TaskRequest, messages: ReturnType<typeof buildTaskMessages>, llm?: ReturnType<typeof providerFor>) {
+function branchOf(v: unknown): TaskRequest["branch"] {
+  if (v === undefined || v === null) return undefined;
+  const b = v as Record<string, unknown>;
+  const int = (n: unknown) => typeof n === "number" && Number.isInteger(n) && n >= 0;
+  if (typeof b !== "object" || typeof b.sourceId !== "string" || !int(b.start) || !int(b.end) || typeof b.quote !== "string" || !b.quote || b.quote.length > 10_000) {
+    throw new Error("无效的分支位置");
+  }
+  return { sourceId: b.sourceId.slice(0, 64), start: b.start as number, end: b.end as number, quote: b.quote };
+}
+
+/** Where a turn goes in the tree, checked against the conversation (never trusts renderer ids). */
+function placement(conversationId: string | undefined, req: TaskRequest): { history: ChatMessage[]; userParent?: string | null; answerTo?: string } {
+  if (!conversationId) {
+    if (req.parentId || req.branch) throw new Error("对话不存在");
+    return { history: [] };
+  }
+  const inConv = (id: string) => {
+    const m = getMessage(id);
+    if (!m || m.conversationId !== conversationId) throw new Error("消息不在这个对话里");
+    return m;
+  };
+  const upTo = (id: string | null) => (id ? historyFor(conversationId, false, id) : []);
+  if (req.branch) {
+    if (inConv(req.branch.sourceId).role !== "assistant") throw new Error("分支只能从 AI 回答派生");
+    return { history: upTo(req.branch.sourceId) };
+  }
+  if (req.regenerate) {
+    // Answer this user message again; the old answer(s) stay as siblings.
+    const user = req.parentId ? inConv(req.parentId) : [...threadOf(conversationId)].reverse().find((m) => m.role === "user");
+    if (!user || user.role !== "user") throw new Error("找不到要重新回答的问题");
+    return { history: upTo(user.parentId), answerTo: user.id };
+  }
+  if (req.parentId === null) return { history: [], userParent: null };
+  if (req.parentId) return { history: upTo(inConv(req.parentId).id), userParent: req.parentId };
+  return { history: historyFor(conversationId) };
+}
+
+async function stream(
+  sender: WebContents,
+  requestId: string,
+  conversationId: string,
+  req: TaskRequest,
+  messages: ReturnType<typeof buildTaskMessages>,
+  llm: ReturnType<typeof providerFor> | undefined,
+  parentId: string
+) {
   const ctrl = new AbortController();
   running.set(requestId, ctrl);
   const send = (e: TaskEvent) => {
@@ -44,9 +103,9 @@ async function stream(sender: WebContents, requestId: string, conversationId: st
       send({ requestId, type: "delta", text: d.text });
     }
     const { markdown } = parseTaskOutput(req.kind, text);
-    send({ requestId, type: "done", message: addMessage(conversationId, "assistant", markdown, req.kind) });
+    send({ requestId, type: "done", message: addMessage(conversationId, "assistant", markdown, req.kind, undefined, parentId) });
   } catch (err) {
-    const partial = text.trim() ? addMessage(conversationId, "assistant", text.trim(), req.kind) : undefined;
+    const partial = text.trim() ? addMessage(conversationId, "assistant", text.trim(), req.kind, undefined, parentId) : undefined;
     send({ requestId, type: "error", ...errInfo(err), partial });
   } finally {
     running.delete(requestId);
@@ -65,7 +124,9 @@ export function registerTasksIpc(): void {
     const title = req.docId ? docTitle(req.docId) : undefined;
     let conversationId = req.conversationId && hasConversation(req.conversationId) ? req.conversationId : undefined;
     const regenerate = !!(req.regenerate && conversationId);
-    const history = conversationId ? historyFor(conversationId, regenerate) : [];
+    if (req.branch && (req.kind !== "ask" || regenerate)) throw new Error("追问分支只能和问题一起发送");
+    const place = placement(conversationId, { ...req, regenerate });
+    const history = place.history;
     // Build first so invalid input (empty selection, missing question) fails before anything is stored.
     const messages = withImage(
       buildTaskMessages({ kind: req.kind, selection: req.selection, context: req.context, question: req.question, docTitle: title, history, hasImage: !!image }),
@@ -76,10 +137,13 @@ export function registerTasksIpc(): void {
       conversationId = createConversation(`${TASK_LABELS[req.kind]}：${sel.slice(0, 30) || req.question?.slice(0, 30) || (image ? "截图" : "")}`, req.docId).id;
     }
     const meta = { request: { kind: req.kind, selection: req.selection, context: req.context, question: req.question, docId: req.docId, page: req.page, image: req.image }, docTitle: title };
-    if (regenerate) dropTrailingAssistant(conversationId);
-    const userMessage = regenerate ? undefined : addMessage(conversationId, "user", describeTask(req), req.kind, meta);
+    const userMessage = place.answerTo
+      ? undefined
+      : req.branch
+        ? createBranch(req.branch.sourceId, req.branch, describeTask(req), req.kind, meta)
+        : addMessage(conversationId, "user", describeTask(req), req.kind, meta, place.userParent);
     const requestId = randomUUID();
-    void stream(e.sender, requestId, conversationId, req, messages, llm);
+    void stream(e.sender, requestId, conversationId, req, messages, llm, place.answerTo ?? userMessage!.id);
     return { requestId, conversationId, userMessage };
   });
   ipcMain.handle(IPC.tasksCancel, (_e, id: unknown) => {
@@ -88,6 +152,7 @@ export function registerTasksIpc(): void {
 
   ipcMain.handle(IPC.convList, () => listConversations());
   ipcMain.handle(IPC.convMessages, (_e, id: unknown) => (typeof id === "string" ? getMessages(id) : []));
+  ipcMain.handle(IPC.convTree, (_e, id: unknown) => (typeof id === "string" ? getTree(id) : { messages: [], origins: [] }));
   ipcMain.handle(IPC.convRemove, (_e, id: unknown) => {
     if (typeof id === "string") deleteConversation(id);
   });

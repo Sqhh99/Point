@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { branchCounts, branchTree, breadcrumb, locateOrigin, mainLeaf, pathTo, spanMatches, type BranchOrigin, type TreeNode } from "../src/index.js";
+import { branchCounts, branchesFrom, defaultLeaf, latestLeaf, siblingsOf, branchTree, breadcrumb, locateOrigin, mainLeaf, pathTo, spanMatches, type BranchOrigin, type TreeNode } from "../src/index.js";
 
 // main: u1 → a1 → u2 → a2 ; branch b1 from a1 ; sub-branch b2 from b1's answer
 const n = (id: string, parentId: string | null, t: number): TreeNode => ({ id, parentId, createdAt: `2026-10-12T00:00:${String(t).padStart(2, "0")}Z` });
@@ -49,5 +49,36 @@ describe("conversation tree", () => {
   it("relocates by quote when offsets drift, nearest occurrence wins", () => {
     expect(locateOrigin("熵 A 熵 B 熵", { start: 5, end: 6, quote: "熵" })).toEqual({ start: 4, end: 5 });
     expect(locateOrigin("abc", { start: 0, end: 1, quote: "z" })).toBeNull();
+  });
+});
+
+describe("siblings and default leaf (⑥)", () => {
+  const n = (id: string, parentId: string | null, t: string) => ({ id, parentId, createdAt: t });
+  // q1 → a1, a2 (regenerated), a3; a2 → q2 → b1; a1 has span branch s1; root q0 re-asked as q1.
+  const nodes = [n("q0", null, "0"), n("q1", null, "1"), n("a1", "q1", "2"), n("a2", "q1", "3"), n("q2", "a2", "4"), n("b1", "q2", "5"), n("s1", "a1", "6"), n("a3", "q1", "7")];
+  const origins = [{ childId: "s1", sourceId: "a1", start: 0, end: 1, quote: "x" }];
+  it("siblingsOf lists alternatives oldest first, excluding span branches", () => {
+    expect(siblingsOf(nodes, origins, "a2").map((m) => m.id)).toEqual(["a1", "a2", "a3"]);
+    expect(siblingsOf(nodes, origins, "q1").map((m) => m.id)).toEqual(["q0", "q1"]);
+    expect(siblingsOf(nodes, origins, "s1").map((m) => m.id)).toEqual(["s1"]);
+    expect(siblingsOf(nodes, origins, "nope")).toEqual([]);
+  });
+  it("latestLeaf follows the newest non-branch child; defaultLeaf starts at the newest root", () => {
+    expect(latestLeaf(nodes, origins, "a2")!.id).toBe("b1");
+    expect(latestLeaf(nodes, origins, "a1")!.id).toBe("a1");
+    expect(defaultLeaf(nodes, origins)!.id).toBe("a3");
+    expect(defaultLeaf([], [])).toBeUndefined();
+  });
+  it("switching to a sibling shows that branch's descendants", () => {
+    const leaf = latestLeaf(nodes, origins, "a2")!.id;
+    expect(pathTo(nodes, leaf).map((m) => m.id)).toEqual(["q1", "a2", "q2", "b1"]);
+  });
+  it("branchesFrom counts only the shown answer's branches", () => {
+    expect(branchesFrom(origins, "a1")).toHaveLength(1);
+    expect(branchesFrom(origins, "a2")).toHaveLength(0);
+  });
+  it("cycles terminate", () => {
+    const cyc = [n("x", "y", "1"), n("y", "x", "2")];
+    expect(latestLeaf(cyc, [], "x")).toBeDefined();
   });
 });
