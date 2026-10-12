@@ -13,3 +13,7 @@
 
 ## 验证
 lint、typecheck 通过；core 91、main 77 个测试通过；Linux 下 e2e 10 过 1 跳过，截图见 PR 记录。
+
+## 评审后修复
+- 启动时读出的对话面板宽度先限制到 320–640px，非数字回退到 400。
+- 宽度限制和收起左栏快捷键抽成 `renderer/layout.ts` 里的纯函数 `clampChatWidth`、`isToggleLibraryKey`，加了 `layout.test.ts`。

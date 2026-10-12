@@ -5,9 +5,7 @@ import { Library } from "./Library";
 import { Reader } from "./Reader";
 import { Settings } from "./Settings";
 import { TitleBar } from "./TitleBar";
-
-const CHAT_MIN = 320;
-const CHAT_MAX = 640;
+import { clampChatWidth, isToggleLibraryKey } from "./layout";
 
 const api = window.point;
 
@@ -20,12 +18,12 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [trigger, setTrigger] = useState<TaskTrigger | null>(null);
   const [docTitle, setDocTitle] = useState<string | null>(null);
-  const [chatWidth, setChatWidth] = useState(() => Number(localStorage.getItem("point.chatWidth")) || 400);
+  const [chatWidth, setChatWidth] = useState(() => clampChatWidth(localStorage.getItem("point.chatWidth")));
   const drag = useRef<{ x: number; w: number } | null>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "\\") {
+      if (isToggleLibraryKey(e)) {
         e.preventDefault();
         setLibraryOpen((o) => !o);
       }
@@ -40,7 +38,7 @@ export function App() {
   };
   const onResize = (e: React.PointerEvent) => {
     if (!drag.current) return;
-    setChatWidth(Math.min(CHAT_MAX, Math.max(CHAT_MIN, drag.current.w + drag.current.x - e.clientX)));
+    setChatWidth(clampChatWidth(drag.current.w + drag.current.x - e.clientX));
   };
   const endResize = () => {
     drag.current = null;
