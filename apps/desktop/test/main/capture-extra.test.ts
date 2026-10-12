@@ -120,10 +120,10 @@ describe("capturePath / readCapture stay inside the workspace", () => {
     expect(readdirSync(root)).toEqual([".point"]);
   });
 
-  // Bug: readCapture follows a symlink placed in .point/captures (capture.ts readCapture → existsSync/readFileSync),
+  // Was a bug (fixed in #36): readCapture followed a symlink placed in .point/captures (capture.ts readCapture → existsSync/readFileSync),
   // so any file on disk can be read and sent to the LLM as "the screenshot". It should refuse non-regular files
   // or files whose real path is outside <root>/.point/captures.
-  it.runIf(canSymlink).fails("a capture that is a symlink pointing outside the workspace is refused", () => {
+  it.runIf(canSymlink)("a capture that is a symlink pointing outside the workspace is refused", () => {
     const outside = join(tmp("point-secret-"), "secret.txt");
     writeFileSync(outside, "TOP SECRET");
     mkdirSync(capDir(root), { recursive: true });
@@ -131,9 +131,9 @@ describe("capturePath / readCapture stay inside the workspace", () => {
     expect(() => capture.readCapture(root, "e".repeat(64))).toThrow();
   });
 
-  // Bug: same root cause for writes — if .point/captures is a symlink to another folder, writeCapture
+  // Was a bug (fixed in #36): same root cause for writes — if .point/captures is a symlink to another folder, writeCapture
   // (capture.ts writeCapture → mkdirSync/writeFileSync/renameSync) writes the PNG outside the workspace.
-  it.runIf(canSymlink).fails("a .point/captures symlinked outside the workspace is not written through", () => {
+  it.runIf(canSymlink)("a .point/captures symlinked outside the workspace is not written through", () => {
     const r2 = tmp("point-cap-ln-");
     const elsewhere = tmp("point-elsewhere-");
     mkdirSync(join(r2, ".point"), { recursive: true });

@@ -1,7 +1,8 @@
 import { ipcMain } from "electron";
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import * as fs from "node:fs";
+import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { join, relative, isAbsolute } from "node:path";
 import type { ImageInput } from "@point/core";
 import { IPC, type CaptureRect, type CaptureResult } from "../shared/ipc.js";
 import { need } from "./workspace.js";
@@ -40,24 +41,61 @@ export function toCaptureRect(raw: unknown): CaptureRect {
   return { x, y, width, height };
 }
 
+/** `<root>/.point/captures`, refusing it when its real path leaves the workspace (e.g. a symlinked folder). */
+function capturesDir(root: string, create: boolean): string {
+  const dir = join(root, ".point", "captures");
+  if (create) mkdirSync(dir, { recursive: true });
+  const realRoot = fs.realpathSync.native(root);
+  const realDir = fs.realpathSync.native(dir);
+  const rel = relative(realRoot, realDir);
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) throw new Error("截图目录不在工作区内");
+  return dir;
+}
+
 /** Stores PNG bytes under their sha256 (idempotent) and returns the sha. */
 export function writeCapture(root: string, png: Buffer): string {
   if (png.byteLength === 0) throw new Error("截图为空");
   const sha = createHash("sha256").update(png).digest("hex");
+  capturesDir(root, true);
   const file = capturePath(root, sha);
   if (!existsSync(file)) {
-    mkdirSync(join(root, ".point", "captures"), { recursive: true });
-    const tmp = `${file}.${process.pid}.tmp`;
-    writeFileSync(tmp, png);
+    const tmp = `${file}.${randomUUID()}.tmp`;
+    writeFileSync(tmp, png, { flag: "wx" });
     renameSync(tmp, file);
   }
   return sha;
 }
 
+type FsDeps = Pick<typeof fs, "lstatSync" | "openSync" | "fstatSync" | "readFileSync" | "closeSync">;
+const NOFOLLOW = process.platform === "win32" ? 0 : (fs.constants.O_NOFOLLOW ?? 0);
+
+/**
+ * Reads a regular file without following symlinks: lstat must say regular file, the open uses
+ * O_NOFOLLOW (POSIX), and the opened fd must be the same inode (dev+ino) as the lstat — so a swap
+ * between check and open is refused. `deps` exists only so tests can simulate that swap.
+ */
+export function readRegularFile(file: string, deps: FsDeps = fs): Buffer {
+  const st = deps.lstatSync(file);
+  if (!st.isFile()) throw new Error("不是普通文件");
+  const fd = deps.openSync(file, fs.constants.O_RDONLY | NOFOLLOW);
+  try {
+    const fst = deps.fstatSync(fd);
+    if (!fst.isFile() || fst.ino !== st.ino || fst.dev !== st.dev) throw new Error("文件在读取时被替换");
+    return deps.readFileSync(fd);
+  } finally {
+    deps.closeSync(fd);
+  }
+}
+
+/** Every refusal (bad sha, outside dir, symlink, dir, swapped, missing) looks like a missing capture. */
 export function readCapture(root: string, sha: unknown): Buffer {
   const file = capturePath(root, sha);
-  if (!existsSync(file)) throw new Error("截图不存在或已被删除");
-  return readFileSync(file);
+  try {
+    capturesDir(root, false);
+    return readRegularFile(file);
+  } catch {
+    throw new Error("截图不存在或已被删除");
+  }
 }
 
 /** Base64 image for an LLM request; built in main only. */
