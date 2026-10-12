@@ -26,7 +26,7 @@ export function App() {
   const [marks, setMarks] = useState<Mark[]>([]);
   const [checked, setChecked] = useState<string[]>([]);
   const [batch, setBatch] = useState<BatchTrigger | null>(null);
-  const [locate, setLocate] = useState<{ blockId?: string; y?: number; seq: number } | null>(null);
+  const [locate, setLocate] = useState<{ blockId: string; seq: number } | null>(null);
   const drag = useRef<{ x: number; w: number } | null>(null);
 
   useEffect(() => {
@@ -152,9 +152,7 @@ export function App() {
         onToggleMark={(id) => setChecked((c) => (c.includes(id) ? c.filter((x) => x !== id) : [...c, id]))}
         onLocateMark={(m) => {
           setView("reader");
-          const a = m.anchor;
-          if (a.kind === "region") setLocate((l) => ({ y: a.rect.y, seq: (l?.seq ?? 0) + 1 }));
-          else if (a.blockId) setLocate((l) => ({ blockId: a.blockId, seq: (l?.seq ?? 0) + 1 }));
+          if (m.anchor.blockId) setLocate((l) => ({ blockId: m.anchor.blockId!, seq: (l?.seq ?? 0) + 1 }));
         }}
         onRemoveMark={removeMark}
         onBatchAsk={batchAsk}

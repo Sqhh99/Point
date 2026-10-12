@@ -17,8 +17,7 @@ export interface SelectionInfo {
 /** A finished region capture, with where it sits in the document. */
 export interface RegionInfo extends CaptureResult {
   page?: number;
-  /** Rectangle in the reader's content coordinates (what a region mark stores). */
-  rect: { x: number; y: number; width: number; height: number };
+  blockId?: string;
 }
 
 type BarAction = "ask" | "mark" | "explain" | "note" | "diagram";
@@ -125,7 +124,7 @@ interface ReaderProps {
   onRegionExplain(r: RegionInfo): void;
   marks: Mark[];
   /** Scroll to a block (from the marks list); a new seq re-runs. */
-  locate: { blockId?: string; y?: number; seq: number } | null;
+  locate: { blockId: string; seq: number } | null;
 }
 
 export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorkspace, onOpenFile, onOpenRecent, vision, onCapture, onCaptureError, onMark, onRegionExplain, marks, locate }: ReaderProps) {
@@ -204,14 +203,7 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
   // Jump back to a mark's block and flash it briefly.
   useEffect(() => {
     if (!locate || !doc) return;
-    const article = articleRef.current;
-    if (locate.y !== undefined && article) {
-      // Region marks: scroll to the stored rectangle (content coordinates).
-      article.parentElement?.scrollTo({ top: Math.max(0, article.offsetTop + locate.y - 40) });
-      return;
-    }
-    if (!locate.blockId) return;
-    const el = article?.querySelector(`[data-block-id="${CSS.escape(locate.blockId)}"]`)?.closest(".block");
+    const el = articleRef.current?.querySelector(`[data-block-id="${CSS.escape(locate.blockId)}"]`)?.closest(".block");
     if (!el) return;
     el.scrollIntoView({ block: "center" });
     el.classList.add("located");
@@ -228,9 +220,7 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
     const p = placeBar({ top: rect.y, left: rect.x, width: rect.width, height: rect.height }, box, barSize(260));
     const top = p.top + scroller.scrollTop;
     const left = p.left;
-    const art = articleRef.current!.getBoundingClientRect();
-    const contentRect = { x: Math.max(0, Math.round(rect.x - art.left)), y: Math.max(0, Math.round(rect.y - art.top)), width: Math.max(1, Math.round(rect.width)), height: Math.max(1, Math.round(rect.height)) };
-    setToolbar({ top, left, region: { ...r, page: where.page, rect: contentRect } });
+    setToolbar({ top, left, region: { ...r, ...where } });
   };
 
   const run = (id: BarAction) => {
@@ -239,7 +229,7 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
     close();
     if (region) {
       if (id === "ask") onCapture(region);
-      else if (id === "mark") onMark({ kind: "region", sha: region.sha, page: region.page, rect: region.rect });
+      else if (id === "mark") onMark({ kind: "region", sha: region.sha, width: region.width, height: region.height, blockId: region.blockId, page: region.page });
       else if (id === "explain") onRegionExplain(region);
       return;
     }
@@ -300,7 +290,7 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
   if (error) return <div className="placeholder">无法打开文档：{error}</div>;
   if (!doc) return <div className="placeholder">正在解析…</div>;
 
-  const marked = new Set(marks.map((m) => (m.anchor.kind === "text" ? m.anchor.blockId : undefined)).filter((x): x is string => !!x));
+  const marked = new Set(marks.map((m) => m.anchor.blockId).filter((x): x is string => !!x));
   let lastPage: number | undefined;
   const mod = window.point.platform === "darwin" ? "⌘⇧S" : "Ctrl+Shift+S";
   return (

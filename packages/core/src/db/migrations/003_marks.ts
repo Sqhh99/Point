@@ -2,7 +2,7 @@
  * Marks: saved spans of a document (text or a region screenshot). Removing a document removes its
  * marks; the screenshot files under .point/captures are never touched by the database.
  * anchor_json is validated by core parseAnchor on every write: a text anchor, or a region anchor
- * holding only { sha, page?, rect } — never a file path.
+ * holding only { sha, width, height, page?, blockId? } — never a file path.
  */
 export default `
 CREATE TABLE IF NOT EXISTS marks (
