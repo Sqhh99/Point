@@ -5,3 +5,4 @@
 - 根因：tasks-ipc 会把空串 docId 原样传下去，loadBatch 里又用 `docId && …` 短路，结果「没有 docId」就等于「不检查标记属于哪个文档」。两处都改了。
 - `::selection` 测试一开始是被我自己写的一条 CSS 注释触发的，改了注释的措辞。
 - 结果：lint、typecheck 退出码 0；core 143 项；main 620 项通过、4 项跳过；build 通过；e2e 13 项通过、1 项跳过。
+- 合入 main 90bdd78（含 #43）。capturesDir 改成逐层检查：从工作区真实路径出发，先 .point 再 captures，每层都先确认真实路径在工作区内，缺失的层只在确认过的真实父目录里建一层，不再递归 mkdir。#43 里对应的 it.fails 已转正。junction 用例只在 Windows 上跑，本机用 POINT_JUNCTION_AS_SYMLINK=1 以目录 symlink 模拟，10 项全部通过。

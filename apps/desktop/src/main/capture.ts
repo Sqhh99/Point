@@ -41,20 +41,6 @@ export function toCaptureRect(raw: unknown): CaptureRect {
   return { x, y, width, height };
 }
 
-/**
- * Real path of `<root>/.point/captures`, refused when it leaves the workspace (e.g. the folder is a
- * symlink to somewhere else). Used by both read and write.
- */
-function capturesDir(root: string, create: boolean): string {
-  const dir = join(root, ".point", "captures");
-  if (create) mkdirSync(dir, { recursive: true });
-  const realRoot = fs.realpathSync.native(root);
-  const realDir = fs.realpathSync.native(dir);
-  const rel = relative(realRoot, realDir);
-  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) throw new Error("截图目录不在工作区内");
-  return realDir;
-}
-
 const lstatOrNull = (p: string) => {
   try {
     return fs.lstatSync(p);
@@ -62,6 +48,39 @@ const lstatOrNull = (p: string) => {
     return null;
   }
 };
+
+/**
+ * Real path of `<root>/.point/captures`, refused when it leaves the workspace (e.g. the folder is a
+ * symlink to somewhere else). Used by both read and write.
+ */
+/**
+ * Real path of `<root>/.point/captures`, walked one level at a time from the workspace's real path.
+ * Each level (.point, then captures) is resolved and confirmed inside the workspace before anything
+ * is created under it; a missing level is created with a plain (non-recursive) mkdir inside the
+ * already-verified real parent, then resolved and confirmed again. A junction or symlink pointing
+ * outside at any level is therefore rejected before a child directory could be made outside.
+ */
+function capturesDir(root: string, create: boolean): string {
+  const realRoot = fs.realpathSync.native(root);
+  const inside = (p: string) => {
+    const rel = relative(realRoot, p);
+    if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) throw new Error("截图目录不在工作区内");
+  };
+  let cur = realRoot;
+  for (const name of [".point", "captures"]) {
+    const next = join(cur, name);
+    if (!fs.existsSync(next) && !lstatOrNull(next)) {
+      if (!create) throw new Error("截图目录不存在");
+      mkdirSync(next); // not recursive: the parent is the verified real directory
+    }
+    const real = fs.realpathSync.native(next);
+    inside(real);
+    if (!fs.statSync(real).isDirectory()) throw new Error("截图目录不是文件夹");
+    cur = real;
+  }
+  return cur;
+}
+
 
 /**
  * Stores PNG bytes under their sha256 (idempotent) and returns the sha. The temp file is created with
