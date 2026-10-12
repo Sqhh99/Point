@@ -26,9 +26,9 @@
   - 注册权限只有 standard + secure。
   - 未绑定或已销毁的 webContents 拿不到工作区；POST 请求返回 404。
   - CSP：`img-src` 正好是 `'self' point-capture:`，不含 `data:`、`file:`、`blob:`、`*`；main 不设置 CSP 头。
-- e2e（在原有的框选用例里扩展）：框选后缩略图可见，高 48px，`naturalWidth>0`；× 能移除；重新框选后发送，气泡里的图能加载，宽度不超过 240；点击打开大图，Esc 和点击都能关闭；在渲染进程里，带路径、带 query、不存在的 sha 都加载失败。
+- e2e（在原有的框选用例里扩展，截图时对话里的气泡图和输入框上方的缩略图同时可见）：框选后缩略图可见，高 48px，`naturalWidth>0`；× 能移除；重新框选后发送，气泡里的图能加载，宽度不超过 240；点击打开大图，Esc 和点击都能关闭；在渲染进程里，带路径、带 query、不存在的 sha 都加载失败。
 - lint、typecheck 退出码都是 0。core 143 项通过；main 347 项通过、4 项跳过；e2e 12 项通过、1 项跳过（原有的、Linux 上系统加密不可用的用例）。
 
 ## 截图
-![输入框缩略图](../assets/pr/2026-10-12-capture-thumbs.png)
-![大图](../assets/pr/2026-10-12-capture-lightbox.png)
+![气泡里的截图和输入框上方的缩略图](https://raw.githubusercontent.com/Sqhh99/Point/feat/capture-thumbs/docs/assets/pr/2026-10-12-capture-thumbs.png)
+![大图](https://raw.githubusercontent.com/Sqhh99/Point/feat/capture-thumbs/docs/assets/pr/2026-10-12-capture-lightbox.png)

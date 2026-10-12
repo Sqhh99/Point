@@ -398,6 +398,18 @@ test("status bar shows workspace, doc and model; region capture attaches a scree
   await expect(bubble).toBeVisible();
   await expect.poll(() => bubble.evaluate((i: HTMLImageElement) => i.naturalWidth)).toBeGreaterThan(0);
   expect((await bubble.boundingBox())!.width).toBeLessThanOrEqual(240);
+
+  // PR screenshot: bubble image in the log and a fresh thumbnail above the input, together.
+  await win.getByTestId("capture-button").click();
+  await win.mouse.move(box.x + 20, box.y + 40);
+  await win.mouse.down();
+  await win.mouse.move(box.x + 260, box.y + 120, { steps: 5 });
+  await win.mouse.up();
+  await expect.poll(() => thumb.evaluate((i: HTMLImageElement) => i.naturalWidth)).toBeGreaterThan(0);
+  await bubble.scrollIntoViewIfNeeded();
+  await win.screenshot({ path: join(import.meta.dirname, "..", "test-results", "capture-thumbs.png") });
+  await attached.getByRole("button", { name: "移除截图" }).click();
+  await expect(attached).toBeHidden();
   await bubble.click();
   const lightbox = win.getByTestId("lightbox");
   await expect(lightbox).toBeVisible();
