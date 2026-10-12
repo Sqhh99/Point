@@ -1,5 +1,5 @@
 import { test, expect, _electron as electron, type ElectronApplication } from "@playwright/test";
-import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makePdf } from "../../../packages/core/test/fixtures/make";
@@ -78,6 +78,13 @@ async function stubOpenDialog(paths: string[]): Promise<void> {
   await app.evaluate(({ dialog }, filePaths) => {
     dialog.showOpenDialog = (async () => ({ canceled: false, filePaths })) as typeof dialog.showOpenDialog;
   }, paths);
+}
+
+/** Makes the next native save dialog return `filePath` without showing UI. */
+async function stubSaveDialog(filePath: string): Promise<void> {
+  await app.evaluate(({ dialog }, path) => {
+    dialog.showSaveDialog = (async () => ({ canceled: false, filePath: path })) as typeof dialog.showSaveDialog;
+  }, filePath);
 }
 
 test("imports documents into a workspace and renders them in the reader", async () => {
@@ -226,4 +233,65 @@ test("model errors show inline with a reason and 重试", async () => {
   await expect(err).toContainText("被模型服务限流");
   await expect(err.getByRole("button", { name: "重试" })).toBeVisible();
   await expect(win.getByRole("dialog")).toHaveCount(0);
+});
+
+test("exports the current note as md and all notes as a zip", async () => {
+  const win = await app.firstWindow();
+  const out = mkdtempSync(join(tmpdir(), "point-export-"));
+  const single = join(out, "entropy-note.md");
+  const zipPath = join(out, "notes.zip");
+
+  // Open the note created by the earlier "插入笔记" flow (shared Electron app).
+  await win.getByRole("tab", { name: "笔记" }).click();
+  const editor = win.getByTestId("note-editor");
+  if (!(await editor.isVisible())) {
+    await win.getByTestId("note-list").getByRole("button").first().click();
+  }
+  await expect(editor.locator(".note-title")).toHaveValue(/笔记/);
+
+  await stubSaveDialog(single);
+  await win.getByTestId("export-menu").click();
+  await win.getByRole("menuitem", { name: "另存为…" }).click();
+  await expect(win.getByTestId("export-toast")).toHaveText("已导出");
+  await expect.poll(() => existsSync(single)).toBe(true);
+  const raw = readFileSync(single, "utf8");
+  expect(raw).toMatch(/^---\ntitle: .+\ntags: \[\]\nsource: 《熵的定义》\nexported_at: /);
+  expect(raw).toContain("这是 Point 测试用的固定输出");
+  expect(raw).not.toContain("\nid: ");
+  expect(raw).not.toContain("sourceDocId:");
+  await expect(win.getByTestId("export-toast")).toBeHidden({ timeout: 5_000 });
+
+  // Create a second note so the zip has more than one file.
+  await win.getByRole("button", { name: "‹ 全部笔记" }).click();
+  await win.getByRole("button", { name: "新建笔记" }).click();
+  await editor.locator(".note-title").fill("补充笔记");
+  await editor.locator(".note-body").fill("第二条笔记正文");
+  await win.getByRole("button", { name: "保存" }).click();
+
+  await stubSaveDialog(zipPath);
+  await win.getByTestId("export-menu").click();
+  await win.getByRole("menuitem", { name: "打包导出…" }).click();
+  await expect(win.getByTestId("export-toast")).toHaveText("已导出");
+  await expect.poll(() => existsSync(zipPath)).toBe(true);
+
+  const JSZip = (await import("jszip")).default;
+  const zip = await JSZip.loadAsync(readFileSync(zipPath));
+  const names = Object.keys(zip.files).filter((n) => !zip.files[n].dir).sort();
+  expect(names.length).toBeGreaterThanOrEqual(2);
+  const joined = (await Promise.all(names.map(async (n) => zip.file(n)!.async("string")))).join("\n");
+  expect(joined).toContain("exported_at:");
+  expect(joined).toContain("这是 Point 测试用的固定输出");
+  expect(joined).toContain("第二条笔记正文");
+
+  // Conversation export (secondary hover action).
+  await win.getByRole("tab", { name: "对话" }).click();
+  const answer = win.getByTestId("chat-log").locator('[data-role="assistant"]').last();
+  await answer.hover();
+  const convOut = join(out, "conversation.md");
+  await stubSaveDialog(convOut);
+  await answer.getByRole("button", { name: "导出对话为 md" }).click();
+  await expect(answer.getByRole("button", { name: "已导出" })).toBeVisible();
+  const conv = readFileSync(convOut, "utf8");
+  expect(conv).toContain("type: conversation");
+  expect(conv).toContain("### AI");
 });

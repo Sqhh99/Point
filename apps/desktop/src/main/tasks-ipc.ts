@@ -1,6 +1,7 @@
 import { ipcMain, type WebContents } from "electron";
 import { randomUUID } from "node:crypto";
 import { TASK_LABELS, buildTaskMessages, describeTask, parseTaskOutput, type TaskKind } from "@point/core";
+import { exportAllNotes, exportConversation, exportNote } from "./export.js";
 import { IPC, type TaskEvent, type TaskRequest, type TaskStarted } from "../shared/ipc.js";
 import { addMessage, createConversation, dropTrailingAssistant, deleteConversation, getMessages, hasConversation, historyFor, listConversations } from "./conversations.js";
 import { errInfo, providerFor } from "./ipc.js";
@@ -105,4 +106,10 @@ export function registerTasksIpc(): void {
     });
   });
   ipcMain.handle(IPC.notesAppend, (_e, v: unknown, text: unknown) => notes().append(id(v), str(text, 1_000_000) ?? ""));
+  ipcMain.handle(IPC.notesExportCurrent, (e, v: unknown) => exportNote(e.sender, id(v)));
+  ipcMain.handle(IPC.notesExportAll, (e) => exportAllNotes(e.sender));
+  ipcMain.handle(IPC.convExport, (e, v: unknown) => {
+    if (typeof v !== "string") throw new Error("无效的对话 id");
+    return exportConversation(e.sender, v);
+  });
 }

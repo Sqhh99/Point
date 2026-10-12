@@ -39,14 +39,17 @@ const api: PointAPI = {
   conversations: {
     list: () => ipcRenderer.invoke(IPC.convList),
     messages: (id) => ipcRenderer.invoke(IPC.convMessages, id),
-    remove: (id) => ipcRenderer.invoke(IPC.convRemove, id)
+    remove: (id) => ipcRenderer.invoke(IPC.convRemove, id),
+    export: (id) => ipcRenderer.invoke(IPC.convExport, id)
   },
   notes: {
     list: () => ipcRenderer.invoke(IPC.notesList),
     read: (id) => ipcRenderer.invoke(IPC.notesRead, id),
     create: (input) => ipcRenderer.invoke(IPC.notesCreate, input),
     update: (id, patch) => ipcRenderer.invoke(IPC.notesUpdate, id, patch),
-    append: (id, text) => ipcRenderer.invoke(IPC.notesAppend, id, text)
+    append: (id, text) => ipcRenderer.invoke(IPC.notesAppend, id, text),
+    exportCurrent: (id) => ipcRenderer.invoke(IPC.notesExportCurrent, id),
+    exportAll: () => ipcRenderer.invoke(IPC.notesExportAll)
   }
 };
 

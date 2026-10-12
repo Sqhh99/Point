@@ -61,6 +61,7 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onOpenSettings
   const [flash, setFlash] = useState<NoteFlash | null>(null);
   const [notePending, setNotePending] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [exportStatus, setExportStatus] = useState<string | null>(null);
   const requestRef = useRef<{ id: string; req: TaskRequest } | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
@@ -199,6 +200,18 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onOpenSettings
     setTimeout(() => setCopiedId((c) => (c === m.id ? null : c)), 1200);
   };
 
+  const exportConversation = async () => {
+    if (!conversationId) return;
+    setExportStatus(null);
+    const r = await api.conversations.export(conversationId);
+    if (r.ok) {
+      setExportStatus("已导出");
+      setTimeout(() => setExportStatus(null), 2000);
+    } else if (!("canceled" in r && r.canceled)) {
+      setExportStatus("message" in r ? r.message : "导出失败");
+    }
+  };
+
   const newConversation = () => {
     stop();
     requestRef.current = null;
@@ -259,6 +272,11 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onOpenSettings
                     {m.id === lastAssistantId && !draft && lastRequest() && (
                       <button className="link" onClick={() => void regenerate(lastRequest()!)}>
                         重新生成
+                      </button>
+                    )}
+                    {m.id === lastAssistantId && conversationId && (
+                      <button className="link" onClick={() => void exportConversation()}>
+                        {exportStatus === "已导出" ? "已导出" : "导出对话为 md"}
                       </button>
                     )}
                   </div>

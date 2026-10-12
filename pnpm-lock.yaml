@@ -66,6 +66,9 @@ importers:
       js-yaml:
         specifier: ^4.3.2
         version: 4.3.2
+      jszip:
+        specifier: ^3.10.2
+        version: 3.10.2
       marked:
         specifier: ^18.1.0
         version: 18.1.0
@@ -87,6 +90,9 @@ importers:
       '@types/mdast':
         specifier: ^4.0.4
         version: 4.0.4
+      jszip:
+        specifier: ^3.10.2
+        version: 3.10.2
       mammoth:
         specifier: ^1.13.0
         version: 1.13.0
@@ -105,10 +111,6 @@ importers:
       yaml:
         specifier: ^2.9.1
         version: 2.9.1
-    devDependencies:
-      jszip:
-        specifier: ^3.10.2
-        version: 3.10.2
 
 packages:
 
