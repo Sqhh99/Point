@@ -20,7 +20,7 @@
 
 自定义标题栏和新的三栏布局、Excel 阅读、框选截图提问、标记后批量提问、可以无限派生的分支对话。界面见下方设计稿。
 
-<p align="center"><img src="docs/assets/screenshot-v0.2-design.png" alt="Point 新界面设计稿" width="900"></p>
+<p align="center"><img src="docs/assets/screenshot-v0.1.1.png" alt="Point v0.1.1 界面：左侧标记列表，中间阅读区，右侧对话" width="900"></p>
 
 ## 安装
 
