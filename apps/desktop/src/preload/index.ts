@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
-import { IPC, type ChatEvent, type PointAPI } from "../shared/ipc.js";
+import { IPC, type ChatEvent, type PointAPI, type TaskEvent } from "../shared/ipc.js";
 
 const api: PointAPI = {
   platform: process.platform,
@@ -26,6 +26,27 @@ const api: PointAPI = {
     list: () => ipcRenderer.invoke(IPC.docsList),
     import: () => ipcRenderer.invoke(IPC.docsImport),
     get: (id) => ipcRenderer.invoke(IPC.docsGet, id)
+  },
+  tasks: {
+    run: (req) => ipcRenderer.invoke(IPC.tasksRun, req),
+    cancel: (requestId) => ipcRenderer.invoke(IPC.tasksCancel, requestId),
+    onEvent: (cb) => {
+      const listener = (_e: IpcRendererEvent, ev: TaskEvent) => cb(ev);
+      ipcRenderer.on(IPC.tasksEvent, listener);
+      return () => ipcRenderer.removeListener(IPC.tasksEvent, listener);
+    }
+  },
+  conversations: {
+    list: () => ipcRenderer.invoke(IPC.convList),
+    messages: (id) => ipcRenderer.invoke(IPC.convMessages, id),
+    remove: (id) => ipcRenderer.invoke(IPC.convRemove, id)
+  },
+  notes: {
+    list: () => ipcRenderer.invoke(IPC.notesList),
+    read: (id) => ipcRenderer.invoke(IPC.notesRead, id),
+    create: (input) => ipcRenderer.invoke(IPC.notesCreate, input),
+    update: (id, patch) => ipcRenderer.invoke(IPC.notesUpdate, id, patch),
+    append: (id, text) => ipcRenderer.invoke(IPC.notesAppend, id, text)
   }
 };
 

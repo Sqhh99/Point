@@ -1,4 +1,4 @@
-import type { ChatMessage, DocType, ParsedDoc, ProviderId, ProviderPreset } from "@point/core";
+import type { ChatMessage, DocType, Note, NoteInput, NoteMeta, ParsedDoc, ProviderId, ProviderPreset, TaskKind } from "@point/core";
 
 export interface ProviderSettings {
   id: ProviderId;
@@ -41,6 +41,44 @@ export interface WorkspaceInfo {
   path: string | null;
 }
 
+export interface TaskRequest {
+  kind: TaskKind;
+  selection: string;
+  context?: string;
+  question?: string;
+  docId?: string;
+  /** Continue this conversation; a new one is created when omitted. */
+  conversationId?: string;
+}
+
+export interface TaskStarted {
+  requestId: string;
+  conversationId: string;
+  userMessage: StoredMessage;
+}
+
+export type TaskEvent =
+  | { requestId: string; type: "delta"; text: string }
+  | { requestId: string; type: "done"; message: StoredMessage }
+  | { requestId: string; type: "error"; code: string; message: string; partial?: StoredMessage };
+
+export interface ConversationMeta {
+  id: string;
+  title: string;
+  docId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StoredMessage {
+  id: string;
+  conversationId: string;
+  role: "user" | "assistant";
+  content: string;
+  kind?: TaskKind;
+  createdAt: string;
+}
+
 export interface PointAPI {
   platform: string;
   settings: {
@@ -65,6 +103,23 @@ export interface PointAPI {
     import(): Promise<DocMeta[]>;
     get(id: string): Promise<ParsedDoc>;
   };
+  tasks: {
+    run(req: TaskRequest): Promise<TaskStarted>;
+    cancel(requestId: string): Promise<void>;
+    onEvent(cb: (e: TaskEvent) => void): () => void;
+  };
+  conversations: {
+    list(): Promise<ConversationMeta[]>;
+    messages(conversationId: string): Promise<StoredMessage[]>;
+    remove(conversationId: string): Promise<void>;
+  };
+  notes: {
+    list(): Promise<NoteMeta[]>;
+    read(id: string): Promise<Note>;
+    create(input: NoteInput): Promise<Note>;
+    update(id: string, patch: { title?: string; body?: string; tags?: string[] }): Promise<Note>;
+    append(id: string, text: string): Promise<Note>;
+  };
 }
 
 export const IPC = {
@@ -79,5 +134,16 @@ export const IPC = {
   workspaceChoose: "workspace:choose",
   docsList: "docs:list",
   docsImport: "docs:import",
-  docsGet: "docs:get"
+  docsGet: "docs:get",
+  tasksRun: "tasks:run",
+  tasksCancel: "tasks:cancel",
+  tasksEvent: "tasks:event",
+  convList: "conversations:list",
+  convMessages: "conversations:messages",
+  convRemove: "conversations:remove",
+  notesList: "notes:list",
+  notesRead: "notes:read",
+  notesCreate: "notes:create",
+  notesUpdate: "notes:update",
+  notesAppend: "notes:append"
 } as const;

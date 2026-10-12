@@ -22,3 +22,17 @@ export {
   type OutlineItem,
   type ParsedDoc
 } from "./docs/index.js";
+export {
+  LIMITS,
+  TASK_LABELS,
+  buildTaskMessages,
+  describeTask,
+  extractMermaid,
+  parseTaskOutput,
+  validateMermaid,
+  type MermaidBlock,
+  type TaskInput,
+  type TaskKind,
+  type TaskOutput
+} from "./tasks/index.js";
+export { NoteStore, parseNote, serializeNote, type Note, type NoteInput, type NoteMeta } from "./notes/index.js";

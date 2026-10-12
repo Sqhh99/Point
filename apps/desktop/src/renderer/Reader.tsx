@@ -1,5 +1,30 @@
-import { useEffect, useState } from "react";
-import type { Block, ParsedDoc } from "@point/core";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { Block, ParsedDoc, TaskKind } from "@point/core";
+
+export interface SelectionInfo {
+  text: string;
+  context: string;
+}
+
+const ACTIONS: { kind: TaskKind; label: string }[] = [
+  { kind: "explain", label: "解读概念" },
+  { kind: "note", label: "记笔记" },
+  { kind: "diagram", label: "画图表" },
+  { kind: "ask", label: "问 AI" }
+];
+
+/** Text of the blocks just before and after the selection, for prompt context. */
+function contextOf(range: Range): string {
+  const blockOf = (n: Node) => (n instanceof Element ? n : n.parentElement)?.closest(".block") ?? null;
+  const first = blockOf(range.startContainer);
+  const last = blockOf(range.endContainer);
+  const parts = [first?.previousElementSibling, first, last !== first ? last : null, last?.nextElementSibling];
+  return parts
+    .filter((e): e is Element => !!e)
+    .map((e) => e.textContent?.trim() ?? "")
+    .filter(Boolean)
+    .join("\n\n");
+}
 
 function BlockView({ b }: { b: Block }) {
   const common = { "data-block-id": b.id, "data-page": b.page };
@@ -47,18 +72,58 @@ function BlockView({ b }: { b: Block }) {
   }
 }
 
-export function Reader({ docId, hasWorkspace }: { docId: string | null; hasWorkspace: boolean }) {
+interface ReaderProps {
+  docId: string | null;
+  hasWorkspace: boolean;
+  onDocLoaded?(doc: ParsedDoc | null): void;
+  onAction(kind: TaskKind, sel: SelectionInfo): void;
+}
+
+export function Reader({ docId, hasWorkspace, onDocLoaded, onAction }: ReaderProps) {
   const [doc, setDoc] = useState<ParsedDoc | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [toolbar, setToolbar] = useState<{ top: number; left: number; sel: SelectionInfo } | null>(null);
+  const articleRef = useRef<HTMLElement>(null);
+
+  const onSelect = useCallback(() => {
+    const article = articleRef.current;
+    const s = window.getSelection();
+    if (!article || !s || s.isCollapsed || s.rangeCount === 0) return setToolbar(null);
+    const range = s.getRangeAt(0);
+    if (!article.contains(range.commonAncestorContainer)) return setToolbar(null);
+    const text = s.toString().trim();
+    if (!text) return setToolbar(null);
+    const scroller = article.parentElement!;
+    const r = range.getBoundingClientRect();
+    const box = scroller.getBoundingClientRect();
+    const top = Math.max(r.top - box.top + scroller.scrollTop - 44, scroller.scrollTop + 4);
+    const left = Math.min(Math.max(r.left - box.left + r.width / 2, 170), box.width - 170);
+    setToolbar({ top, left, sel: { text, context: contextOf(range) } });
+  }, []);
+
+  useEffect(() => {
+    const clear = () => {
+      const s = window.getSelection();
+      if (!s || s.isCollapsed) setToolbar(null);
+    };
+    document.addEventListener("selectionchange", clear);
+    return () => document.removeEventListener("selectionchange", clear);
+  }, []);
 
   useEffect(() => {
     setDoc(null);
     setError(null);
+    setToolbar(null);
+    onDocLoaded?.(null);
     if (!docId) return;
     let live = true;
     window.point.docs
       .get(docId)
-      .then((d) => live && setDoc(d))
+      .then((d) => {
+        if (!live) return;
+        setDoc(d);
+        onDocLoaded?.(d);
+      })
       .catch((e: Error) => live && setError(e.message));
     return () => {
       live = false;
@@ -71,7 +136,23 @@ export function Reader({ docId, hasWorkspace }: { docId: string | null; hasWorks
 
   let lastPage: number | undefined;
   return (
-    <article className="reader" data-testid="reader">
+    <>
+    {toolbar && (
+      <div className="selection-toolbar" role="toolbar" aria-label="选区操作" style={{ top: toolbar.top, left: toolbar.left }} onMouseDown={(e) => e.preventDefault()}>
+        {ACTIONS.map((a) => (
+          <button
+            key={a.kind}
+            onClick={() => {
+              onAction(a.kind, toolbar.sel);
+              setToolbar(null);
+            }}
+          >
+            {a.label}
+          </button>
+        ))}
+      </div>
+    )}
+    <article className="reader" data-testid="reader" ref={articleRef} onMouseUp={onSelect} onKeyUp={onSelect}>
       {doc.blocks.map((b) => {
         const marker = b.page !== undefined && b.page !== lastPage ? b.page : undefined;
         lastPage = b.page ?? lastPage;
@@ -84,5 +165,6 @@ export function Reader({ docId, hasWorkspace }: { docId: string | null; hasWorks
       })}
       {doc.blocks.length === 0 && <div className="placeholder">这篇文档没有可提取的文字</div>}
     </article>
+    </>
   );
 }

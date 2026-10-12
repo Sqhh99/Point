@@ -1,5 +1,5 @@
 import { test, expect, _electron as electron, type ElectronApplication } from "@playwright/test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makePdf } from "../../../packages/core/test/fixtures/make";
@@ -17,7 +17,7 @@ test.beforeAll(async () => {
   const extra = process.platform === "linux" ? ["--no-sandbox"] : [];
   app = await electron.launch({
     args: [...extra, join(import.meta.dirname, "..", "out", "main", "index.js")],
-    env: { ...env, POINT_USER_DATA: mkdtempSync(join(tmpdir(), "point-e2e-")) }
+    env: { ...env, POINT_USER_DATA: mkdtempSync(join(tmpdir(), "point-e2e-")), POINT_FAKE_LLM: "1" }
   });
 });
 
@@ -119,4 +119,60 @@ test("settings page is reachable from the library", async () => {
   await win.getByRole("button", { name: "设置" }).click();
   await expect(win.getByRole("heading", { name: "模型设置" })).toBeVisible();
   await win.getByRole("button", { name: "返回阅读" }).click();
+});
+
+/** Selects the text of the reader paragraph containing `needle` and fires mouseup like a user drag. */
+async function selectInReader(win: Awaited<ReturnType<ElectronApplication["firstWindow"]>>, needle: string): Promise<void> {
+  await win.getByTestId("reader").evaluate((article, text) => {
+    const el = [...article.querySelectorAll("p, li, h1, h2")].find((e) => e.textContent?.includes(text));
+    if (!el?.firstChild) throw new Error(`no block with ${text}`);
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const sel = window.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(range);
+    article.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  }, needle);
+}
+
+test("selection task streams an answer, inserts it into a note, and draws a diagram", async () => {
+  const win = await app.firstWindow();
+  const ws = (await win.evaluate(() => window.point.workspace.get())).path!;
+  await win.getByTestId("doc-list").getByRole("button", { name: /熵的定义/ }).click();
+  await expect(win.getByTestId("reader").locator("h1")).toHaveText("熵的定义");
+
+  await selectInReader(win, "熵是系统无序程度的度量");
+  const toolbar = win.getByRole("toolbar", { name: "选区操作" });
+  await expect(toolbar).toBeVisible();
+  await toolbar.getByRole("button", { name: "解读概念" }).click();
+
+  const log = win.getByTestId("chat-log");
+  await expect(log.locator('[data-role="user"]')).toContainText("熵是系统无序程度的度量");
+  const answer = log.locator('[data-role="assistant"]').last();
+  await expect(answer).toContainText("这是 Point 测试用的固定输出");
+  // Completed answers render mermaid fences as SVG.
+  await expect(answer.locator(".mermaid-figure svg")).toBeVisible({ timeout: 20_000 });
+
+  await answer.getByRole("button", { name: "插入笔记" }).click();
+  await expect(answer.getByRole("button", { name: "已插入笔记" })).toBeVisible();
+  const files = readdirSync(join(ws, "notes")).filter((f) => f.endsWith(".md"));
+  expect(files).toHaveLength(1);
+  const raw = readFileSync(join(ws, "notes", files[0]), "utf8");
+  const docId = (await win.evaluate(() => window.point.docs.list())).find((d) => d.type === "md")!.id;
+  expect(raw).toMatch(/^---\nid: [\w-]+\ntitle: 熵的定义 · 笔记\nsourceDocId: /);
+  expect(raw).toContain(`sourceDocId: ${docId}`);
+  expect(raw).toMatch(/createdAt: .+\nupdatedAt: .+\ntags: \[\]\n---\n/);
+  expect(raw).toContain("这是 Point 测试用的固定输出");
+
+  await win.getByRole("tab", { name: "笔记" }).click();
+  await expect(win.getByTestId("note-editor").locator(".note-title")).toHaveValue("熵的定义 · 笔记");
+
+  await selectInReader(win, "广延量");
+  await toolbar.getByRole("button", { name: "画图表" }).click();
+  await expect(win.getByRole("tab", { name: "对话" })).toHaveAttribute("aria-selected", "true");
+  await expect(log.locator('[data-role="user"]').last()).toContainText("画图表");
+  await expect(log.locator('[data-role="assistant"]').last().locator(".mermaid-figure svg")).toBeVisible({ timeout: 20_000 });
+
+  const conversations = await win.evaluate(() => window.point.conversations.list());
+  expect(conversations).toHaveLength(2);
 });

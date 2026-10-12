@@ -70,3 +70,40 @@ button.link.active { color: var(--accent); }
 .status { font-size: 13px; }
 .status.ok { color: #1a7f37; }
 .status.err { color: #cf222e; }
+
+/* selection toolbar */
+.center { position: relative; }
+.selection-toolbar { position: absolute; z-index: 10; transform: translateX(-50%); display: flex; gap: 2px; padding: 4px; background: var(--text); border-radius: 8px; box-shadow: 0 4px 16px #0003; }
+.selection-toolbar button { border: none; color: var(--bg); font-size: 12px; padding: 5px 10px; white-space: nowrap; }
+.selection-toolbar button:hover { background: #ffffff22; }
+
+/* AI panel */
+.ai-panel { min-height: 0; }
+.tabs { align-items: center; }
+.push-right { margin-left: auto; }
+.chat-log { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+.msg { font-size: 14px; line-height: 1.6; border-radius: 8px; padding: 8px 12px; overflow-wrap: anywhere; }
+.msg.user { background: var(--panel); align-self: flex-end; max-width: 92%; }
+.msg.assistant { border: 1px solid var(--line); }
+.msg.error { color: #cf222e; border: 1px solid #cf222e55; }
+.msg-actions { display: flex; justify-content: flex-end; }
+.markdown > :first-child { margin-top: 0; }
+.markdown > :last-child { margin-bottom: 0; }
+.markdown blockquote { margin: 0 0 8px; padding-left: 10px; border-left: 3px solid var(--line); color: var(--muted); }
+.markdown pre { background: var(--panel); padding: 8px 10px; border-radius: 6px; overflow-x: auto; font-size: 12.5px; }
+.markdown pre.mermaid-error { outline: 1px dashed #cf222e88; }
+.mermaid-figure { margin: 8px 0; text-align: center; }
+.mermaid-figure svg { max-width: 100%; height: auto; }
+.composer { border-top: 1px solid var(--line); padding: 8px 12px 12px; }
+.composer textarea { width: 100%; resize: none; font: inherit; font-size: 13px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: inherit; }
+.attached { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.attached span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* notes */
+.notes { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 8px 12px 12px; gap: 8px; }
+.notes-toolbar { display: flex; gap: 6px; align-items: center; }
+.note-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; }
+.note-title { font: inherit; font-size: 15px; font-weight: 600; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: inherit; }
+.note-body { flex: 1; resize: none; font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 13px; line-height: 1.6; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: inherit; }
+.note-preview { flex: 1; overflow-y: auto; font-family: var(--read-font); font-size: 15px; line-height: 1.7; }
+.note-status { min-height: 1em; }
