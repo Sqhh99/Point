@@ -1,0 +1,27 @@
+/** 16px stroke icons (currentColor). */
+const base = { width: 16, height: 16, viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: 1.4, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true } as const;
+
+export const IconExplain = () => (
+  <svg {...base}>
+    <circle cx="8" cy="8" r="6" />
+    <path d="M6.3 6.2a1.8 1.8 0 1 1 2.5 1.7c-.5.2-.8.6-.8 1.1v.3M8 11.3v.2" />
+  </svg>
+);
+export const IconNote = () => (
+  <svg {...base}>
+    <path d="M4 2.5h6l2.5 2.5v8.5H4z" />
+    <path d="M6 7h4.5M6 9.5h4.5M6 12h2.5" />
+  </svg>
+);
+export const IconDiagram = () => (
+  <svg {...base}>
+    <rect x="2" y="2.5" width="4.5" height="3.5" rx="1" />
+    <rect x="9.5" y="10" width="4.5" height="3.5" rx="1" />
+    <path d="M4.25 6v3a1.5 1.5 0 0 0 1.5 1.5h3.75" />
+  </svg>
+);
+export const IconAsk = () => (
+  <svg {...base}>
+    <path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z" />
+  </svg>
+);

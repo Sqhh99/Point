@@ -141,38 +141,89 @@ test("selection task streams an answer, inserts it into a note, and draws a diag
   await win.getByTestId("doc-list").getByRole("button", { name: /熵的定义/ }).click();
   await expect(win.getByTestId("reader").locator("h1")).toHaveText("熵的定义");
 
+  // Esc dismisses the toolbar.
   await selectInReader(win, "熵是系统无序程度的度量");
   const toolbar = win.getByRole("toolbar", { name: "选区操作" });
   await expect(toolbar).toBeVisible();
+  await expect(toolbar.getByRole("button")).toHaveText(["解读概念", "记笔记", "画图表", "问 AI"]);
+  await win.keyboard.press("Escape");
+  await expect(toolbar).toBeHidden();
+
+  await selectInReader(win, "熵是系统无序程度的度量");
   await toolbar.getByRole("button", { name: "解读概念" }).click();
+  await expect(toolbar).toBeHidden();
 
   const log = win.getByTestId("chat-log");
-  await expect(log.locator('[data-role="user"]')).toContainText("熵是系统无序程度的度量");
+  await expect(log.getByTestId("quote-card").last()).toContainText("熵是系统无序程度的度量");
+  await expect(log.getByTestId("quote-card").last()).toContainText("《熵的定义》");
+  await expect(log.locator('[data-role="user"]').last()).toHaveText("解读概念");
   const answer = log.locator('[data-role="assistant"]').last();
   await expect(answer).toContainText("这是 Point 测试用的固定输出");
-  // Completed answers render mermaid fences as SVG.
-  await expect(answer.locator(".mermaid-figure svg")).toBeVisible({ timeout: 20_000 });
+  // Completed answers render mermaid fences as SVG inside a card with a 图/源码 toggle.
+  const card = answer.locator(".mermaid-card");
+  await expect(card.locator(".mermaid-figure svg")).toBeVisible({ timeout: 20_000 });
+  await card.getByRole("button", { name: "源码" }).click();
+  await expect(card.locator("pre")).toContainText("flowchart TD");
+  await card.getByRole("button", { name: "图" }).click();
+  await expect(card.locator(".mermaid-figure svg")).toBeVisible();
 
+  await answer.hover();
   await answer.getByRole("button", { name: "插入笔记" }).click();
-  await expect(answer.getByRole("button", { name: "已插入笔记" })).toBeVisible();
+  await expect(win.getByRole("tab", { name: "笔记" })).toHaveAttribute("aria-selected", "true");
+  await expect(win.getByTestId("note-flash")).toContainText("这是 Point 测试用的固定输出");
   const files = readdirSync(join(ws, "notes")).filter((f) => f.endsWith(".md"));
   expect(files).toHaveLength(1);
   const raw = readFileSync(join(ws, "notes", files[0]), "utf8");
   const docId = (await win.evaluate(() => window.point.docs.list())).find((d) => d.type === "md")!.id;
-  expect(raw).toMatch(/^---\nid: [\w-]+\ntitle: 熵的定义 · 笔记\nsourceDocId: /);
+  expect(raw, raw).toMatch(/^---\nid: [\w-]+\ntitle: 熵的定义 · 笔记\nsourceDocId: /);
   expect(raw).toContain(`sourceDocId: ${docId}`);
   expect(raw).toMatch(/createdAt: .+\nupdatedAt: .+\ntags: \[\]\n---\n/);
   expect(raw).toContain("这是 Point 测试用的固定输出");
-
-  await win.getByRole("tab", { name: "笔记" }).click();
   await expect(win.getByTestId("note-editor").locator(".note-title")).toHaveValue("熵的定义 · 笔记");
+  await expect(win.getByTestId("note-flash")).toBeHidden({ timeout: 5_000 });
 
   await selectInReader(win, "广延量");
   await toolbar.getByRole("button", { name: "画图表" }).click();
   await expect(win.getByRole("tab", { name: "对话" })).toHaveAttribute("aria-selected", "true");
-  await expect(log.locator('[data-role="user"]').last()).toContainText("画图表");
+  await expect(log.locator('[data-role="user"]').last()).toHaveText("画图表");
   await expect(log.locator('[data-role="assistant"]').last().locator(".mermaid-figure svg")).toBeVisible({ timeout: 20_000 });
 
   const conversations = await win.evaluate(() => window.point.conversations.list());
   expect(conversations).toHaveLength(2);
+});
+
+test("AI output is treated as untrusted: raw HTML and hostile mermaid do not execute", async () => {
+  const win = await app.firstWindow();
+  await win.getByRole("tab", { name: "对话" }).click();
+  const input = win.locator(".composer textarea");
+  await input.fill("XSS-PROBE 请回答");
+  await input.press("Enter");
+
+  const log = win.getByTestId("chat-log");
+  const answer = log.locator('[data-role="assistant"]').last();
+  await expect(answer).toContainText("探针回答");
+  // Raw HTML is rendered as literal text, not as elements.
+  await expect(answer).toContainText("<img src=x onerror=");
+  await expect(answer).toContainText("<script>");
+  await expect(answer.locator(".mermaid-figure svg, pre.mermaid-error").first()).toBeAttached({ timeout: 20_000 });
+  await win.waitForTimeout(500);
+
+  expect(await answer.locator("img, script, iframe").count()).toBe(0);
+  expect(await answer.locator('[onerror], [onclick], a[href^="javascript:"]').count()).toBe(0);
+  expect(await win.evaluate(() => (window as unknown as { __pwned?: string }).__pwned)).toBeUndefined();
+  // Clicking the diagram nodes must not run anything either.
+  for (const node of await answer.locator(".mermaid-figure svg .node").all()) await node.click({ force: true });
+  expect(await win.evaluate(() => (window as unknown as { __pwned?: string }).__pwned)).toBeUndefined();
+});
+
+test("model errors show inline with a reason and 重试", async () => {
+  const win = await app.firstWindow();
+  await win.getByRole("tab", { name: "对话" }).click();
+  const input = win.locator(".composer textarea");
+  await input.fill("RATE-LIMIT-PROBE");
+  await win.getByRole("button", { name: "发送" }).click();
+  const err = win.getByTestId("chat-error");
+  await expect(err).toContainText("被模型服务限流");
+  await expect(err.getByRole("button", { name: "重试" })).toBeVisible();
+  await expect(win.getByRole("dialog")).toHaveCount(0);
 });

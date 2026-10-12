@@ -47,14 +47,24 @@ export interface TaskRequest {
   context?: string;
   question?: string;
   docId?: string;
+  /** 1-based page of the selection (PDF). */
+  page?: number;
   /** Continue this conversation; a new one is created when omitted. */
   conversationId?: string;
+  /** Re-run without storing a new user message (重新生成 / 重试). */
+  regenerate?: boolean;
+}
+
+/** Stored on the user message of a task so the UI can show the quote card and re-run it. */
+export interface MessageMeta {
+  request: Omit<TaskRequest, "conversationId" | "regenerate">;
+  docTitle?: string;
 }
 
 export interface TaskStarted {
   requestId: string;
   conversationId: string;
-  userMessage: StoredMessage;
+  userMessage?: StoredMessage;
 }
 
 export type TaskEvent =
@@ -76,6 +86,7 @@ export interface StoredMessage {
   role: "user" | "assistant";
   content: string;
   kind?: TaskKind;
+  meta?: MessageMeta;
   createdAt: string;
 }
 

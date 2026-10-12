@@ -4,6 +4,12 @@ import { Markdown } from "./Markdown";
 
 const api = window.point;
 
+export interface NoteFlash {
+  noteId: string;
+  text: string;
+  seq: number;
+}
+
 interface Props {
   current: string | null;
   onSelect(id: string | null): void;
@@ -11,15 +17,24 @@ interface Props {
   version: number;
   docId: string | null;
   docTitle: string | null;
+  /** Just-inserted AI text: highlighted for 1.5s. */
+  flash: NoteFlash | null;
+  /** A 记笔记 task is still generating. */
+  pending: boolean;
 }
 
-export function NotesPanel({ current, onSelect, version, docId, docTitle }: Props) {
+const FLASH_MS = 1500;
+const parseTags = (s: string) => s.split(/[,，\s]+/).map((t) => t.trim()).filter(Boolean);
+
+export function NotesPanel({ current, onSelect, version, docId, docTitle, flash, pending }: Props) {
   const [list, setList] = useState<NoteMeta[]>([]);
   const [note, setNote] = useState<Note | null>(null);
   const [title, setTitle] = useState("");
+  const [tags, setTags] = useState("");
   const [body, setBody] = useState("");
-  const [mode, setMode] = useState<"edit" | "preview">("preview");
+  const [mode, setMode] = useState<"edit" | "preview">("edit");
   const [status, setStatus] = useState("");
+  const [activeFlash, setActiveFlash] = useState<NoteFlash | null>(null);
 
   useEffect(() => {
     api.notes.list().then(setList, () => setList([]));
@@ -32,18 +47,28 @@ export function NotesPanel({ current, onSelect, version, docId, docTitle }: Prop
       (n) => {
         setNote(n);
         setTitle(n.title);
+        setTags(n.tags.join(", "));
         setBody(n.body);
       },
       () => onSelect(null)
     );
   }, [current, version, onSelect]);
 
-  const dirty = !!note && (title !== note.title || body !== note.body);
+  // Show the inserted paragraph highlighted, then fade back to the editor.
+  useEffect(() => {
+    if (!flash || flash.noteId !== current) return;
+    setActiveFlash(flash);
+    const t = setTimeout(() => setActiveFlash(null), FLASH_MS);
+    return () => clearTimeout(t);
+  }, [flash, current]);
+
+  const dirty = !!note && (title !== note.title || body !== note.body || tags !== note.tags.join(", "));
 
   const save = async () => {
     if (!note) return;
-    const n = await api.notes.update(note.id, { title, body });
+    const n = await api.notes.update(note.id, { title, body, tags: parseTags(tags) });
     setNote(n);
+    setTags(n.tags.join(", "));
     setList(await api.notes.list());
     setStatus("已保存");
   };
@@ -55,12 +80,15 @@ export function NotesPanel({ current, onSelect, version, docId, docTitle }: Prop
     onSelect(n.id);
   };
 
+  const pendingBar = pending && <div className="note-pending hint">AI 正在整理笔记…</div>;
+
   if (!note) {
     return (
       <div className="notes">
         <div className="notes-toolbar">
           <button onClick={() => void create()}>新建笔记</button>
         </div>
+        {pendingBar}
         <ul className="note-list" data-testid="note-list">
           {list.map((n) => (
             <li key={n.id}>
@@ -74,6 +102,9 @@ export function NotesPanel({ current, onSelect, version, docId, docTitle }: Prop
       </div>
     );
   }
+
+  const flashing = activeFlash && activeFlash.noteId === note.id && body.trimEnd().endsWith(activeFlash.text);
+  const before = flashing ? body.trimEnd().slice(0, -activeFlash.text.length) : body;
 
   return (
     <div className="notes" data-testid="note-editor">
@@ -89,8 +120,19 @@ export function NotesPanel({ current, onSelect, version, docId, docTitle }: Prop
           保存
         </button>
       </div>
-      <input className="note-title" value={title} onChange={(e) => setTitle(e.target.value)} aria-label="笔记标题" />
-      {mode === "edit" ? (
+      {pendingBar}
+      <div className="note-meta">
+        <input className="note-title" value={title} onChange={(e) => setTitle(e.target.value)} aria-label="笔记标题" />
+        <input className="note-tags" value={tags} onChange={(e) => setTags(e.target.value)} placeholder="标签，用逗号分隔" aria-label="标签" />
+      </div>
+      {flashing ? (
+        <div className="note-preview">
+          <Markdown text={before} />
+          <div className="note-flash" data-testid="note-flash">
+            <Markdown text={activeFlash.text} />
+          </div>
+        </div>
+      ) : mode === "edit" ? (
         <textarea className="note-body" value={body} onChange={(e) => setBody(e.target.value)} aria-label="笔记内容" spellCheck={false} />
       ) : (
         <div className="note-preview">

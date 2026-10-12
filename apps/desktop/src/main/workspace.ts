@@ -40,10 +40,13 @@ function openDb(root: string): Database.Database {
     role TEXT NOT NULL,
     content TEXT NOT NULL,
     kind TEXT,
+    meta TEXT,
     created_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS messages_by_conversation ON messages(conversation_id, created_at);`);
   db.pragma("foreign_keys = ON");
+  const cols = db.prepare("PRAGMA table_info(messages)").all() as { name: string }[];
+  if (!cols.some((c) => c.name === "meta")) db.exec("ALTER TABLE messages ADD COLUMN meta TEXT");
   return db;
 }
 

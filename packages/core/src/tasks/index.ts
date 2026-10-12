@@ -65,11 +65,11 @@ export function buildTaskMessages(input: TaskInput): ChatMessage[] {
   return [{ role: "system", content: SYSTEM }, ...history, { role: "user", content: parts.join("\n\n") }];
 }
 
-/** Short user-facing text for the conversation log. */
-export function describeTask(input: Pick<TaskInput, "kind" | "selection" | "question">): string {
-  const sel = input.selection.trim().replace(/\s+/g, " ");
-  const quote = sel ? `> ${sel.length > 120 ? `${sel.slice(0, 120)}…` : sel}\n\n` : "";
-  return `${quote}**${TASK_LABELS[input.kind]}**${input.question?.trim() ? `：${input.question.trim()}` : ""}`;
+/** Short user-facing text for the conversation log (the quoted selection is shown separately). */
+export function describeTask(input: Pick<TaskInput, "kind" | "question">): string {
+  const q = input.question?.trim();
+  if (input.kind === "ask" && q) return q;
+  return `${TASK_LABELS[input.kind]}${q ? `：${q}` : ""}`;
 }
 
 export function parseTaskOutput(kind: TaskKind, text: string): TaskOutput {

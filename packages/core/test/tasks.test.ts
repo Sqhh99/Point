@@ -47,8 +47,10 @@ describe("buildTaskMessages", () => {
     expect(content.length).toBeLessThan(LIMITS.selection + 1000);
   });
 
-  it("describeTask quotes the selection", () => {
-    expect(describeTask({ kind: "explain", selection: "熵" })).toBe("> 熵\n\n**解读概念**");
+  it("describeTask names the task or shows the question", () => {
+    expect(describeTask({ kind: "explain" })).toBe("解读概念");
+    expect(describeTask({ kind: "note", question: "简短些" })).toBe("记笔记：简短些");
+    expect(describeTask({ kind: "ask", question: "为什么？" })).toBe("为什么？");
   });
 });
 

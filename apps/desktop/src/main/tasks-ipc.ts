@@ -2,7 +2,7 @@ import { ipcMain, type WebContents } from "electron";
 import { randomUUID } from "node:crypto";
 import { TASK_LABELS, buildTaskMessages, describeTask, parseTaskOutput, type TaskKind } from "@point/core";
 import { IPC, type TaskEvent, type TaskRequest, type TaskStarted } from "../shared/ipc.js";
-import { addMessage, createConversation, deleteConversation, getMessages, hasConversation, historyFor, listConversations } from "./conversations.js";
+import { addMessage, createConversation, dropTrailingAssistant, deleteConversation, getMessages, hasConversation, historyFor, listConversations } from "./conversations.js";
 import { errInfo, providerFor } from "./ipc.js";
 import { docTitle, need } from "./workspace.js";
 
@@ -20,7 +20,9 @@ function validate(raw: unknown): TaskRequest {
     context: str(r.context, 20_000),
     question: str(r.question, 4_000),
     docId: str(r.docId, 64),
-    conversationId: str(r.conversationId, 64)
+    page: typeof r.page === "number" && Number.isInteger(r.page) && r.page > 0 ? r.page : undefined,
+    conversationId: str(r.conversationId, 64),
+    regenerate: r.regenerate === true
   };
 }
 
@@ -53,14 +55,17 @@ export function registerTasksIpc(): void {
     const req = validate(raw);
     const title = req.docId ? docTitle(req.docId) : undefined;
     let conversationId = req.conversationId && hasConversation(req.conversationId) ? req.conversationId : undefined;
-    const history = conversationId ? historyFor(conversationId) : [];
+    const regenerate = !!(req.regenerate && conversationId);
+    const history = conversationId ? historyFor(conversationId, regenerate) : [];
     // Build first so invalid input (empty selection, missing question) fails before anything is stored.
     const messages = buildTaskMessages({ kind: req.kind, selection: req.selection, context: req.context, question: req.question, docTitle: title, history });
     if (!conversationId) {
       const sel = req.selection.trim().replace(/\s+/g, " ");
       conversationId = createConversation(`${TASK_LABELS[req.kind]}：${sel.slice(0, 30) || req.question?.slice(0, 30) || ""}`, req.docId).id;
     }
-    const userMessage = addMessage(conversationId, "user", describeTask(req), req.kind);
+    const meta = { request: { kind: req.kind, selection: req.selection, context: req.context, question: req.question, docId: req.docId, page: req.page }, docTitle: title };
+    if (regenerate) dropTrailingAssistant(conversationId);
+    const userMessage = regenerate ? undefined : addMessage(conversationId, "user", describeTask(req), req.kind, meta);
     const requestId = randomUUID();
     void stream(e.sender, requestId, conversationId, req, messages);
     return { requestId, conversationId, userMessage };
