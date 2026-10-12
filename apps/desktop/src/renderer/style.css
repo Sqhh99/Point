@@ -1,0 +1,14 @@
+:root { color-scheme: light dark; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+body { margin: 0; }
+.settings { max-width: 520px; margin: 48px auto; padding: 0 24px; }
+.settings h1 { font-size: 20px; margin: 0 0 24px; }
+.field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; font-size: 13px; }
+.field input, .field select { font: inherit; font-size: 14px; padding: 8px 10px; border: 1px solid #8884; border-radius: 6px; background: transparent; color: inherit; }
+.hint { font-size: 12px; opacity: 0.6; }
+.actions { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+button { font: inherit; font-size: 14px; padding: 8px 14px; border-radius: 6px; border: 1px solid #8886; background: transparent; color: inherit; cursor: pointer; }
+button.primary { background: #2f6feb; border-color: #2f6feb; color: #fff; }
+button:disabled { opacity: 0.5; cursor: default; }
+.status { font-size: 13px; }
+.status.ok { color: #1a7f37; }
+.status.err { color: #cf222e; }

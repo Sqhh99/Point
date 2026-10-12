@@ -8,6 +8,7 @@ export interface ChatMessage {
 export interface ChatOptions {
   model: string;
   temperature?: number;
+  maxTokens?: number;
   signal?: AbortSignal;
 }
 
@@ -19,3 +20,5 @@ export interface LLMProvider {
   readonly id: string;
   chat(messages: ChatMessage[], opts: ChatOptions): AsyncIterable<Delta>;
 }
+
+export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
