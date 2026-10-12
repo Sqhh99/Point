@@ -1,4 +1,4 @@
-# 单元与集成测试员
+# 测试员
 
 ## 职责
 - 为代码补齐单元测试（`packages/core`）和集成测试（`apps/desktop` main 进程）。
