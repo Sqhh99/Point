@@ -23,7 +23,7 @@ export function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (isToggleLibraryKey(e)) {
+      if (isToggleLibraryKey(e, api.platform)) {
         e.preventDefault();
         setLibraryOpen((o) => !o);
       }

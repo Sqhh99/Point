@@ -7,7 +7,7 @@ describe("clampChatWidth boundaries and parsing", () => {
     [319.9, CHAT_MIN], [320.4, 320], [639.6, 640], [640.1, CHAT_MAX], [0, CHAT_MIN], [-0, CHAT_MIN],
     [-Infinity, CHAT_DEFAULT], [Infinity, CHAT_DEFAULT],
     ["319", CHAT_MIN], ["641", CHAT_MAX], ["320", 320], ["640", 640], ["500.5", 501],
-    [" 500 ", 500], ["\t480\n", 480], ["1e3", CHAT_MAX], ["4.5e2", 450], ["0x200", 512], ["0", CHAT_MIN], ["-50", CHAT_MIN]
+    [" 500 ", 500], ["\t480\n", 480], ["1e3", CHAT_MAX], ["4.5e2", 450], ["0x200", CHAT_DEFAULT], ["0", CHAT_MIN], ["-50", CHAT_MIN]
   ])("%j → %j", (v, out) => {
     expect(clampChatWidth(v)).toBe(out);
   });
@@ -37,10 +37,16 @@ describe("isToggleLibraryKey modifiers and keys", () => {
   const k = (o: Partial<KeyboardEvent> = {}) =>
     ({ key: "\\", metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, repeat: false, ...o }) as KeyboardEvent;
 
-  it("accepts both ⌘ and Ctrl, and both together (same handler on every platform)", () => {
-    expect(isToggleLibraryKey(k({ metaKey: true }))).toBe(true);
-    expect(isToggleLibraryKey(k({ ctrlKey: true }))).toBe(true);
-    expect(isToggleLibraryKey(k({ metaKey: true, ctrlKey: true }))).toBe(true);
+  it("macOS accepts only ⌘\\", () => {
+    expect(isToggleLibraryKey(k({ metaKey: true }), "darwin")).toBe(true);
+    expect(isToggleLibraryKey(k({ ctrlKey: true }), "darwin")).toBe(false);
+    expect(isToggleLibraryKey(k({ metaKey: true, ctrlKey: true }), "darwin")).toBe(false);
+  });
+
+  it.each([["win32"], ["linux"]])("%s accepts only Ctrl+\\", (p) => {
+    expect(isToggleLibraryKey(k({ ctrlKey: true }), p)).toBe(true);
+    expect(isToggleLibraryKey(k({ metaKey: true }), p)).toBe(false);
+    expect(isToggleLibraryKey(k({ metaKey: true, ctrlKey: true }), p)).toBe(false);
   });
 
   it.each([
@@ -49,12 +55,11 @@ describe("isToggleLibraryKey modifiers and keys", () => {
     [{ ctrlKey: true, key: "\\\\" }], [{ ctrlKey: true, key: "Dead" }], [{ ctrlKey: true, key: "Unidentified" }],
     [{ ctrlKey: true, key: "" }], [{ ctrlKey: true, key: "b" }], [{ metaKey: true, key: "]" }]
   ])("rejects %j", (o) => {
-    expect(isToggleLibraryKey(k(o))).toBe(false);
+    for (const p of ["darwin", "win32"]) expect(isToggleLibraryKey(k(o), p)).toBe(false);
   });
 
-  // Bug: holding ⌘\ / Ctrl+\ fires repeated keydown events and App toggles the left column on each,
-  // so it flickers open/closed. The helper ignores KeyboardEvent.repeat.
-  it.fails("ignores auto-repeat keydown (holding the shortcut must not flicker the column)", () => {
-    expect(isToggleLibraryKey(k({ ctrlKey: true, repeat: true }))).toBe(false);
+  it("ignores auto-repeat keydown (holding the shortcut must not flicker the column)", () => {
+    expect(isToggleLibraryKey(k({ ctrlKey: true, repeat: true }), "win32")).toBe(false);
+    expect(isToggleLibraryKey(k({ metaKey: true, repeat: true }), "darwin")).toBe(false);
   });
 });

@@ -11,15 +11,15 @@ describe("clampChatWidth", () => {
 });
 
 describe("isToggleLibraryKey", () => {
-  const k = (o: Partial<KeyboardEvent>) => ({ key: "\\", metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...o });
+  const k = (o: Partial<KeyboardEvent>) => ({ key: "\\", metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, repeat: false, ...o });
   it("accepts ⌘\\ and Ctrl+\\", () => {
-    expect(isToggleLibraryKey(k({ metaKey: true }))).toBe(true);
-    expect(isToggleLibraryKey(k({ ctrlKey: true }))).toBe(true);
+    expect(isToggleLibraryKey(k({ metaKey: true }), "darwin")).toBe(true);
+    expect(isToggleLibraryKey(k({ ctrlKey: true }), "win32")).toBe(true);
   });
   it("ignores other keys and modifiers", () => {
-    expect(isToggleLibraryKey(k({}))).toBe(false);
-    expect(isToggleLibraryKey(k({ metaKey: true, key: "/" }))).toBe(false);
-    expect(isToggleLibraryKey(k({ ctrlKey: true, shiftKey: true }))).toBe(false);
-    expect(isToggleLibraryKey(k({ ctrlKey: true, altKey: true }))).toBe(false);
+    expect(isToggleLibraryKey(k({}), "win32")).toBe(false);
+    expect(isToggleLibraryKey(k({ metaKey: true, key: "/" }), "darwin")).toBe(false);
+    expect(isToggleLibraryKey(k({ ctrlKey: true, shiftKey: true }), "win32")).toBe(false);
+    expect(isToggleLibraryKey(k({ ctrlKey: true, altKey: true }), "win32")).toBe(false);
   });
 });
