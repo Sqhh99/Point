@@ -64,7 +64,7 @@ describe("branching conversations (SQLite)", () => {
 });
 
 describe("002 migration of v0.1.0 conversations", () => {
-  it("chains old messages per conversation by created_at, then id", () => {
+  it("chains old messages per conversation by created_at, then rowid (insertion order)", () => {
     const db = new Database(":memory:");
     migrate(db, []); // nothing
     db.exec(`CREATE TABLE docs (id TEXT PRIMARY KEY, title TEXT NOT NULL, type TEXT NOT NULL, path TEXT NOT NULL, imported_at TEXT NOT NULL);
@@ -78,7 +78,7 @@ describe("002 migration of v0.1.0 conversations", () => {
                                   ('n1','c2','user','另一段','',   '2026-10-01T00:00:00Z');`);
     migrate(db);
     const parents = Object.fromEntries((db.prepare("SELECT id, parent_id FROM messages").all() as { id: string; parent_id: string | null }[]).map((r) => [r.id, r.parent_id]));
-    expect(parents).toEqual({ m1: null, m2: "m1", m3a: "m2", m3b: "m3a", n1: null });
+    expect(parents).toEqual({ m1: null, m2: "m1", m3b: "m2", m3a: "m3b", n1: null });
     expect(db.prepare("SELECT content FROM messages WHERE id='m1'").get()).toEqual({ content: "问" });
   });
 });

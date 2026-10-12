@@ -107,8 +107,13 @@ export function branchCounts(origins: readonly BranchOrigin[]): Map<string, numb
 }
 
 /** True when [start, end) is a valid, non-empty span of `text` that equals `quote`. */
+const isLow = (c: number) => c >= 0xdc00 && c <= 0xdfff;
+const isHigh = (c: number) => c >= 0xd800 && c <= 0xdbff;
+/** True when offset i sits between the two halves of a surrogate pair. */
+const splitsPair = (text: string, i: number) => i > 0 && i < text.length && isHigh(text.charCodeAt(i - 1)) && isLow(text.charCodeAt(i));
+
 export function spanMatches(text: string, start: number, end: number, quote: string): boolean {
-  return Number.isInteger(start) && Number.isInteger(end) && start >= 0 && end > start && end <= text.length && text.slice(start, end) === quote;
+  return !splitsPair(text, start) && !splitsPair(text, end) && Number.isInteger(start) && Number.isInteger(end) && start >= 0 && end > start && end <= text.length && text.slice(start, end) === quote;
 }
 
 /** Where the quoted span is now: the stored offsets if they still match, else the occurrence of `quote` nearest to them. */

@@ -1,7 +1,7 @@
 /**
  * Branching conversations: messages form a tree via parent_id; branch_origin records which
  * span of an assistant answer a branch was forked from. Existing messages become one
- * linear chain per conversation, ordered by created_at then id.
+ * linear chain per conversation, ordered by created_at then rowid (v0.1.0 display order).
  */
 export default `
 ALTER TABLE messages ADD COLUMN parent_id TEXT REFERENCES messages(id) ON DELETE CASCADE;
@@ -10,8 +10,8 @@ CREATE INDEX IF NOT EXISTS messages_by_parent ON messages(parent_id);
 UPDATE messages SET parent_id = (
   SELECT p.id FROM messages p
   WHERE p.conversation_id = messages.conversation_id
-    AND (p.created_at < messages.created_at OR (p.created_at = messages.created_at AND p.id < messages.id))
-  ORDER BY p.created_at DESC, p.id DESC
+    AND (p.created_at < messages.created_at OR (p.created_at = messages.created_at AND p.rowid < messages.rowid))
+  ORDER BY p.created_at DESC, p.rowid DESC
   LIMIT 1
 );
 CREATE TABLE IF NOT EXISTS branch_origin (

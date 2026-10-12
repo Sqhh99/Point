@@ -78,10 +78,7 @@ describe("002 on the real v0.1.0 fixture", () => {
     }
   });
 
-  // BUG (found by these tests): the fixture's real conversation has 5 rows written in the same
-  // millisecond. v0.1.0 showed them ORDER BY created_at, rowid; migration 002 breaks ties by id
-  // (random UUID), so the migrated chain — and the model context — scrambles user/assistant turns.
-  it.fails("migrated chain keeps the v0.1.0 display order (created_at, then rowid) when timestamps tie", () => {
+  it("migrated chain keeps the v0.1.0 display order (created_at, then rowid) when timestamps tie", () => {
     const { root, db } = stageFixture();
     const before = readOld(db);
     ws.openWorkspace(root);
@@ -157,9 +154,7 @@ describe("rejected branches write nothing", () => {
     expect(c.getTree(conv.id)).toEqual(before);
   });
 
-  // BUG (found by these tests): a span that cuts a surrogate pair in half is accepted when the
-  // quote is the matching lone surrogate, so a broken half-emoji is stored as the branch quote.
-  it.fails.each([
+  it.each([
     ["starts inside 🙂", { start: 3, end: 5 }],
     ["ends inside 🙂", { start: 1, end: 3 }]
   ])("surrogate-pair split rejected: %s", (_n, r) => {
