@@ -99,10 +99,36 @@ export function branchTree<T extends TreeNode>(nodes: readonly T[], origins: rea
   return roots;
 }
 
-/** Number of branches forked from each message. */
+/** One forked span: every branch question asked from it (the first ask plus its re-asks). */
+export interface SpanGroup {
+  sourceId: string;
+  start: number;
+  end: number;
+  quote: string;
+  /** Origins in this span, in input order. */
+  origins: BranchOrigin[];
+}
+
+/**
+ * The single definition of "same span": source answer + start + end + quote. Both `siblingsOf`
+ * (which questions are alternatives) and the 「⑂ n 个分支」 count go through this grouping.
+ * Groups are returned in order of first appearance.
+ */
+export function groupBySpan(origins: readonly BranchOrigin[]): SpanGroup[] {
+  const groups = new Map<string, SpanGroup>();
+  for (const o of origins) {
+    const key = JSON.stringify([o.sourceId, o.start, o.end, o.quote]);
+    const g = groups.get(key);
+    if (g) g.origins.push(o);
+    else groups.set(key, { sourceId: o.sourceId, start: o.start, end: o.end, quote: o.quote, origins: [o] });
+  }
+  return [...groups.values()];
+}
+
+/** Number of distinct forked spans per message (re-asks of one span count once). */
 export function branchCounts(origins: readonly BranchOrigin[]): Map<string, number> {
   const m = new Map<string, number>();
-  for (const o of origins) m.set(o.sourceId, (m.get(o.sourceId) ?? 0) + 1);
+  for (const g of groupBySpan(origins)) m.set(g.sourceId, (m.get(g.sourceId) ?? 0) + 1);
   return m;
 }
 
@@ -141,10 +167,10 @@ export function siblingsOf<T extends TreeNode>(nodes: readonly T[], origins: rea
   const node = nodes.find((n) => n.id === id);
   if (!node) return [];
   const branched = new Set(origins.map((o) => o.childId));
-  const own = origins.find((o) => o.childId === id);
-  if (own) {
+  const group = groupBySpan(origins).find((g) => g.origins.some((o) => o.childId === id));
+  if (group) {
     // Span-branch questions are alternatives of each other when they fork from the very same span.
-    const same = new Set(origins.filter((o) => o.sourceId === own.sourceId && o.start === own.start && o.end === own.end && o.quote === own.quote).map((o) => o.childId));
+    const same = new Set(group.origins.map((o) => o.childId));
     return nodes.filter((n) => same.has(n.id)).sort(order);
   }
   const ids = new Set(nodes.map((n) => n.id));
@@ -173,7 +199,10 @@ export function defaultLeaf<T extends TreeNode>(nodes: readonly T[], origins: re
   return root ? latestLeaf(nodes, origins, root.id) : undefined;
 }
 
-/** Branch origins whose source is `id` (for the 「⑂ n 个分支」 chip of the answer being shown). */
-export function branchesFrom(origins: readonly BranchOrigin[], id: string): BranchOrigin[] {
-  return origins.filter((o) => o.sourceId === id);
+/**
+ * Distinct forked spans of answer `id`, for the 「⑂ n 个分支」 chip of the answer being shown:
+ * `length` is the count; re-asks of one span are one entry (grouped by `groupBySpan`).
+ */
+export function branchesFrom(origins: readonly BranchOrigin[], id: string): SpanGroup[] {
+  return groupBySpan(origins.filter((o) => o.sourceId === id));
 }

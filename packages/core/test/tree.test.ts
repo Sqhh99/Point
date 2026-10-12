@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { branchCounts, branchesFrom, defaultLeaf, latestLeaf, siblingsOf, branchTree, breadcrumb, locateOrigin, mainLeaf, pathTo, spanMatches, type BranchOrigin, type TreeNode } from "../src/index.js";
+import { branchCounts, groupBySpan, branchesFrom, defaultLeaf, latestLeaf, siblingsOf, branchTree, breadcrumb, locateOrigin, mainLeaf, pathTo, spanMatches, type BranchOrigin, type TreeNode } from "../src/index.js";
 
 // main: u1 → a1 → u2 → a2 ; branch b1 from a1 ; sub-branch b2 from b1's answer
 const n = (id: string, parentId: string | null, t: number): TreeNode => ({ id, parentId, createdAt: `2026-10-12T00:00:${String(t).padStart(2, "0")}Z` });
@@ -91,5 +91,23 @@ describe("siblingsOf for span-branch questions (fix/fork-sibling)", () => {
     const origins = [o("b1", 0, "熵"), o("b2", 0, "熵"), o("x", 2, "熵")];
     expect(siblingsOf(nodes, origins, "b2").map((m) => m.id)).toEqual(["b1", "b2"]);
     expect(siblingsOf(nodes, origins, "x").map((m) => m.id)).toEqual(["x"]);
+  });
+});
+
+describe("branch count by distinct span (fix/branch-count)", () => {
+  const o = (childId: string, sourceId: string, start: number, quote: string) => ({ childId, sourceId, start, end: start + quote.length, quote });
+  const origins = [o("b1", "a", 0, "熵"), o("b2", "a", 0, "熵"), o("b3", "a", 0, "熵"), o("x", "a", 2, "熵"), o("y", "a", 0, "熵增"), o("z", "other", 0, "熵")];
+  it("re-asks of one span count once; different start / end / quote / source are separate", () => {
+    expect(branchesFrom(origins, "a")).toHaveLength(3);
+    expect(branchesFrom(origins, "a")[0].origins.map((x) => x.childId)).toEqual(["b1", "b2", "b3"]);
+    expect(branchCounts(origins).get("a")).toBe(3);
+    expect(branchCounts(origins).get("other")).toBe(1);
+  });
+  it("siblingsOf and the count share one grouping (groupBySpan)", () => {
+    const n = (id: string, parentId: string | null, t: string) => ({ id, parentId, createdAt: t });
+    const nodes = [n("a", null, "0"), n("b1", "a", "1"), n("b2", "a", "2"), n("b3", "a", "3"), n("x", "a", "4"), n("y", "a", "5")];
+    for (const g of groupBySpan(origins.filter((x) => x.sourceId === "a"))) {
+      for (const m of g.origins) expect(siblingsOf(nodes, origins, m.childId).map((s) => s.id)).toEqual(g.origins.map((x) => x.childId));
+    }
   });
 });

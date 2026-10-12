@@ -583,16 +583,17 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
                       </button>
                       {chipOpen === m.id && (
                         <ul className="branch-menu" role="menu">
-                          {branches.map((o) => (
-                            <li key={o.childId}>
+                          {branches.map((g) => (
+                            <li key={g.origins[0].childId}>
                               <button
                                 role="menuitem"
                                 onClick={() => {
                                   setChipOpen(null);
-                                  switchTo(o.childId);
+                                  // One entry per span; enter its newest ask (the switcher shows the others).
+                                  switchTo(g.origins.at(-1)!.childId);
                                 }}
                               >
-                                「{o.quote.slice(0, 40)}」
+                                「{g.quote.slice(0, 40)}」
                               </button>
                             </li>
                           ))}
