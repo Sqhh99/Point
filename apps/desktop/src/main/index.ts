@@ -4,6 +4,7 @@ import { runSmoke } from "./smoke.js";
 import { registerDocsIpc } from "./docs-ipc.js";
 import { registerIpc } from "./ipc.js";
 import { registerTasksIpc } from "./tasks-ipc.js";
+import { notifyIfUpdateAvailable } from "./update-check.js";
 import { closeWorkspace, restoreWorkspace } from "./workspace.js";
 
 // Packaging check: open a temp SQLite DB through the native module, report, exit.
@@ -38,6 +39,7 @@ app.whenReady().then(() => {
   registerTasksIpc();
   restoreWorkspace();
   createWindow();
+  void notifyIfUpdateAvailable();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
