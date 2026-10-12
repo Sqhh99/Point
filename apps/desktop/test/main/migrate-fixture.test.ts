@@ -230,10 +230,7 @@ describe("other on-disk starting points", () => {
     expect(ws.listDocs()).toEqual([]); // old workspace still usable
   });
 
-  // KNOWN BUG (see PR body): openDb() sets journal_mode = WAL before migrate() checks the
-  // version, so a too-new database in rollback-journal mode gets its header rewritten
-  // (bytes 18-19: 1 -> 2) even though it is refused. Real Point files are already WAL.
-  it.fails("a too-new rollback-journal database is not rewritten either (known bug)", () => {
+  it("a too-new rollback-journal database is not rewritten either", () => {
     const root = mkdtempSync(join(tmpdir(), "point-toonew-delete-"));
     const db = join(root, ".point", "index.db");
     mkdirSync(join(root, ".point"));

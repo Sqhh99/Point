@@ -19,13 +19,14 @@ let current: { root: string; db: Database.Database; notes: NoteStore } | null = 
 function openDb(root: string): Database.Database {
   mkdirSync(join(root, ".point"), { recursive: true });
   const db = new Database(join(root, ".point", "index.db"));
-  db.pragma("journal_mode = WAL");
   try {
     migrate(db);
   } catch (err) {
     db.close();
     throw err;
   }
+  // Only after the version check: a refused (too new) database must stay byte-for-byte untouched.
+  db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   return db;
 }
