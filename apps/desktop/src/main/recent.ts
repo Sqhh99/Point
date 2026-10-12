@@ -28,3 +28,9 @@ export function addRecent(item: RecentItem): RecentItem[] {
   writeFileSync(file(), JSON.stringify(next));
   return next;
 }
+
+export function removeRecent(path: string): RecentItem[] {
+  const next = readRecent().filter((r) => r.path !== path);
+  writeFileSync(file(), JSON.stringify(next));
+  return next;
+}

@@ -72,7 +72,7 @@ export function App() {
   };
   const chooseWorkspace = run(async () => applyOpen(await api.open.workspace()));
   const openFile = run(async () => applyOpen(await api.open.file()));
-  const openRecent = (i: number) => run(async () => applyOpen(await api.open.recentAt(i)))();
+  const openRecent = (i: number, p: string) => run(async () => applyOpen(await api.open.recentAt(i, p)))();
   const opened = useRef(applyOpen);
   opened.current = applyOpen;
   useEffect(() => api.open.onOpened((r) => void opened.current(r).catch((e: Error) => setError(e.message))), []);

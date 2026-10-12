@@ -33,7 +33,7 @@ const api: PointAPI = {
   open: {
     workspace: () => ipcRenderer.invoke(IPC.openWorkspace),
     file: () => ipcRenderer.invoke(IPC.openFile),
-    recentAt: (i) => ipcRenderer.invoke(IPC.openRecentAt, i),
+    recentAt: (i, p) => ipcRenderer.invoke(IPC.openRecentAt, i, p),
     recent: () => ipcRenderer.invoke(IPC.openRecent),
     onOpened: (cb) => {
       const listener = (_e: IpcRendererEvent, r: OpenResult) => cb(r);
