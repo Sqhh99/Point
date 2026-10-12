@@ -44,10 +44,23 @@ function validate(raw: unknown): TaskRequest {
     marks: r.marks === undefined || r.marks === null ? undefined : (Array.isArray(r.marks) ? r.marks : []).map((v) => str(v, 64) ?? "").slice(0, 21),
     image: r.image === undefined || r.image === null ? undefined : assertCaptureSha(r.image),
     regenerate: r.regenerate === true,
-    parentId: r.parentId === null ? null : str(r.parentId, 64),
+    parentId: messageRef(r, "parentId", true),
     branch: branchOf(r.branch),
-    siblingOf: r.siblingOf === undefined || r.siblingOf === null ? undefined : (str(r.siblingOf, 64) ?? "")
+    siblingOf: messageRef(r, "siblingOf", false) ?? undefined
   };
+}
+
+/**
+ * Strict type check for a message-id field, done at the tasks:run entry before anything else:
+ * absent (or undefined) → undefined; `null` → null only where allowed; otherwise it must be a
+ * non-empty string of at most 64 chars. Numbers, "", objects… are rejected — never coerced.
+ */
+function messageRef(r: Record<string, unknown>, key: "parentId" | "siblingOf", allowNull: boolean): string | null | undefined {
+  if (!(key in r) || r[key] === undefined) return undefined;
+  const v = r[key];
+  if (v === null && allowNull) return null;
+  if (typeof v !== "string" || v.length === 0 || v.length > 64) throw new Error(`无效的 ${key}`);
+  return v;
 }
 
 function branchOf(v: unknown): TaskRequest["branch"] {
@@ -69,7 +82,7 @@ function placement(
     throw new Error("siblingOf 不能和 parentId / branch / regenerate 同时使用");
   }
   if (!conversationId) {
-    if (req.parentId || req.branch || req.siblingOf) throw new Error("对话不存在");
+    if (typeof req.parentId === "string" || req.branch || req.siblingOf !== undefined) throw new Error("对话不存在");
     return { history: [] };
   }
   const inConv = (id: string) => {
