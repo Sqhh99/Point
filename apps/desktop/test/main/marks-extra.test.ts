@@ -302,18 +302,19 @@ describe("一起问 (ask together)", () => {
     await expect(invoke(IPC.tasksRun, new FakeSender(), { kind: "ask", selection: "", question: "q", docId: DOC_A, marks: [a.id, b.id] })).rejects.toThrow("标记不存在");
   });
 
-  // Bug: apps/desktop/src/main/marks-ipc.ts loadBatch checks ownership only `if (docId && …)`, and
-  // tasks-ipc.ts validate() passes docId through as-is, so an empty or missing docId lets marks from any
-  // document (or several) into one question.
-  it.fails.each([[""], [undefined]])("docId %j: marks are still checked against a single document", async (docId) => {
+  // Fixed in fix/marks-followup: loadBatch requires a non-empty valid docId and checks every mark against it.
+  it.each([[""], [undefined]])("docId %j: marks are still checked against a single document", async (docId) => {
     const a = await mk(DOC_A, { kind: "text", text: "A" });
     const b = await mk(DOC_B, { kind: "text", text: "B" });
     await expect(invoke(IPC.tasksRun, new FakeSender(), { kind: "ask", selection: "", question: "q", docId, marks: [a.id, b.id] })).rejects.toThrow();
   });
 
-  it("loadBatch directly: empty docId currently returns marks from other docs (documents the bug)", async () => {
+  it("loadBatch directly: missing / empty / malformed docId is rejected; ownership always checked", async () => {
     const b = await mk(DOC_B, { kind: "text", text: "B" });
-    expect(loadBatch([b.id], "").marks.map((m) => m.docId)).toEqual([DOC_B]);
+    for (const d of ["", undefined, null]) expect(() => loadBatch([b.id], d)).toThrow("一起问需要指定文档");
+    expect(() => loadBatch([b.id], "../x")).toThrow("无效的文档 id");
+    expect(() => loadBatch([b.id], DOC_A)).toThrow("标记不存在");
+    expect(loadBatch([b.id], DOC_B).marks.map((m) => m.docId)).toEqual([DOC_B]);
   });
 
   it("region mark whose capture file was deleted afterwards → clear error, nothing stored", async () => {

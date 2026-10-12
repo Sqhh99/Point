@@ -35,7 +35,8 @@ function validate(raw: unknown): TaskRequest {
     selection: str(r.selection, 50_000) ?? "",
     context: str(r.context, 20_000),
     question: str(r.question, 4_000),
-    docId: str(r.docId, 64),
+    // "" is not a document: normalise to undefined so nothing downstream treats it as "no filter".
+    docId: str(r.docId, 64) || undefined,
     page: typeof r.page === "number" && Number.isInteger(r.page) && r.page > 0 ? r.page : undefined,
     conversationId: str(r.conversationId, 64),
     marks: r.marks === undefined || r.marks === null ? undefined : (Array.isArray(r.marks) ? r.marks : []).map((v) => str(v, 64) ?? "").slice(0, 21),

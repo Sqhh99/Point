@@ -302,7 +302,8 @@ button.link.active { color: var(--accent); }
 .mark-actions { padding: 8px 16px 0; }
 .mark-actions button { width: 100%; height: 28px; }
 .mark-actions button:disabled { opacity: 0.45; }
-.reader .block.marked > :not(.page-marker) { background: var(--highlight); border-radius: 4px; }
+/* Marked paragraph: --accent at 12% plus a 2px --accent underline. Text selection keeps the system default highlight (no selection pseudo-element override). */
+.reader .block.marked > :not(.page-marker) { background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 0 -2px 0 var(--accent); border-radius: 4px 4px 0 0; }
 .reader .block.located > :not(.page-marker) { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 .quote-marks { margin: 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
 .quote-marks li + li { margin-top: 4px; }

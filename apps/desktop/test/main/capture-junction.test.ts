@@ -110,10 +110,9 @@ describe.runIf(onWindows)("capture hardening against directory junctions (Window
   });
 
   describe(".point is a junction to an outside folder that has no captures dir yet", () => {
-    // Bug: capturesDir(root, true) runs mkdirSync(<root>/.point/captures, { recursive: true }) BEFORE
-    // checking that the real path stays inside the workspace, so the write is refused but an empty
-    // `captures` folder has already been created in the outside target.
-    it.fails("writeCapture creates nothing at all outside (not even an empty folder)", () => {
+    // Fixed: capturesDir walks .point then captures, confirming each real path is inside the workspace
+    // before creating the next level (no recursive mkdir), so nothing is created in the outside target.
+    it("writeCapture creates nothing at all outside (not even an empty folder)", () => {
       const root = tmp("point-jn-ws3-");
       const outside = tmp("point-jn-out3-");
       link(outside, join(root, ".point"));

@@ -5,7 +5,7 @@ import type { CaptureResult } from "../shared/ipc";
 import { CaptureOverlay } from "./Capture";
 import { EmptyState } from "./EmptyState";
 import { IconAsk, IconCapture, IconDiagram, IconExplain, IconMark, IconMore, IconNote } from "./icons";
-import { isCaptureKey, type Box } from "./layout";
+import { isCaptureKey, placeBar, type Box } from "./layout";
 
 export interface SelectionInfo {
   text: string;
@@ -39,7 +39,6 @@ function blockAt(el: Element | null): { blockId?: string; page?: number } {
 }
 
 const TOOLBAR_H = 36;
-const GAP = 8;
 const SHOW_DELAY_MS = 120;
 
 function pageOf(range: Range): number | undefined {
@@ -138,6 +137,9 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
   const toolbarRef = useRef<HTMLDivElement>(null);
   const timer = useRef<number | undefined>(undefined);
 
+  /** The bar's real size once rendered; a fallback before the first paint. */
+  const barSize = (fallbackWidth = 340) => ({ width: toolbarRef.current?.offsetWidth || fallbackWidth, height: toolbarRef.current?.offsetHeight || TOOLBAR_H });
+
   const close = useCallback(() => {
     window.clearTimeout(timer.current);
     setToolbar(null);
@@ -155,11 +157,10 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
     const scroller = article.parentElement!;
     const r = range.getBoundingClientRect();
     const box = scroller.getBoundingClientRect();
-    // Above the selection with an 8px gap; flip below when there is no room above.
-    const roomAbove = r.top - box.top >= TOOLBAR_H + GAP;
-    const top = (roomAbove ? r.top - box.top - GAP - TOOLBAR_H : r.bottom - box.top + GAP) + scroller.scrollTop;
-    const half = (toolbarRef.current?.offsetWidth ?? 340) / 2 + 4;
-    const left = Math.min(Math.max(r.left - box.left + r.width / 2, half), box.width - half);
+    // Above the selection with an 8px gap; flipped below when there is no room; never on top of it.
+    const p = placeBar(r, box, barSize());
+    const top = p.top + scroller.scrollTop;
+    const left = p.left;
     const where = blockAt(range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement);
     setToolbar({ top, left, sel: { text, context: contextOf(range), page: pageOf(range), blockId: where.blockId } });
   }, []);
@@ -216,10 +217,9 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
     if (!scroller) return onCapture(r);
     const box = scroller.getBoundingClientRect();
     const where = blockAt(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
-    const roomAbove = rect.y - box.top >= TOOLBAR_H + GAP;
-    const top = (roomAbove ? rect.y - box.top - GAP - TOOLBAR_H : rect.y + rect.height - box.top + GAP) + scroller.scrollTop;
-    const half = 130;
-    const left = Math.min(Math.max(rect.x - box.left + rect.width / 2, half), box.width - half);
+    const p = placeBar({ top: rect.y, left: rect.x, width: rect.width, height: rect.height }, box, barSize(260));
+    const top = p.top + scroller.scrollTop;
+    const left = p.left;
     setToolbar({ top, left, region: { ...r, ...where } });
   };
 
