@@ -1,7 +1,8 @@
 import { test, expect, _electron as electron, type ElectronApplication } from "@playwright/test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { makePdf } from "../../../packages/core/test/fixtures/make";
 
 // Requires `pnpm build` first: launches the built main entry (out/main/index.js).
 let app: ElectronApplication;
@@ -70,4 +71,52 @@ test("settings never return the plaintext API key", async () => {
   expect(result.hasKey).toBe(true);
   expect(result.afterSet).not.toContain(dummy);
   expect(result.afterGet).not.toContain(dummy);
+});
+
+/** Makes the next native open dialog return `paths` without showing UI. */
+async function stubOpenDialog(paths: string[]): Promise<void> {
+  await app.evaluate(({ dialog }, filePaths) => {
+    dialog.showOpenDialog = (async () => ({ canceled: false, filePaths })) as typeof dialog.showOpenDialog;
+  }, paths);
+}
+
+test("imports documents into a workspace and renders them in the reader", async () => {
+  const win = await app.firstWindow();
+  const root = mkdtempSync(join(tmpdir(), "point-ws-"));
+  const src = mkdtempSync(join(tmpdir(), "point-src-"));
+  const md = join(src, "entropy.md");
+  writeFileSync(md, "# 熵的定义\n\n熵是系统无序程度的度量。\n\n- 广延量\n");
+  const pdf = join(src, "paper.pdf");
+  writeFileSync(pdf, makePdf([["Entropy in PDF"], ["Second page line"]]));
+
+  await stubOpenDialog([root]);
+  await win.getByRole("button", { name: "选择工作区…" }).click();
+  await expect(win.locator(".workspace-name")).toHaveText(/point-ws-/);
+
+  await stubOpenDialog([md]);
+  await win.getByRole("button", { name: "导入文档" }).click();
+  const list = win.getByTestId("doc-list");
+  await expect(list.getByRole("button", { name: /熵的定义/ })).toBeVisible();
+  const reader = win.getByTestId("reader");
+  await expect(reader.locator("h1")).toHaveText("熵的定义");
+  await expect(reader.locator("li")).toHaveText("广延量");
+
+  await stubOpenDialog([pdf]);
+  await win.getByRole("button", { name: "导入文档" }).click();
+  await expect(list.getByRole("button", { name: /paper/ })).toBeVisible();
+  await expect(reader).toContainText("Entropy in PDF");
+  await expect(reader.locator('[data-page="2"]')).toHaveText("Second page line");
+
+  const docs = await win.evaluate(() => window.point.docs.list());
+  expect(docs.map((d) => [d.type, d.path.startsWith("docs/")])).toEqual([
+    ["pdf", true],
+    ["md", true]
+  ]);
+});
+
+test("settings page is reachable from the library", async () => {
+  const win = await app.firstWindow();
+  await win.getByRole("button", { name: "设置" }).click();
+  await expect(win.getByRole("heading", { name: "模型设置" })).toBeVisible();
+  await win.getByRole("button", { name: "返回阅读" }).click();
 });
