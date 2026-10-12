@@ -365,10 +365,23 @@ test("status bar shows workspace, doc and model; region capture attaches a scree
   await win.mouse.up();
   await expect(overlay).toBeHidden();
   const attached = win.getByTestId("attached-image");
-  await expect(attached).toContainText("已附截图");
+  const thumb = attached.locator("img");
+  await expect(thumb).toBeVisible();
+  await expect.poll(() => thumb.evaluate((i: HTMLImageElement) => i.naturalWidth)).toBeGreaterThan(0);
+  expect((await thumb.boundingBox())?.height).toBe(48);
+  expect(await thumb.getAttribute("src")).toMatch(/^point-capture:\/\/[0-9a-f]{64}$/);
+  // × removes it; capture again for the question below.
+  await attached.getByRole("button", { name: "移除截图" }).click();
+  await expect(attached).toBeHidden();
+  await win.getByTestId("capture-button").click();
+  await win.mouse.move(box.x + 20, box.y + 60);
+  await win.mouse.down();
+  await win.mouse.move(box.x + 200, box.y + 140, { steps: 5 });
+  await win.mouse.up();
+  await expect(thumb).toBeVisible();
 
   const captures = readdirSync(join(ws, ".point", "captures"));
-  expect(captures).toHaveLength(1);
+  expect(captures.length).toBeGreaterThanOrEqual(1);
   expect(captures[0]).toMatch(/^[0-9a-f]{64}\.png$/);
   expect(readFileSync(join(ws, ".point", "captures", captures[0])).subarray(1, 4).toString()).toBe("PNG");
 
@@ -379,6 +392,30 @@ test("status bar shows workspace, doc and model; region capture attaches a scree
   const log = win.getByTestId("chat-log");
   await expect(log.locator('[data-role="assistant"]').last()).toContainText("已收到 1 张截图");
   await expect(attached).toBeHidden();
+
+  // The question bubble renders the screenshot; clicking opens the large view, Esc / click closes.
+  const bubble = log.getByTestId("bubble-image").last().locator("img");
+  await expect(bubble).toBeVisible();
+  await expect.poll(() => bubble.evaluate((i: HTMLImageElement) => i.naturalWidth)).toBeGreaterThan(0);
+  expect((await bubble.boundingBox())!.width).toBeLessThanOrEqual(240);
+  await bubble.click();
+  const lightbox = win.getByTestId("lightbox");
+  await expect(lightbox).toBeVisible();
+  await expect.poll(() => lightbox.locator("img").evaluate((i: HTMLImageElement) => i.naturalWidth)).toBeGreaterThan(0);
+  await win.screenshot({ path: join(import.meta.dirname, "..", "test-results", "capture-lightbox.png") });
+  await win.keyboard.press("Escape");
+  await expect(lightbox).toBeHidden();
+  await bubble.click();
+  await lightbox.click();
+  await expect(lightbox).toBeHidden();
+
+  // Protocol refuses anything but a canonical sha URL.
+  const status = (u: string) => win.evaluate((x) => new Promise<boolean>((ok) => { const i = new Image(); i.onload = () => ok(true); i.onerror = () => ok(false); i.src = x; }), u);
+  const sha = captures[0].slice(0, 64);
+  expect(await status(`point-capture://${sha}`)).toBe(true);
+  expect(await status(`point-capture://${sha}/x`)).toBe(false);
+  expect(await status(`point-capture://${sha}?a=1`)).toBe(false);
+  expect(await status(`point-capture://${"0".repeat(64)}`)).toBe(false);
 
   // The renderer cannot name a path: only a 64-hex sha is accepted.
   await expect(win.evaluate(() => window.point.tasks.run({ kind: "ask", selection: "", question: "q", image: "../index.db" }))).rejects.toThrow(/无效的截图标识/);

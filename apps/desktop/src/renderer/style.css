@@ -237,7 +237,14 @@ button.link.active { color: var(--accent); }
 .capture-overlay { position: fixed; z-index: 30; cursor: crosshair; background: var(--hover); user-select: none; touch-action: none; }
 .capture-rect { position: absolute; outline: 1.5px dashed var(--accent); background: var(--highlight); pointer-events: none; }
 .capture-hint { position: absolute; top: 52px; left: 50%; transform: translateX(-50%); padding: 4px 12px; border-radius: 6px; background: var(--bg-elevated); border: 1px solid var(--border); color: var(--muted); font-size: 12px; pointer-events: none; }
-.quote-image { font-size: 12px; color: var(--muted); }
+.quote-image { display: block; padding: 0; margin: 2px 0 4px; border: none; background: none; cursor: zoom-in; }
+.quote-image img { display: block; max-width: 240px; max-height: 240px; border-radius: 4px; border: 1px solid var(--line); }
+.attached-thumb { position: relative; display: inline-block; margin-bottom: 6px; }
+.attached-thumb img { display: block; height: 48px; width: auto; max-width: 160px; object-fit: cover; border-radius: 4px; border: 1px solid var(--line); }
+.thumb-remove { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; padding: 0; display: grid; place-items: center; border-radius: 50%; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--muted); font-size: 12px; line-height: 1; }
+.thumb-remove:hover { color: var(--text); background: var(--hover); }
+.lightbox { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 24px; background: var(--panel); cursor: zoom-out; }
+.lightbox img { max-width: 100%; max-height: 100%; border-radius: 4px; background: var(--bg-elevated); }
 
 /* status bar */
 .statusbar { display: flex; align-items: center; gap: 12px; height: 24px; padding: 0 12px; background: var(--panel); border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; user-select: none; min-width: 0; }

@@ -1,10 +1,10 @@
-import { ipcMain } from "electron";
+import { ipcMain, protocol, type WebContents } from "electron";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ImageInput } from "@point/core";
 import { IPC, type CaptureRect, type CaptureResult } from "../shared/ipc.js";
-import { need } from "./workspace.js";
+import { need, workspacePath } from "./workspace.js";
 
 /** Captures are stored by content hash; the renderer only ever names one by this sha. */
 const SHA = /^[0-9a-f]{64}$/;
@@ -73,5 +73,74 @@ export function registerCaptureIpc(): void {
     const size = img.getSize();
     const sha = writeCapture(ws.root, img.toPNG());
     return { sha, width: size.width, height: size.height };
+  });
+}
+
+/** Read-only thumbnails: `point-capture://<sha>` serves `<workspace>/.point/captures/<sha>.png`. */
+export const CAPTURE_SCHEME = "point-capture";
+
+/** Must run before app `ready`. Only standard + secure: no fetch, CORS or CSP bypass. */
+export function registerCaptureScheme(): void {
+  protocol.registerSchemesAsPrivileged([{ scheme: CAPTURE_SCHEME, privileges: { standard: true, secure: true } }]);
+}
+
+const notFound = () => new Response("Not Found", { status: 404, headers: { "Content-Type": "text/plain" } });
+
+/** Captures are content-addressed, so a URL never changes meaning. */
+export const CAPTURE_HEADERS = { "Content-Type": "image/png", "Cache-Control": "private, max-age=31536000, immutable" } as const;
+
+/**
+ * Resolves `point-capture://<sha>` against a workspace root. The sha is the URL hostname, validated by
+ * assertCaptureSha; the raw URL must also be exactly the canonical `point-capture://<sha>/`,
+ * because the standard-scheme parser lowercases hosts and decodes some escapes. Any path, query,
+ * hash, bad sha, missing file, symlink, directory or missing workspace is a 404.
+ */
+export function captureResponse(root: string | null, rawUrl: string): Response {
+  if (!root) return notFound();
+  let u: URL;
+  try {
+    u = new URL(rawUrl);
+  } catch {
+    return notFound();
+  }
+  if (u.protocol !== `${CAPTURE_SCHEME}:`) return notFound();
+  // Standard scheme: Chromium hands us `point-capture://<sha>/`, so the path is exactly "/".
+  if (u.pathname !== "/" || u.search !== "" || u.hash !== "" || u.username || u.password || u.port) return notFound();
+  let sha: string;
+  try {
+    sha = assertCaptureSha(u.hostname);
+  } catch {
+    return notFound();
+  }
+  if (rawUrl !== `${CAPTURE_SCHEME}://${sha}/`) return notFound();
+  try {
+    const file = capturePath(root, sha);
+    if (!lstatSync(file).isFile()) return notFound(); // lstat: a symlink is not a file
+    return new Response(readFileSync(file), { status: 200, headers: CAPTURE_HEADERS });
+  } catch {
+    return notFound();
+  }
+}
+
+/**
+ * Which workspace a webContents may read captures from. Today there is one global workspace, bound
+ * to every window registered via bindCaptureProtocol; unbound or destroyed webContents get null.
+ */
+const bound = new Set<WebContents>();
+export function workspaceForWebContents(wc: WebContents | null | undefined): string | null {
+  if (!wc || wc.isDestroyed() || !bound.has(wc)) return null;
+  return workspacePath();
+}
+
+/** After app `ready`: serve captures on the window's own session, scoped to that window's workspace. */
+export function bindCaptureProtocol(wc: WebContents): void {
+  bound.add(wc);
+  wc.once("destroyed", () => bound.delete(wc));
+  const ses = wc.session;
+  if (ses.protocol.isProtocolHandled(CAPTURE_SCHEME)) return;
+  ses.protocol.handle(CAPTURE_SCHEME, (req) => {
+    // The request carries no webContents; resolve via the live window bound to this session.
+    const owner = [...bound].find((w) => !w.isDestroyed() && w.session === ses);
+    return req.method === "GET" ? captureResponse(workspaceForWebContents(owner), req.url) : notFound();
   });
 }
