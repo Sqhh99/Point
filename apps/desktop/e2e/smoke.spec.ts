@@ -6,6 +6,8 @@ import { makePdf } from "../../../packages/core/test/fixtures/make";
 
 // Requires `pnpm build` first: launches the built main entry (out/main/index.js).
 let app: ElectronApplication;
+let failed = false;
+const resultsDir = join(import.meta.dirname, "..", "test-results");
 
 // Every test shares one Electron app and builds on the state the previous ones left
 // (workspace, imported docs, the note from 插入笔记). Run them as one serial group so a
@@ -25,9 +27,25 @@ test.beforeAll(async () => {
     args: [...extra, join(import.meta.dirname, "..", "out", "main", "index.js")],
     env: { ...env, POINT_USER_DATA: mkdtempSync(join(tmpdir(), "point-e2e-")), POINT_FAKE_LLM: "1" }
   });
+  // Playwright's `use.trace` doesn't cover Electron, so trace the app context by hand
+  // and keep it only when something failed (CI uploads test-results/ on failure).
+  await app.context().tracing.start({ screenshots: true, snapshots: true });
 });
 
-test.afterAll(async () => {
+test.afterEach(async ({}, testInfo) => {
+  if (testInfo.status === testInfo.expectedStatus) return;
+  failed = true;
+  const win = await app?.firstWindow().catch(() => undefined);
+  await win
+    ?.screenshot({ path: join(resultsDir, `fail-${testInfo.retry}-${testInfo.title.replace(/[^\w\u4e00-\u9fff-]+/g, "_")}.png`) })
+    .catch(() => undefined);
+});
+
+test.afterAll(async ({}, testInfo) => {
+  await app
+    ?.context()
+    .tracing.stop(failed ? { path: join(resultsDir, `trace-retry${testInfo.retry}.zip`) } : undefined)
+    .catch(() => undefined);
   await app?.close();
 });
 
