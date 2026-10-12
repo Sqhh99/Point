@@ -14,7 +14,8 @@ const { registerOpenIpc, openPath, resolveOpenTarget, scratchRoot } = await impo
 const { pushRecent, RECENT_MAX } = await import("../../src/main/recent.js");
 registerOpenIpc();
 
-const tmp = (p: string) => mkdtempSync(join(tmpdir(), p));
+// .native: full names on Windows (not RUNNER~1 short names), /private/var on macOS — same as resolveOpenTarget.
+const tmp = (p: string) => realpathSync.native(mkdtempSync(join(tmpdir(), p)));
 const s = () => new FakeSender();
 const mdFile = (name = "a.md") => {
   const f = join(tmp("point-src-"), name);
@@ -50,7 +51,7 @@ describe("single-file mode", () => {
     await openPath(mdFile());
     await openPath(root);
     // resolveOpenTarget returns the real path (macOS: /var -> /private/var)
-    expect(ws.workspacePath()).toBe(realpathSync(root));
+    expect(ws.workspacePath()).toBe(realpathSync.native(root));
     const recent = (await invoke(IPC.openRecent, s())) as RecentItem[];
     expect(recent.map((x: { kind: string }) => x.kind)).toEqual(["workspace", "file"]);
     expect(recent.some((x: { path: string }) => x.path === scratchRoot())).toBe(false);
@@ -89,7 +90,7 @@ describe("resolveOpenTarget", () => {
     const f = mdFile();
     const l2 = join(tmp("point-ln-"), "b.md");
     symlinkSync(f, l2);
-    expect(resolveOpenTarget(l2)).toEqual({ kind: "file", path: (await import("node:fs")).realpathSync(f) });
+    expect(resolveOpenTarget(l2)).toEqual({ kind: "file", path: realpathSync.native(f) });
   });
 });
 
@@ -98,9 +99,9 @@ describe("recent by index", () => {
     const f = mdFile();
     await openPath(f);
     ws.closeWorkspace();
-    const r = (await invoke(IPC.openRecentAt, s(), 0, realpathSync(f))) as OpenResult;
+    const r = (await invoke(IPC.openRecentAt, s(), 0, realpathSync.native(f))) as OpenResult;
     expect(r.doc?.type).toBe("md");
-    for (const bad of [-1, 1, 99, 0.5, "0", null, "/etc/passwd"]) await expect(invoke(IPC.openRecentAt, s(), bad, realpathSync(f))).rejects.toThrow("无效的最近记录");
+    for (const bad of [-1, 1, 99, 0.5, "0", null, "/etc/passwd"]) await expect(invoke(IPC.openRecentAt, s(), bad, realpathSync.native(f))).rejects.toThrow("无效的最近记录");
     await expect(invoke(IPC.openRecentAt, s(), 0, "/somewhere/else.md")).rejects.toThrow("无效的最近记录");
     await expect(invoke(IPC.openRecentAt, s(), 0)).rejects.toThrow("无效的最近记录");
   });
@@ -132,7 +133,7 @@ describe("open error copy", () => {
     await expect(openPath(empty)).rejects.toThrow(OPEN_ERROR.empty);
     const f = mdFile();
     await openPath(f);
-    const p = realpathSync(f);
+    const p = realpathSync.native(f);
     rmSync(p);
     await expect(invoke(IPC.openRecentAt, s(), 0, p)).rejects.toThrow(OPEN_ERROR.missing);
     expect(((await invoke(IPC.openRecent, s())) as RecentItem[]).some((r) => r.path === p)).toBe(false);
