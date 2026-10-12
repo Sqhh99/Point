@@ -10,13 +10,14 @@
     "build": "pnpm -r run build",
     "lint": "eslint .",
     "typecheck": "pnpm -r run typecheck",
-    "test": "vitest run",
+    "test": "vitest run && pnpm --filter @point/desktop run test:main",
     "e2e": "pnpm --filter @point/desktop run e2e",
     "dev": "pnpm --filter @point/desktop run dev"
   },
   "devDependencies": {
     "@eslint/js": "^9.12.0",
     "@types/node": "^20.19.43",
+    "@vitest/coverage-v8": "^2.1.9",
     "eslint": "^9.12.0",
     "typescript": "^5.6.3",
     "typescript-eslint": "^8.8.1",

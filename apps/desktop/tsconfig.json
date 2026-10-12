@@ -6,5 +6,5 @@
     "jsx": "react-jsx",
     "paths": { "@point/core": ["../../packages/core/src/index.ts"] }
   },
-  "include": ["src", "e2e", "../../packages/core/src/**/*.d.ts", "electron.vite.config.ts", "playwright.config.ts"]
+  "include": ["src", "e2e", "test", "vitest.config.ts", "../../packages/core/src/**/*.d.ts", "electron.vite.config.ts", "playwright.config.ts"]
 }
