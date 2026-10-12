@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Verifies packaged builds in release/: for every unpacked app (and, on macOS, every dmg;
-// on Windows, the native-arch NSIS installer) check that better_sqlite3.node exists,
+// on Windows, the native-arch Inno Setup installer, installed then uninstalled) check that better_sqlite3.node exists,
 // is unpacked from the asar, matches the target arch, and that the loader deps are in the
 // asar. Then launch every native-arch build with POINT_SMOKE_OUT to open a real DB.
 import { execFileSync, spawnSync } from "node:child_process";
@@ -93,6 +93,7 @@ function smoke(label, exe) {
   else fail(`${label}: smoke failed (exit ${r.status}): ${JSON.stringify(report)}`);
 }
 
+const archs = ["x64", "arm64"];
 const archOf = (name) => (name.includes("arm64") ? "arm64" : "x64");
 const entries = readdirSync(release);
 console.log(`release/: ${entries.join(", ")}`);
@@ -135,36 +136,32 @@ if (process.platform === "darwin") {
   }
 }
 
-// 3) Windows: unpack every installer's embedded app archive(s) with 7-Zip and check them
-//    (covers the cross-arch installer); then silently install the native-arch one and launch it.
+// 3) Windows: Inno Setup installers. Both arches' unpacked dirs were checked above; here
+//    silently install the native-arch installer, check + launch it, then silently uninstall.
 if (process.platform === "win32") {
-  const exes = entries.filter((f) => f.endsWith(".exe"));
-  if (exes.length === 0) fail("no installer .exe in release/");
-  const sevenZip = (args) => execFileSync("7z", ["x", "-y", ...args], { stdio: "ignore" });
+  const exes = entries.filter((f) => /-setup\.exe$/.test(f));
+  if (exes.length !== archs.length) fail(`expected ${archs.length} Inno installers, found: ${exes.join(", ") || "none"}`);
+  if (entries.some((f) => f.endsWith(".exe") && !f.endsWith("-setup.exe"))) fail("stray non-Inno .exe in release/");
   for (const inst of exes) {
-    const outer = mkdtempSync(join(tmpdir(), "point-nsis-"));
-    sevenZip([`-o${outer}`, join(release, inst)]);
-    const payloads = findFiles(outer, "app-64.7z").concat(findFiles(outer, "app-arm64.7z"));
-    if (payloads.length === 0) fail(`${inst}: no app-*.7z payload inside installer`);
-    for (const payload of payloads) {
-      const arch = payload.endsWith("app-arm64.7z") ? "arm64" : "x64";
-      const inner = mkdtempSync(join(tmpdir(), "point-payload-"));
-      sevenZip([`-o${inner}`, payload]);
-      checkApp(`${inst} [${arch} payload]`, join(inner, "resources"), join(inner, "Point.exe"), arch);
-      const exeArch = binaryArch(join(inner, "Point.exe"));
-      if (exeArch === arch) ok(`${inst} [${arch} payload]: Point.exe is ${exeArch}`);
-      else fail(`${inst} [${arch} payload]: Point.exe is ${exeArch}`);
-    }
+    const exeArch = binaryArch(join(release, inst));
+    if (exeArch === "ia32" || exeArch === "x64") ok(`${inst}: valid PE installer`);
+    else fail(`${inst}: not a PE installer (${exeArch})`);
     if (archOf(inst) !== process.arch) continue; // cannot install a foreign-arch build here
-    const dir = mkdtempSync(join(tmpdir(), "point-install-"));
-    // NSIS: /S silent, /D must be last and unquoted.
-    const r = spawnSync(join(release, inst), ["/S", "/currentuser", `/D=${dir}`], { stdio: "inherit", timeout: 300_000 });
+    const dir = join(mkdtempSync(join(tmpdir(), "point-install-")), "Point");
+    const r = spawnSync(join(release, inst), ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CURRENTUSER", `/DIR=${dir}`], { stdio: "inherit", timeout: 300_000 });
     if (r.status !== 0 || !existsSync(join(dir, "Point.exe"))) {
       fail(`${inst}: silent install failed (exit ${r.status})`);
       continue;
     }
+    ok(`${inst}: silently installed to ${dir}`);
     checkApp(`${inst} (installed)`, join(dir, "resources"), join(dir, "Point.exe"), process.arch);
     smoke(`${inst} (installed)`, join(dir, "Point.exe"));
+    const u = spawnSync(join(dir, "unins000.exe"), ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"], { stdio: "inherit", timeout: 300_000 });
+    // The uninstaller re-spawns itself from %TEMP%; wait for it to remove the files.
+    const deadline = Date.now() + 120_000;
+    while (existsSync(join(dir, "Point.exe")) && Date.now() < deadline) spawnSync(process.execPath, ["-e", "setTimeout(()=>{},1000)"]);
+    if (u.status === 0 && !existsSync(join(dir, "Point.exe"))) ok(`${inst}: silently uninstalled`);
+    else fail(`${inst}: uninstall failed (exit ${u.status}), Point.exe still present: ${existsSync(join(dir, "Point.exe"))}`);
   }
 }
 

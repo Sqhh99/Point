@@ -21,11 +21,10 @@ asarUnpack:
 artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 # Arches (x64 + arm64) come from scripts/package.mjs, one electron-builder run per arch:
 # a multi-arch run reused one arch's better_sqlite3.node for the other on macOS.
+# Windows: electron-builder only emits the unpacked app dir; installer/point.iss
+# (Inno Setup) turns it into the installer. See scripts/package.mjs.
 win:
-  target: nsis
-nsis:
-  oneClick: false
-  allowToChangeInstallationDirectory: true
+  target: dir
 mac:
   category: public.app-category.education
   target: dmg
