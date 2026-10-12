@@ -11,7 +11,7 @@ describe("migrate", () => {
     const db = new Database(":memory:");
     expect(migrate(db)).toBe(MIGRATIONS.length);
     expect(version(db)).toBe(MIGRATIONS.length);
-    expect(tables(db)).toEqual(["conversations", "docs", "messages"]);
+    expect(tables(db)).toEqual(["branch_origin", "conversations", "docs", "messages"]);
   });
 
   it("adopts a v0.1.0 database (user_version 0, no meta column) without touching its rows", () => {

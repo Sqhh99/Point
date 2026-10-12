@@ -170,7 +170,7 @@ describe("real v0.1.0 workspace fixture", () => {
     const broken = [
       ...MIGRATIONS,
       // Realistic 002: DDL + data rewrite, then a failure part-way through.
-      "CREATE TABLE marks (id TEXT PRIMARY KEY); ALTER TABLE messages ADD COLUMN parent_id TEXT; UPDATE messages SET content = 'x';",
+      "CREATE TABLE marks (id TEXT PRIMARY KEY); ALTER TABLE messages ADD COLUMN probe TEXT; UPDATE messages SET content = 'x';",
       "SELECT nope FROM missing;"
     ];
     withDb(db, (d) => expect(() => migrate(d, broken)).toThrow(/missing/));
@@ -202,7 +202,7 @@ describe("other on-disk starting points", () => {
     withDb(join(root, ".point", "index.db"), (d) => {
       expect(ver(d)).toBe(LATEST);
       expect(shape(d)).toEqual(freshShape());
-      expect(Object.keys(shape(d)).sort()).toEqual(["conversations", "docs", "messages"]);
+      expect(Object.keys(shape(d)).sort()).toEqual(["branch_origin", "conversations", "docs", "messages"]);
     });
   });
 

@@ -83,6 +83,8 @@ export interface ConversationMeta {
 export interface StoredMessage {
   id: string;
   conversationId: string;
+  /** Previous message in this thread; null for the first message. */
+  parentId: string | null;
   role: "user" | "assistant";
   content: string;
   kind?: TaskKind;
