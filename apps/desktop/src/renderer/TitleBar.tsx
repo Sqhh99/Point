@@ -6,6 +6,7 @@ interface Props {
   workspace: string | null;
   fileName: string | null;
   onOpenWorkspace(): void;
+  onOpenFile(): void;
   onImport(): void;
 }
 
@@ -27,7 +28,8 @@ export function TitleBar(p: Props) {
           {menu && (
             <div className="menu" role="menu" onMouseLeave={() => setMenu(false)}>
               <button role="menuitem" onClick={() => { setMenu(false); p.onOpenWorkspace(); }}>工作区…</button>
-              <button role="menuitem" disabled={!p.workspace} onClick={() => { setMenu(false); p.onImport(); }}>导入文件…</button>
+              <button role="menuitem" onClick={() => { setMenu(false); p.onOpenFile(); }}>单个文件…</button>
+              <button role="menuitem" disabled={!p.workspace} onClick={() => { setMenu(false); p.onImport(); }}>导入到工作区…</button>
             </div>
           )}
         </div>

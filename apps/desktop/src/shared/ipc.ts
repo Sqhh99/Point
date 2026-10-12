@@ -37,6 +37,20 @@ export interface DocMeta {
   importedAt: string;
 }
 
+export interface RecentItem {
+  kind: "workspace" | "file";
+  /** Absolute path on disk. */
+  path: string;
+  name: string;
+  openedAt: string;
+}
+
+/** Result of opening something: the workspace now active, plus the document to show when a file was opened. */
+export interface OpenResult {
+  workspace: WorkspaceInfo;
+  doc?: DocMeta;
+}
+
 export interface WorkspaceInfo {
   path: string | null;
 }
@@ -133,6 +147,20 @@ export interface PointAPI {
     import(): Promise<DocMeta[]>;
     get(id: string): Promise<ParsedDoc>;
   };
+  open: {
+    /** Folder picker → becomes the workspace. */
+    workspace(): Promise<OpenResult>;
+    /** Single-file picker; without a workspace the file goes into a private scratch workspace. */
+    file(): Promise<OpenResult>;
+    /**
+     * The recent entry at `index` in main's own list. `path` is only the menu's copy, used to detect a
+     * stale menu: main opens its own stored path, and refuses when they no longer match.
+     */
+    recentAt(index: number, path: string): Promise<OpenResult>;
+    recent(): Promise<RecentItem[]>;
+    /** Fires when main opened something on its own, e.g. a file or folder dropped onto the window. */
+    onOpened(cb: (r: OpenResult) => void): () => void;
+  };
   tasks: {
     run(req: TaskRequest): Promise<TaskStarted>;
     cancel(requestId: string): Promise<void>;
@@ -160,6 +188,11 @@ export interface PointAPI {
 
 export const IPC = {
   windowAction: "window:action",
+  openWorkspace: "open:workspace",
+  openFile: "open:file",
+  openRecentAt: "open:recentAt",
+  openOpened: "open:opened",
+  openRecent: "open:recent",
   windowMaximized: "window:maximized",
   settingsGet: "settings:get",
   settingsUpdate: "settings:update",

@@ -1,6 +1,6 @@
 import type { DocMeta } from "../shared/ipc";
 
-const TYPE_LABEL: Record<DocMeta["type"], string> = { pdf: "PDF", docx: "Word", md: "MD" };
+const TYPE_LABEL: Record<DocMeta["type"], string> = { pdf: "PDF", docx: "Word", md: "MD", xlsx: "Excel" };
 
 interface Props {
   open: boolean;
@@ -11,6 +11,7 @@ interface Props {
   onSelect(id: string): void;
   onChooseWorkspace(): void;
   onImport(): void;
+  onOpenFile(): void;
   onOpenSettings(): void;
   settingsActive: boolean;
 }
@@ -32,9 +33,14 @@ export function Library(p: Props) {
       {p.open && (
         <>
           <div className="library-actions">
-            <button onClick={p.onImport} disabled={!p.workspace}>
-              导入文档
-            </button>
+            {p.workspace ? (
+              <button onClick={p.onImport}>导入文档</button>
+            ) : (
+              <>
+                <button onClick={p.onChooseWorkspace}>打开工作区</button>
+                <button onClick={p.onOpenFile}>打开文件</button>
+              </>
+            )}
           </div>
           <ul className="doc-list" data-testid="doc-list">
             {p.docs.map((d) => (

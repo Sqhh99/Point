@@ -11,13 +11,13 @@
   },
   "dependencies": {
     "@types/mdast": "^4.0.4",
+    "jszip": "^3.10.2",
     "mammoth": "^1.13.0",
     "pdfjs-dist": "4.10.38",
     "remark-gfm": "^4.0.1",
     "remark-parse": "^11.0.0",
     "unified": "^11.0.5",
-    "yaml": "^2.9.1",
-    "jszip": "^3.10.2"
-  },
-  "devDependencies": {}
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "yaml": "^2.9.1"
+  }
 }

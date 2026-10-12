@@ -106,6 +106,14 @@ async function stubSaveDialog(filePath: string): Promise<void> {
   }, filePath);
 }
 
+test("empty state offers 打开工作区 and 打开文件", async () => {
+  const win = await app.firstWindow();
+  const empty = win.getByTestId("empty-state");
+  await expect(empty.getByRole("button", { name: /打开工作区/ })).toBeVisible();
+  await expect(empty.getByRole("button", { name: /打开文件/ })).toBeVisible();
+  await win.screenshot({ path: join(import.meta.dirname, "..", "test-results", "empty-state.png") });
+});
+
 test("imports documents into a workspace and renders them in the reader", async () => {
   const win = await app.firstWindow();
   const root = mkdtempSync(join(tmpdir(), "point-ws-"));
@@ -133,8 +141,18 @@ test("imports documents into a workspace and renders them in the reader", async 
   await expect(reader).toContainText("Entropy in PDF");
   await expect(reader.locator('[data-page="2"]')).toHaveText("Second page line");
 
+  // CSV goes through the same SheetJS path as .xlsx (the real-xlsx cases live in core's xlsx.test.ts).
+  const sheet = join(src, "scores.csv");
+  writeFileSync(sheet, "姓名,分数\n张三,90\n");
+  await stubOpenDialog([sheet]);
+  await win.getByRole("button", { name: "导入文档" }).click();
+  await win.getByRole("button", { name: "Excel scores" }).click();
+  await expect(reader.locator("td").filter({ hasText: "张三" })).toBeVisible();
+  await win.screenshot({ path: join(import.meta.dirname, "..", "test-results", "xlsx.png") });
+
   const docs = await win.evaluate(() => window.point.docs.list());
   expect(docs.map((d) => [d.type, d.path.startsWith("docs/")])).toEqual([
+    ["xlsx", true],
     ["pdf", true],
     ["md", true]
   ]);

@@ -1,4 +1,4 @@
-export type DocType = "pdf" | "docx" | "md";
+export type DocType = "pdf" | "docx" | "md" | "xlsx";
 
 interface BlockBase {
   /** Stable within a document: same input always yields the same ids. */

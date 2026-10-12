@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Block, ParsedDoc, TaskKind } from "@point/core";
 import type { JSX } from "react";
+import { EmptyState } from "./EmptyState";
 import { IconAsk, IconDiagram, IconExplain, IconNote } from "./icons";
 
 export interface SelectionInfo {
@@ -88,11 +89,14 @@ function BlockView({ b }: { b: Block }) {
 interface ReaderProps {
   docId: string | null;
   hasWorkspace: boolean;
+  onOpenWorkspace(): void;
+  onOpenFile(): void;
+  onOpenRecent(index: number, path: string): void;
   onDocLoaded?(doc: ParsedDoc | null): void;
   onAction(kind: TaskKind, sel: SelectionInfo): void;
 }
 
-export function Reader({ docId, hasWorkspace, onDocLoaded, onAction }: ReaderProps) {
+export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorkspace, onOpenFile, onOpenRecent }: ReaderProps) {
   const [doc, setDoc] = useState<ParsedDoc | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toolbar, setToolbar] = useState<{ top: number; left: number; sel: SelectionInfo } | null>(null);
@@ -179,7 +183,12 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction }: ReaderPro
     };
   }, [docId]);
 
-  if (!docId) return <div className="placeholder">{hasWorkspace ? "从左侧导入或选择一篇文档开始阅读" : "先在左上角选择一个工作区文件夹"}</div>;
+  if (!docId)
+    return hasWorkspace ? (
+      <div className="placeholder">从左侧选择一篇文档，或者再打开一个文件</div>
+    ) : (
+      <EmptyState onOpenWorkspace={onOpenWorkspace} onOpenFile={onOpenFile} onOpenRecent={onOpenRecent} />
+    );
   if (error) return <div className="placeholder">无法打开文档：{error}</div>;
   if (!doc) return <div className="placeholder">正在解析…</div>;
 

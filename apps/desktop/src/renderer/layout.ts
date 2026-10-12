@@ -20,3 +20,16 @@ export function isToggleLibraryKey(
   if (e.repeat || e.key !== "\\" || e.altKey || e.shiftKey) return false;
   return platform === "darwin" ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
 }
+
+export type OpenShortcut = "workspace" | "file";
+
+/** ⌘O / ⌘⇧O on macOS, Ctrl+O / Ctrl+Shift+O elsewhere; key repeat and the other platform's modifier are ignored. */
+export function openShortcutOf(
+  e: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey" | "repeat">,
+  platform: string
+): OpenShortcut | null {
+  if (e.repeat || e.altKey || e.key.toLowerCase() !== "o") return null;
+  const mod = platform === "darwin" ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+  if (!mod) return null;
+  return e.shiftKey ? "file" : "workspace";
+}

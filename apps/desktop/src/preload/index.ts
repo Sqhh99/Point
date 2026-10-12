@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
-import { IPC, type ChatEvent, type PointAPI, type TaskEvent } from "../shared/ipc.js";
+import { IPC, type ChatEvent, type OpenResult, type PointAPI, type TaskEvent } from "../shared/ipc.js";
 
 const api: PointAPI = {
   platform: process.platform,
@@ -29,6 +29,17 @@ const api: PointAPI = {
   workspace: {
     get: () => ipcRenderer.invoke(IPC.workspaceGet),
     choose: () => ipcRenderer.invoke(IPC.workspaceChoose)
+  },
+  open: {
+    workspace: () => ipcRenderer.invoke(IPC.openWorkspace),
+    file: () => ipcRenderer.invoke(IPC.openFile),
+    recentAt: (i, p) => ipcRenderer.invoke(IPC.openRecentAt, i, p),
+    recent: () => ipcRenderer.invoke(IPC.openRecent),
+    onOpened: (cb) => {
+      const listener = (_e: IpcRendererEvent, r: OpenResult) => cb(r);
+      ipcRenderer.on(IPC.openOpened, listener);
+      return () => ipcRenderer.removeListener(IPC.openOpened, listener);
+    }
   },
   docs: {
     list: () => ipcRenderer.invoke(IPC.docsList),

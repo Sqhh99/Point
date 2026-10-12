@@ -3,6 +3,7 @@ import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, extname, join, resolve, sep } from "node:path";
+import { friendlyParseError } from "./open-errors.js";
 import { DbTooNewError, NoteStore, docTypeOf, migrate, parseDocument, type ParsedDoc } from "@point/core";
 import type { DocMeta } from "../shared/ipc.js";
 
@@ -111,5 +112,10 @@ export async function getDoc(id: string): Promise<ParsedDoc> {
   if (!row) throw new Error("文档不存在");
   const abs = resolve(ws.root, row.path);
   if (!abs.startsWith(join(ws.root, "docs") + sep)) throw new Error("文档路径无效");
-  return parseDocument(row.type, readFileSync(abs), row.title);
+  const data = readFileSync(abs);
+  try {
+    return await parseDocument(row.type, data, row.title);
+  } catch (err) {
+    throw friendlyParseError(err, data.byteLength);
+  }
 }

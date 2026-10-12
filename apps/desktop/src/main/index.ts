@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { runSmoke } from "./smoke.js";
 import { registerDocsIpc } from "./docs-ipc.js";
 import { registerIpc } from "./ipc.js";
+import { interceptDrops, registerOpenIpc } from "./open-ipc.js";
 import { registerTasksIpc } from "./tasks-ipc.js";
 import { registerWindowIpc, titleBarOptions, watchMaximized } from "./window-ipc.js";
 import { notifyIfUpdateAvailable } from "./update-check.js";
@@ -29,6 +30,7 @@ function createWindow(): void {
     }
   });
   watchMaximized(win);
+  interceptDrops(win);
   if (process.env.ELECTRON_RENDERER_URL) {
     win.loadURL(process.env.ELECTRON_RENDERER_URL);
   } else {
@@ -39,6 +41,7 @@ function createWindow(): void {
 app.whenReady().then(() => {
   registerIpc();
   registerDocsIpc();
+  registerOpenIpc();
   registerTasksIpc();
   registerWindowIpc();
   restoreWorkspace();
