@@ -7,6 +7,12 @@ import { makePdf } from "../../../packages/core/test/fixtures/make";
 // Requires `pnpm build` first: launches the built main entry (out/main/index.js).
 let app: ElectronApplication;
 
+// Every test shares one Electron app and builds on the state the previous ones left
+// (workspace, imported docs, the note from 插入笔记). Run them as one serial group so a
+// failure skips the rest instead of cascading into 30s timeouts, and a CI retry relaunches
+// the app and replays the whole file rather than one test against an empty workspace.
+test.describe.configure({ mode: "serial" });
+
 test.beforeAll(async () => {
   const env = Object.fromEntries(
     Object.entries(process.env).filter(
@@ -195,7 +201,9 @@ test("selection task streams an answer, inserts it into a note, and draws a diag
   expect(files).toHaveLength(1);
   const raw = readFileSync(join(ws, "notes", files[0]), "utf8");
   const docId = (await win.evaluate(() => window.point.docs.list())).find((d) => d.type === "md")!.id;
-  expect(raw, raw).toMatch(/^---\nid: [\w-]+\ntitle: 熵的定义 · 笔记\nsourceDocId: /);
+  // Note ids are 8 hex chars; ~3% are all digits (or digits+e), which YAML quotes to keep
+  // them strings, e.g. `id: "37259515"`. Both forms are valid.
+  expect(raw, raw).toMatch(/^---\nid: (?:[\w-]+|"[\w-]+")\ntitle: 熵的定义 · 笔记\nsourceDocId: /);
   expect(raw).toContain(`sourceDocId: ${docId}`);
   expect(raw).toMatch(/createdAt: .+\nupdatedAt: .+\ntags: \[\]\n---\n/);
   expect(raw).toContain("这是 Point 测试用的固定输出");
