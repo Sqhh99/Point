@@ -8,12 +8,13 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "e2e": "echo \"e2e: Playwright suite not added yet\""
+    "e2e": "playwright test"
   },
   "dependencies": {
     "@point/core": "workspace:*"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.0",
     "electron": "^32.2.0",
     "electron-vite": "^2.3.0",
     "vite": "^5.4.9"
