@@ -53,7 +53,7 @@ button.link:hover { color: var(--text); }
 button.link.active { color: var(--accent); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-.shell { display: grid; grid-template-rows: 36px minmax(0, 1fr); height: 100%; }
+.shell { display: grid; grid-template-rows: 36px minmax(0, 1fr) 24px; height: 100%; }
 .titlebar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; height: 36px; background: var(--panel); border-bottom: 1px solid var(--line); font-size: 13px; -webkit-app-region: drag; user-select: none; }
 .titlebar.mac .titlebar-left { padding-left: 78px; }
 .titlebar-left { display: flex; align-items: center; gap: 8px; padding-left: 12px; min-width: 0; }
@@ -228,3 +228,31 @@ button.link.active { color: var(--accent); }
 .recent-list button:hover { background: var(--line); }
 .recent-kind { color: var(--muted); font-size: 11px; width: 40px; flex: none; }
 .recent-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* reader toolbar + region capture */
+.reader-toolbar { position: sticky; top: 0; z-index: 4; display: flex; justify-content: flex-end; align-items: center; gap: 4px; height: 40px; padding: 0 12px; background: var(--bg); border-bottom: 1px solid var(--line); }
+.tool-button { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border: none; border-radius: 6px; font-size: 13px; color: var(--muted); }
+.tool-button:hover:not(:disabled), .tool-button[aria-pressed="true"] { background: var(--hover); color: var(--text); }
+.tool-button:disabled { opacity: 0.45; cursor: default; }
+.capture-overlay { position: fixed; z-index: 30; cursor: crosshair; background: var(--hover); user-select: none; touch-action: none; }
+.capture-rect { position: absolute; outline: 1.5px dashed var(--accent); background: var(--highlight); pointer-events: none; }
+.capture-hint { position: absolute; top: 52px; left: 50%; transform: translateX(-50%); padding: 4px 12px; border-radius: 6px; background: var(--bg-elevated); border: 1px solid var(--border); color: var(--muted); font-size: 12px; pointer-events: none; }
+.quote-image { display: block; padding: 0; margin: 2px 0 4px; border: none; background: none; cursor: zoom-in; }
+.quote-image img { display: block; max-width: 240px; max-height: 240px; border-radius: 4px; border: 1px solid var(--line); }
+.attached-thumb { position: relative; display: inline-block; margin-bottom: 6px; }
+.attached-thumb img { display: block; height: 48px; width: auto; max-width: 160px; object-fit: cover; border-radius: 4px; border: 1px solid var(--line); }
+.thumb-remove { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; padding: 0; display: grid; place-items: center; border-radius: 50%; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--muted); font-size: 12px; line-height: 1; }
+.thumb-remove:hover { color: var(--text); background: var(--hover); }
+.lightbox { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 24px; background: var(--panel); cursor: zoom-out; }
+.lightbox img { max-width: 100%; max-height: 100%; border-radius: 4px; background: var(--bg-elevated); }
+
+/* status bar */
+.statusbar { display: flex; align-items: center; gap: 12px; height: 24px; padding: 0 12px; background: var(--panel); border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; user-select: none; min-width: 0; }
+.statusbar-item { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.statusbar-sep { padding: 0 4px; }
+.statusbar-right { margin-left: auto; display: flex; gap: 12px; min-width: 0; }
+.check { display: flex; align-items: center; gap: 8px; margin: -4px 0 16px; font-size: 13px; color: var(--text); }
+.capture-missing { display: grid; place-items: center; box-sizing: border-box; background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.attached-thumb .capture-missing { height: 48px; width: 86px; }
+.quote-image.missing { cursor: default; width: fit-content; max-width: 240px; }
+.quote-image.missing .capture-missing { width: 240px; max-width: 100%; height: 135px; }

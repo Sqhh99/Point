@@ -2,7 +2,7 @@ import { ipcMain, type WebContents } from "electron";
 import { randomUUID } from "node:crypto";
 import { LLMError, createProvider, getPreset, type ChatMessage, type LLMProvider, type ProviderId } from "@point/core";
 import { IPC, type ChatEvent, type ProviderPatch, type TestResult } from "../shared/ipc.js";
-import { FakeProvider, fakeEnabled } from "./fake-llm.js";
+import { FakeProvider, fakeEnabled, fakeVision } from "./fake-llm.js";
 import { resolveProvider, setKey, update, view } from "./settings.js";
 
 const running = new Map<string, AbortController>();
@@ -17,10 +17,10 @@ export function errInfo(err: unknown): { code: string; message: string } {
   return { code: typeof e.code === "string" ? e.code : "unknown", message: e.message ?? String(err) };
 }
 
-export function providerFor(id?: ProviderId): { model: string; provider: LLMProvider } {
-  if (fakeEnabled()) return { model: "fake", provider: new FakeProvider() };
+export function providerFor(id?: ProviderId): { model: string; vision: boolean; provider: LLMProvider } {
+  if (fakeEnabled()) return { model: "fake", vision: fakeVision(), provider: new FakeProvider() };
   const cfg = resolveProvider(id);
-  return { model: cfg.model, provider: createProvider({ id: cfg.id, apiKey: cfg.apiKey, baseURL: cfg.baseURL }) };
+  return { model: cfg.model, vision: cfg.vision, provider: createProvider({ id: cfg.id, apiKey: cfg.apiKey, baseURL: cfg.baseURL }) };
 }
 
 async function runChat(sender: WebContents, requestId: string, messages: ChatMessage[], id?: ProviderId): Promise<void> {
@@ -69,7 +69,9 @@ export function registerIpc(): void {
     if (id !== undefined) assertProviderId(id);
     if (!Array.isArray(messages)) throw new Error("无效的消息");
     const requestId = randomUUID();
-    void runChat(e.sender, requestId, messages as ChatMessage[], id as ProviderId | undefined);
+    // Rebuild each message: only role + text cross IPC; images are attached in main from a capture sha.
+    const clean: ChatMessage[] = (messages as Partial<ChatMessage>[]).map((m) => ({ role: m?.role === "system" || m?.role === "assistant" ? m.role : "user", content: String(m?.content ?? "") }));
+    void runChat(e.sender, requestId, clean, id as ProviderId | undefined);
     return requestId;
   });
   ipcMain.handle(IPC.chatCancel, (_e, requestId: unknown) => {

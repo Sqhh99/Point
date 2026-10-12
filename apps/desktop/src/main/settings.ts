@@ -1,7 +1,8 @@
 import { app, safeStorage } from "electron";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { PROVIDER_PRESETS, getPreset, type ProviderId } from "@point/core";
+import { PROVIDER_PRESETS, getPreset, modelCapabilities, type ProviderId } from "@point/core";
+import { fakeEnabled, fakeVision } from "./fake-llm.js";
 import type { ProviderPatch, SettingsView } from "../shared/ipc.js";
 
 interface StoredProvider {
@@ -9,6 +10,8 @@ interface StoredProvider {
   model: string;
   /** base64 of the safeStorage-encrypted API key */
   encKey?: string;
+  /** Explicit `capabilities.vision`; absent = use the preset's list of vision models. */
+  vision?: boolean;
 }
 
 interface StoredSettings {
@@ -40,15 +43,28 @@ function providerOf(s: StoredSettings, id: ProviderId): StoredProvider {
   return s.providers[id] ?? { baseURL: preset.baseURL, model: preset.defaultModel };
 }
 
+const visionOf = (id: ProviderId, cur: StoredProvider) => modelCapabilities(id, cur.model, { vision: cur.vision }).vision;
+
 export function view(): SettingsView {
   const s = load();
+  const act = providerOf(s, s.activeProvider);
   return {
     activeProvider: s.activeProvider,
+    active: fakeEnabled()
+      ? { providerName: "测试模型", model: "fake", vision: fakeVision() }
+      : { providerName: getPreset(s.activeProvider)!.name, model: act.model, vision: visionOf(s.activeProvider, act) },
     presets: [...PROVIDER_PRESETS],
     encryptionAvailable: safeStorage.isEncryptionAvailable(),
     providers: PROVIDER_PRESETS.map((p) => {
       const cur = providerOf(s, p.id);
-      return { id: p.id, baseURL: cur.baseURL, model: cur.model, hasKey: !!cur.encKey };
+      return {
+        id: p.id,
+        baseURL: cur.baseURL,
+        model: cur.model,
+        hasKey: !!cur.encKey,
+        capabilities: { vision: visionOf(p.id, cur) },
+        visionOverride: typeof cur.vision === "boolean" ? cur.vision : undefined
+      };
     })
   };
 }
@@ -59,6 +75,8 @@ export function update(patch: ProviderPatch): SettingsView {
   const preset = getPreset(patch.id)!;
   if (patch.baseURL !== undefined) cur.baseURL = patch.baseURL.trim() || preset.baseURL;
   if (patch.model !== undefined) cur.model = patch.model.trim() || preset.defaultModel;
+  if (patch.vision === null) delete cur.vision;
+  else if (typeof patch.vision === "boolean") cur.vision = patch.vision;
   s.providers[patch.id] = cur;
   if (patch.makeActive) s.activeProvider = patch.id;
   save(s);
@@ -80,11 +98,11 @@ export function setKey(id: ProviderId, key: string): SettingsView {
 }
 
 /** Main-process only: the decrypted key must never cross IPC. */
-export function resolveProvider(id?: ProviderId): { id: ProviderId; baseURL: string; model: string; apiKey: string } {
+export function resolveProvider(id?: ProviderId): { id: ProviderId; baseURL: string; model: string; apiKey: string; vision: boolean } {
   const s = load();
   const pid = id ?? s.activeProvider;
   const cur = providerOf(s, pid);
   if (!cur.encKey) throw Object.assign(new Error("尚未设置 API Key"), { code: "auth" });
   const apiKey = safeStorage.decryptString(Buffer.from(cur.encKey, "base64"));
-  return { id: pid, baseURL: cur.baseURL, model: cur.model, apiKey };
+  return { id: pid, baseURL: cur.baseURL, model: cur.model, apiKey, vision: visionOf(pid, cur) };
 }

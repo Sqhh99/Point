@@ -17,14 +17,19 @@ export const FAKE_XSS_ANSWER =
   "  click A call window.alert(1)\n  click B \"javascript:window.__pwned='click'\"\n```\n";
 
 export const fakeEnabled = () => process.env.POINT_FAKE_LLM === "1";
+/** The fake model accepts images unless POINT_FAKE_VISION=0 (lets e2e cover the "no vision" path). */
+export const fakeVision = () => process.env.POINT_FAKE_VISION !== "0";
+
+export const FAKE_IMAGE_ANSWER = "**模拟回答**：已收到 1 张截图。";
 
 export class FakeProvider implements LLMProvider {
   readonly id = "fake";
 
   async *chat(messages: ChatMessage[], opts: ChatOptions): AsyncIterable<Delta> {
-    const prompt = messages.at(-1)?.content ?? "";
+    const last = messages.at(-1);
+    const prompt = last?.content ?? "";
     if (prompt.includes("RATE-LIMIT-PROBE")) throw new LLMError("rate_limit", "请求过于频繁 (429): fake", 429);
-    const answer = prompt.includes("XSS-PROBE") ? FAKE_XSS_ANSWER : FAKE_ANSWER;
+    const answer = prompt.includes("XSS-PROBE") ? FAKE_XSS_ANSWER : last?.images?.length ? FAKE_IMAGE_ANSWER : FAKE_ANSWER;
     const chunks = answer.match(/[\s\S]{1,12}/g) ?? [];
     for (const text of chunks) {
       if (opts.signal?.aborted) {

@@ -38,7 +38,8 @@ export function electronModule() {
       showSaveDialog: vi.fn(async () => state.saveResult),
       showOpenDialog: vi.fn(async () => state.openResult)
     },
-    BrowserWindow: { fromWebContents: () => null }
+    BrowserWindow: { fromWebContents: () => null },
+    protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() }
   };
 }
 

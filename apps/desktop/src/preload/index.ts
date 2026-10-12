@@ -11,6 +11,9 @@ const api: PointAPI = {
       return () => ipcRenderer.removeListener(IPC.windowMaximized, listener);
     }
   },
+  capture: {
+    region: (rect) => ipcRenderer.invoke(IPC.captureRegion, rect)
+  },
   settings: {
     get: () => ipcRenderer.invoke(IPC.settingsGet),
     update: (patch) => ipcRenderer.invoke(IPC.settingsUpdate, patch),

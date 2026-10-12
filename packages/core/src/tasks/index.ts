@@ -19,6 +19,8 @@ export interface TaskInput {
   context?: string;
   /** Required for `ask`; optional extra instruction for the others. */
   question?: string;
+  /** A region screenshot is attached to the user message (the bytes are added by the caller). */
+  hasImage?: boolean;
   /** Earlier turns of the same conversation (ask only). */
   history?: ChatMessage[];
 }
@@ -51,12 +53,13 @@ const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…（�
 
 export function buildTaskMessages(input: TaskInput): ChatMessage[] {
   const selection = input.selection.trim();
-  if (!selection && input.kind !== "ask") throw new Error("请先选中一段文字");
+  if (!selection && !input.hasImage && input.kind !== "ask") throw new Error("请先选中一段文字");
   if (input.kind === "ask" && !input.question?.trim()) throw new Error("请输入问题");
 
   const parts: string[] = [];
   if (input.docTitle) parts.push(`文档：《${input.docTitle}》`);
   if (input.context?.trim()) parts.push(`上下文：\n"""\n${clip(input.context.trim(), LIMITS.context)}\n"""`);
+  if (input.hasImage) parts.push("附图：用户在文档里框选的区域截图，见本条消息的图片。");
   if (selection) parts.push(`选中内容：\n"""\n${clip(selection, LIMITS.selection)}\n"""`);
   parts.push(`任务：${INSTRUCTIONS[input.kind]}`);
   if (input.question?.trim()) parts.push(`${input.kind === "ask" ? "问题" : "补充要求"}：${input.question.trim()}`);

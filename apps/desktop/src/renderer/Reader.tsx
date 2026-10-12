@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Block, ParsedDoc, TaskKind } from "@point/core";
 import type { JSX } from "react";
+import type { CaptureResult } from "../shared/ipc";
+import { CaptureOverlay } from "./Capture";
 import { EmptyState } from "./EmptyState";
-import { IconAsk, IconDiagram, IconExplain, IconNote } from "./icons";
+import { IconAsk, IconCapture, IconDiagram, IconExplain, IconNote } from "./icons";
+import { isCaptureKey, type Box } from "./layout";
 
 export interface SelectionInfo {
   text: string;
@@ -94,9 +97,14 @@ interface ReaderProps {
   onOpenRecent(index: number, path: string): void;
   onDocLoaded?(doc: ParsedDoc | null): void;
   onAction(kind: TaskKind, sel: SelectionInfo): void;
+  /** Whether the current model accepts images; capture is disabled otherwise. */
+  vision: boolean;
+  onCapture(r: CaptureResult): void;
+  onCaptureError(message: string): void;
 }
 
-export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorkspace, onOpenFile, onOpenRecent }: ReaderProps) {
+export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorkspace, onOpenFile, onOpenRecent, vision, onCapture, onCaptureError }: ReaderProps) {
+  const [capture, setCapture] = useState<Box | null>(null);
   const [doc, setDoc] = useState<ParsedDoc | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toolbar, setToolbar] = useState<{ top: number; left: number; sel: SelectionInfo } | null>(null);
@@ -163,9 +171,30 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
 
   useEffect(() => () => window.clearTimeout(timer.current), []);
 
+  const startCapture = useCallback(() => {
+    const scroller = articleRef.current?.parentElement;
+    if (!scroller || !vision) return;
+    close();
+    window.getSelection()?.removeAllRanges();
+    const r = scroller.getBoundingClientRect();
+    setCapture({ x: r.left, y: r.top, width: r.width, height: r.height });
+  }, [vision, close]);
+
+  useEffect(() => {
+    if (!doc) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!isCaptureKey(e, window.point.platform)) return;
+      e.preventDefault();
+      startCapture();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [doc, startCapture]);
+
   useEffect(() => {
     setDoc(null);
     setError(null);
+    setCapture(null);
     close();
     onDocLoaded?.(null);
     if (!docId) return;
@@ -193,8 +222,39 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
   if (!doc) return <div className="placeholder">正在解析…</div>;
 
   let lastPage: number | undefined;
+  const mod = window.point.platform === "darwin" ? "⌘⇧S" : "Ctrl+Shift+S";
   return (
     <>
+    <div className="reader-toolbar" role="toolbar" aria-label="阅读工具">
+      {/* Disabled buttons swallow hover, so the tooltip lives on the wrapper. */}
+      <span title={vision ? undefined : "当前模型不支持图片"}>
+      <button
+        className="tool-button"
+        data-testid="capture-button"
+        onClick={startCapture}
+        disabled={!vision}
+        title={vision ? `框选截图（${mod}）` : "当前模型不支持图片"}
+        aria-pressed={!!capture}
+      >
+        <IconCapture />
+        <span>框选</span>
+      </button>
+      </span>
+    </div>
+    {capture && (
+      <CaptureOverlay
+        bounds={capture}
+        onCancel={() => setCapture(null)}
+        onDone={(r) => {
+          setCapture(null);
+          onCapture(r);
+        }}
+        onError={(m) => {
+          setCapture(null);
+          onCaptureError(m);
+        }}
+      />
+    )}
     {toolbar && (
       <div
         ref={toolbarRef}
