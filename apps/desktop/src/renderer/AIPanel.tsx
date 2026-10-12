@@ -165,7 +165,7 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
   const [leafId, setLeafId] = useState<string | null>(null);
   const messages = useMemo(() => (leafId ? pathTo(tree.messages, leafId) : []), [tree, leafId]);
   /** Next send goes under this message (从这里分支); `null` = new first question. */
-  const [fork, setFork] = useState<{ parentId: string | null; label: string } | null>(null);
+  const [fork, setFork] = useState<({ parentId: string } | { siblingOf: string }) & { label: string } | null>(null);
   const [branchDraft, setBranchDraft] = useState<NonNullable<TaskRequest["branch"]> | null>(null);
   /** First message re-mounted by a sibling switch, to fade it in. */
   const [switched, setSwitched] = useState<string | null>(null);
@@ -324,7 +324,8 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
       setFork({ parentId: m.id, label: "从这条回答继续一个新分支" });
       setLeafId(m.id);
     } else {
-      setFork({ parentId: m.parentId, label: "改问这个问题（新分支）" });
+      // Main decides the parent (and keeps a span-branch origin); the renderer never computes it.
+      setFork({ siblingOf: m.id, label: "改问这个问题（新分支）" });
       setQuestion(m.content);
       setLeafId(m.parentId);
     }
@@ -393,7 +394,7 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
         question: q,
         docId: docId ?? undefined,
         conversationId: conversationId ?? undefined,
-        ...(branchDraft ? { branch: branchDraft } : { parentId: fork!.parentId })
+        ...(branchDraft ? { branch: branchDraft } : "siblingOf" in fork! ? { siblingOf: fork!.siblingOf } : { parentId: fork!.parentId })
       };
       setQuestion("");
       setBranchDraft(null);

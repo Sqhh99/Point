@@ -1,11 +1,13 @@
 import { ipcMain, type WebContents } from "electron";
 import { randomUUID } from "node:crypto";
-import { TASK_LABELS, buildTaskMessages, describeTask, parseTaskOutput, type ChatMessage, type TaskKind } from "@point/core";
+import { TASK_LABELS, buildTaskMessages, describeTask, parseTaskOutput, type BranchOrigin, type ChatMessage, type TaskKind } from "@point/core";
 import { exportAllNotes, exportConversation, exportNote } from "./export.js";
 import { IPC, type TaskEvent, type TaskRequest, type TaskStarted } from "../shared/ipc.js";
 import {
   addMessage,
+  addSibling,
   createBranch,
+  getOrigin,
   createConversation,
   deleteConversation,
   getMessage,
@@ -43,7 +45,8 @@ function validate(raw: unknown): TaskRequest {
     image: r.image === undefined || r.image === null ? undefined : assertCaptureSha(r.image),
     regenerate: r.regenerate === true,
     parentId: r.parentId === null ? null : str(r.parentId, 64),
-    branch: branchOf(r.branch)
+    branch: branchOf(r.branch),
+    siblingOf: r.siblingOf === undefined || r.siblingOf === null ? undefined : (str(r.siblingOf, 64) ?? "")
   };
 }
 
@@ -58,9 +61,15 @@ function branchOf(v: unknown): TaskRequest["branch"] {
 }
 
 /** Where a turn goes in the tree, checked against the conversation (never trusts renderer ids). */
-function placement(conversationId: string | undefined, req: TaskRequest): { history: ChatMessage[]; userParent?: string | null; answerTo?: string } {
+function placement(
+  conversationId: string | undefined,
+  req: TaskRequest
+): { history: ChatMessage[]; userParent?: string | null; answerTo?: string; siblingOf?: string; origin?: BranchOrigin } {
+  if (req.siblingOf !== undefined && (req.parentId !== undefined || req.branch || req.regenerate)) {
+    throw new Error("siblingOf 不能和 parentId / branch / regenerate 同时使用");
+  }
   if (!conversationId) {
-    if (req.parentId || req.branch) throw new Error("对话不存在");
+    if (req.parentId || req.branch || req.siblingOf) throw new Error("对话不存在");
     return { history: [] };
   }
   const inConv = (id: string) => {
@@ -69,6 +78,13 @@ function placement(conversationId: string | undefined, req: TaskRequest): { hist
     return m;
   };
   const upTo = (id: string | null) => (id ? historyFor(conversationId, false, id) : []);
+  if (req.siblingOf !== undefined) {
+    // 从这里分支 on a question: same parent as the original; a span-branch question keeps its origin.
+    const orig = inConv(req.siblingOf);
+    if (orig.role !== "user") throw new Error("只能改问用户的问题");
+    const origin = getOrigin(orig.id);
+    return { history: upTo(orig.parentId), userParent: orig.parentId, siblingOf: orig.id, origin };
+  }
   if (req.branch) {
     if (inConv(req.branch.sourceId).role !== "assistant") throw new Error("分支只能从 AI 回答派生");
     return { history: upTo(req.branch.sourceId) };
@@ -149,7 +165,9 @@ export function registerTasksIpc(): void {
       ? undefined
       : req.branch
         ? createBranch(req.branch.sourceId, req.branch, describeTask(req), req.kind, meta)
-        : addMessage(conversationId, "user", describeTask(req), req.kind, meta, place.userParent);
+        : place.siblingOf
+          ? addSibling(place.siblingOf, describeTask(req), req.kind, meta)
+          : addMessage(conversationId, "user", describeTask(req), req.kind, meta, place.userParent);
     const requestId = randomUUID();
     void stream(e.sender, requestId, conversationId, req, messages, llm, place.answerTo ?? userMessage!.id);
     return { requestId, conversationId, userMessage };
