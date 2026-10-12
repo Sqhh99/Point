@@ -80,6 +80,12 @@ function checkApp(label, resources, exe, arch) {
     else fail(`${label}: asar is missing node_modules/${dep}`);
   }
   if (!existsSync(exe)) fail(`${label}: executable missing: ${exe}`);
+  // macOS bundles must carry the app icon (electron-builder converts build/icon.png to icns).
+  if (exe.includes(".app/Contents/MacOS")) {
+    const icns = join(resources, "icon.icns");
+    if (existsSync(icns)) ok(`${label}: has icon.icns`);
+    else fail(`${label}: icon.icns missing (Electron default icon would be electron.icns)`);
+  }
   return exe;
 }
 
