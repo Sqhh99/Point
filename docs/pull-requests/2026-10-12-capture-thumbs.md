@@ -33,5 +33,5 @@
 - lint、typecheck 退出码都是 0。core 143 项通过；main 511 项通过、4 项跳过；e2e 12 项通过、1 项跳过（原有的、Linux 上系统加密不可用的用例）。
 
 ## 截图
-![气泡里的截图和输入框上方的缩略图](https://raw.githubusercontent.com/Sqhh99/Point/feat/capture-thumbs/docs/assets/pr/2026-10-12-capture-thumbs.png)
-![大图](https://raw.githubusercontent.com/Sqhh99/Point/feat/capture-thumbs/docs/assets/pr/2026-10-12-capture-lightbox.png)
+![气泡里的截图和输入框上方的缩略图](https://raw.githubusercontent.com/Sqhh99/Point/41cf68d7590400377b819235e0e5b0fa5e4068d0/docs/assets/pr/2026-10-12-capture-thumbs.png)
+![大图](https://raw.githubusercontent.com/Sqhh99/Point/41cf68d7590400377b819235e0e5b0fa5e4068d0/docs/assets/pr/2026-10-12-capture-lightbox.png)
