@@ -251,18 +251,66 @@ describe("branch from any message", () => {
     expect(bt[0].children.map((x) => x.branchId)).toEqual([b2.started.userMessage!.id]);
   });
 
-  // AIPanel.tsx:327 「从这里分支」 on a question sends parentId = question.parentId. For a span-branch
-  // question that parent is the source answer, so the re-asked question is stored as a plain
-  // follow-up of the main thread: it leaves the branch and never shows as 2/2 next to the original.
-  it.fails("re-asking a span-branch question keeps it in the branch as a 2/2 sibling", async () => {
+  // Was it.fails (AIPanel.tsx:327 sent parentId = question.parentId, so a re-asked span-branch question
+  // landed on the main thread). Fixed: 「从这里分支」 sends siblingOf and main keeps the branch origin.
+  it("re-asking a span-branch question keeps it in the branch as a 2/2 sibling", async () => {
     const a = await ask({ question: "源问" });
     const conv = a.started.conversationId;
     const quote = a.answer.content.slice(0, 2);
     const br = await ask({ question: "分支原问", conversationId: conv, branch: { sourceId: a.answer.id, start: 0, end: 2, quote } });
     const bq = br.started.userMessage!;
-    const re = await ask({ question: "分支改问", conversationId: conv, parentId: bq.parentId });
+    const re = await ask({ question: "分支改问", conversationId: conv, siblingOf: bq.id });
     const t = await tree(conv);
     expect(siblingsOf(t.messages, t.origins, re.started.userMessage!.id).map((m) => m.id)).toEqual([bq.id, re.started.userMessage!.id]);
+    expect(re.started.userMessage!.parentId).toBe(a.answer.id);
+    expect(t.origins).toContainEqual({ childId: re.started.userMessage!.id, sourceId: a.answer.id, start: 0, end: 2, quote });
+  });
+});
+
+describe("siblingOf (从这里分支 on a question)", () => {
+  const counts = () => {
+    const db = ws.need().db;
+    return {
+      m: (db.prepare("SELECT COUNT(*) n FROM messages").get() as { n: number }).n,
+      o: (db.prepare("SELECT COUNT(*) n FROM branch_origin").get() as { n: number }).n,
+      c: (db.prepare("SELECT COUNT(*) n FROM conversations").get() as { n: number }).n
+    };
+  };
+  const run = (req: Record<string, unknown>) => invoke(IPC.tasksRun, new FakeSender(), { kind: "ask", selection: "", question: "改问", ...req });
+
+  it("a mainline question gets a plain sibling: same parent, no branch_origin row", async () => {
+    const a = await ask({ question: "主1" });
+    const conv = a.started.conversationId;
+    const q2 = await ask({ question: "主2", conversationId: conv, parentId: a.answer.id });
+    const before = counts().o;
+    const re = await ask({ question: "主2改", conversationId: conv, siblingOf: q2.started.userMessage!.id });
+    expect(re.started.userMessage!.parentId).toBe(a.answer.id);
+    expect(counts().o).toBe(before);
+    const t = await tree(conv);
+    expect(siblingsOf(t.messages, t.origins, re.started.userMessage!.id)).toHaveLength(2);
+  });
+
+  it("the first question of a conversation gets a sibling root", async () => {
+    const a = await ask({ question: "首" });
+    const re = await ask({ question: "首改", conversationId: a.started.conversationId, siblingOf: a.started.userMessage!.id });
+    expect(re.started.userMessage!.parentId).toBeNull();
+  });
+
+  it("rejections write nothing: with parentId / branch / regenerate, other conversation, nonexistent, assistant answer", async () => {
+    const a = await ask({ question: "甲" });
+    const other = await ask({ question: "乙" });
+    const conv = a.started.conversationId;
+    const q = a.started.userMessage!.id;
+    const before = counts();
+    await expect(run({ conversationId: conv, siblingOf: q, parentId: a.answer.id })).rejects.toThrow(/siblingOf 不能和/);
+    await expect(run({ conversationId: conv, siblingOf: q, parentId: null })).rejects.toThrow(/siblingOf 不能和/);
+    await expect(run({ conversationId: conv, siblingOf: q, branch: { sourceId: a.answer.id, start: 0, end: 1, quote: a.answer.content.slice(0, 1) } })).rejects.toThrow(/siblingOf 不能和/);
+    await expect(run({ conversationId: conv, siblingOf: q, regenerate: true })).rejects.toThrow(/siblingOf 不能和/);
+    await expect(run({ conversationId: conv, siblingOf: other.started.userMessage!.id })).rejects.toThrow("消息不在这个对话里");
+    await expect(run({ conversationId: conv, siblingOf: "00000000-0000-4000-8000-000000000000" })).rejects.toThrow("消息不在这个对话里");
+    await expect(run({ conversationId: conv, siblingOf: a.answer.id })).rejects.toThrow("只能改问用户的问题");
+    await expect(run({ siblingOf: q })).rejects.toThrow("对话不存在");
+    expect(counts()).toEqual(before);
   });
 });
 

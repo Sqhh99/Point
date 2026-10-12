@@ -134,14 +134,19 @@ function plainChildren<T extends TreeNode>(kids: Map<string, T[]>, branched: Set
 
 /**
  * Alternatives at the position of `id`, oldest first: messages with the same parent that are not
- * span branches (regenerated answers, re-asked questions). A span branch has no siblings of its own
- * kind and returns just itself. Unknown id gives [].
+ * span branches (regenerated answers, re-asked questions). A span-branch question's alternatives are
+ * the other questions branched from the identical span (source, start, end, quote). Unknown id gives [].
  */
 export function siblingsOf<T extends TreeNode>(nodes: readonly T[], origins: readonly BranchOrigin[], id: string): T[] {
   const node = nodes.find((n) => n.id === id);
   if (!node) return [];
   const branched = new Set(origins.map((o) => o.childId));
-  if (branched.has(id)) return [node];
+  const own = origins.find((o) => o.childId === id);
+  if (own) {
+    // Span-branch questions are alternatives of each other when they fork from the very same span.
+    const same = new Set(origins.filter((o) => o.sourceId === own.sourceId && o.start === own.start && o.end === own.end && o.quote === own.quote).map((o) => o.childId));
+    return nodes.filter((n) => same.has(n.id)).sort(order);
+  }
   const ids = new Set(nodes.map((n) => n.id));
   const key = node.parentId && ids.has(node.parentId) ? node.parentId : "";
   return plainChildren(childrenOf(nodes), branched, key);

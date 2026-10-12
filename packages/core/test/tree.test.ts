@@ -82,3 +82,14 @@ describe("siblings and default leaf (⑥)", () => {
     expect(latestLeaf(cyc, [], "x")).toBeDefined();
   });
 });
+
+describe("siblingsOf for span-branch questions (fix/fork-sibling)", () => {
+  const n = (id: string, parentId: string | null, t: string) => ({ id, parentId, createdAt: t });
+  const nodes = [n("q", null, "0"), n("a", "q", "1"), n("b1", "a", "2"), n("b2", "a", "3"), n("x", "a", "4")];
+  const o = (childId: string, start: number, quote: string) => ({ childId, sourceId: "a", start, end: start + quote.length, quote });
+  it("questions forked from the identical span are alternatives; a different span is not", () => {
+    const origins = [o("b1", 0, "熵"), o("b2", 0, "熵"), o("x", 2, "熵")];
+    expect(siblingsOf(nodes, origins, "b2").map((m) => m.id)).toEqual(["b1", "b2"]);
+    expect(siblingsOf(nodes, origins, "x").map((m) => m.id)).toEqual(["x"]);
+  });
+});

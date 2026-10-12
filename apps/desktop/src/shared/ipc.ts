@@ -109,13 +109,18 @@ export interface TaskRequest {
    * With `regenerate`, the id of the user message to answer again.
    */
   parentId?: string | null;
+  /**
+   * 从这里分支 on a question: store the new question as a sibling of this user message (same parent,
+   * same branch origin if it opened a span branch). Mutually exclusive with `parentId`, `branch`, `regenerate`.
+   */
+  siblingOf?: string;
   /** 追问分支: fork from span [start, end) of an assistant answer (stored in branch_origin). */
   branch?: { sourceId: string; start: number; end: number; quote: string };
 }
 
 /** Stored on the user message of a task so the UI can show the quote card and re-run it. */
 export interface MessageMeta {
-  request: Omit<TaskRequest, "conversationId" | "regenerate" | "parentId" | "branch">;
+  request: Omit<TaskRequest, "conversationId" | "regenerate" | "parentId" | "branch" | "siblingOf">;
   /** Snapshot of the marks sent with 「一起问」, in order (validated anchors from the database). */
   marks?: MarkAnchor[];
   docTitle?: string;

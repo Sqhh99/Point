@@ -128,3 +128,25 @@ export function createBranch(sourceId: string, span: { start: number; end: numbe
 export function deleteConversation(id: string): void {
   need().db.prepare("DELETE FROM conversations WHERE id = ?").run(id);
 }
+
+export function getOrigin(childId: string): BranchOrigin | undefined {
+  const r = need().db.prepare("SELECT * FROM branch_origin WHERE child_msg_id = ?").get(childId) as OriginRow | undefined;
+  return r ? origin(r) : undefined;
+}
+
+/**
+ * A new question in the same place as `originalId` (from 「从这里分支」): same parent; if the original
+ * opened a span branch, its branch_origin (source, start, end, quote) is copied verbatim so the new
+ * question stays in that branch as a sibling. Atomic.
+ */
+export function addSibling(originalId: string, content: string, kind?: TaskKind, meta?: MessageMeta): StoredMessage {
+  const db = need().db;
+  const orig = getMessage(originalId);
+  if (!orig || orig.role !== "user") throw new Error("只能改问用户的问题");
+  const o = getOrigin(originalId);
+  return db.transaction(() => {
+    const child = addMessage(orig.conversationId, "user", content, kind, meta, orig.parentId);
+    if (o) db.prepare("INSERT INTO branch_origin (child_msg_id, source_msg_id, start, end, quote) VALUES (?, ?, ?, ?, ?)").run(child.id, o.sourceId, o.start, o.end, o.quote);
+    return child;
+  })();
+}
