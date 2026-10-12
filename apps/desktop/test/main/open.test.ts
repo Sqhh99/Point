@@ -49,7 +49,8 @@ describe("single-file mode", () => {
     const root = tmp("point-ws-");
     await openPath(mdFile());
     await openPath(root);
-    expect(ws.workspacePath()).toBe(root);
+    // resolveOpenTarget returns the real path (macOS: /var -> /private/var)
+    expect(ws.workspacePath()).toBe(realpathSync(root));
     const recent = (await invoke(IPC.openRecent, s())) as RecentItem[];
     expect(recent.map((x: { kind: string }) => x.kind)).toEqual(["workspace", "file"]);
     expect(recent.some((x: { path: string }) => x.path === scratchRoot())).toBe(false);

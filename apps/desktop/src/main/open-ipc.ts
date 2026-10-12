@@ -30,8 +30,9 @@ export function resolveOpenTarget(p: unknown): OpenTarget {
   if (typeof p !== "string" || p.length === 0 || p.includes("\0") || !isAbsolute(p)) throw new Error("无效的路径");
   const abs = resolve(p);
   if (!existsSync(abs)) throw new Error(OPEN_ERROR.missing);
-  const real = realpathSync(abs);
-  const scratch = existsSync(scratchRoot()) ? realpathSync(scratchRoot()) : scratchRoot();
+  // .native returns the on-disk case, so a case variant of scratch is caught on case-insensitive volumes.
+  const real = realpathSync.native(abs);
+  const scratch = existsSync(scratchRoot()) ? realpathSync.native(scratchRoot()) : scratchRoot();
   if (inside(real, scratch)) throw new Error("无效的路径");
   if (statSync(real).isDirectory()) return { kind: "workspace", path: real };
   if (!docTypeOf(real)) throw new Error(`不支持的文件类型: ${basename(real)}`);
