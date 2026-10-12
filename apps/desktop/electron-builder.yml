@@ -1,0 +1,29 @@
+appId: io.github.sqhh99.point
+productName: Point
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+# @point/core is bundled into out/ by electron-vite, so no node_modules are shipped.
+npmRebuild: false
+asar: true
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+win:
+  target:
+    - target: nsis
+      arch: [x64, arm64]
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+mac:
+  category: public.app-category.education
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+publish:
+  provider: github
+  owner: Sqhh99
+  repo: Point
+  releaseType: draft
