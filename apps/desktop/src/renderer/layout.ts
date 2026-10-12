@@ -61,3 +61,30 @@ export function dragRect(a: { x: number; y: number }, b: { x: number; y: number 
   if (width < 4 || height < 4) return null;
   return { x: Math.round(x1), y: Math.round(y1), width, height };
 }
+
+export interface Rect {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+}
+
+export const BAR_GAP = 8;
+
+/**
+ * Where the floating bar goes, in the container's coordinates (add the container's scrollTop
+ * when the bar lives in scrolled content). Above the selection with an 8px gap; below it when
+ * there is not enough room above. Never overlaps the selection rectangle: the bar's vertical
+ * span is entirely above `sel.top - gap` or entirely below `sel.bottom + gap`. Horizontally
+ * centred on the selection and clamped inside the container (`left` is the bar's centre).
+ */
+export function placeBar(sel: Rect, container: Rect, bar: { width: number; height: number }, gap = BAR_GAP): { top: number; left: number; below: boolean } {
+  const selTop = sel.top - container.top;
+  const selBottom = selTop + sel.height;
+  const below = selTop < bar.height + gap;
+  const top = below ? selBottom + gap : selTop - gap - bar.height;
+  const half = bar.width / 2 + 4;
+  const centre = sel.left - container.left + sel.width / 2;
+  const left = container.width <= 2 * half ? container.width / 2 : Math.min(Math.max(centre, half), container.width - half);
+  return { top, left, below };
+}

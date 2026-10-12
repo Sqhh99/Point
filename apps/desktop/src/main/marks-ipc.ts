@@ -27,7 +27,10 @@ export function createMark(docId: unknown, anchor: unknown, note?: unknown): Mar
  * Loads the marks picked for 「一起问」 in the given order. Every id must exist and belong to `docId`;
  * region images are read by main from the validated sha.
  */
-export function loadBatch(ids: unknown, docId: string | undefined): { loaded: LoadedMark[]; marks: Mark[]; hasImage: boolean } {
+export function loadBatch(ids: unknown, docId: unknown): { loaded: LoadedMark[]; marks: Mark[]; hasImage: boolean } {
+  // 一起问 always names the document; every mark must belong to it (no cross-document batches).
+  if (docId === undefined || docId === null || docId === "") throw new Error("一起问需要指定文档");
+  const doc = assertId(docId, "文档");
   if (!Array.isArray(ids) || ids.length === 0) throw new Error("请先勾选标记");
   if (ids.length > MARK_LIMITS.batch) throw new Error(`一次最多一起问 ${MARK_LIMITS.batch} 个标记`);
   const unique = [...new Set(ids.map((v) => assertId(v)))];
@@ -35,7 +38,7 @@ export function loadBatch(ids: unknown, docId: string | undefined): { loaded: Lo
   const root = need().root;
   const list = unique.map((id) => {
     const m = store.get(id);
-    if (!m || (docId && m.docId !== docId)) throw new Error("标记不存在");
+    if (!m || m.docId !== doc) throw new Error("标记不存在");
     return m;
   });
   return {

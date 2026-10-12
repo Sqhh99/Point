@@ -15,14 +15,23 @@ export interface TextAnchor {
   context?: string;
 }
 
-/** A region screenshot, referenced only by the sha of its PNG in `.point/captures/`. */
+/** Where a region was drawn: CSS px in the reader's content (scroll-independent), top-left origin. */
+export interface MarkRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * A region screenshot: only the sha of its PNG in `.point/captures/`, the page and the rectangle.
+ * Never a path: main derives the file from the validated sha (capturePath / readCapture).
+ */
 export interface RegionAnchor {
   kind: "region";
   sha: string;
-  width: number;
-  height: number;
-  blockId?: string;
   page?: number;
+  rect: MarkRect;
 }
 
 export type MarkAnchor = TextAnchor | RegionAnchor;
@@ -49,6 +58,12 @@ const optPage = (v: unknown): number | undefined => {
   if (v === undefined || v === null) return undefined;
   return typeof v === "number" && Number.isInteger(v) && v > 0 && v < 1_000_000 ? v : fail();
 };
+const coord = (v: unknown): number => (typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 1_000_000 ? v : fail());
+function parseRect(v: unknown): MarkRect {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return fail();
+  const r = v as Record<string, unknown>;
+  return { x: coord(r.x), y: coord(r.y), width: side(r.width), height: side(r.height) };
+}
 const side = (v: unknown): number => (typeof v === "number" && Number.isInteger(v) && v > 0 && v <= 10_000 ? v : fail());
 
 /** Validates untrusted input into an anchor with only known fields. Throws 「无效的标记位置」. */
@@ -69,10 +84,8 @@ export function parseAnchor(raw: unknown): MarkAnchor {
   }
   if (r.kind === "region") {
     if (!isCaptureSha(r.sha)) return fail();
-    const a: RegionAnchor = { kind: "region", sha: r.sha, width: side(r.width), height: side(r.height) };
-    const blockId = optStr(r.blockId, MARK_LIMITS.blockId);
+    const a: RegionAnchor = { kind: "region", sha: r.sha, rect: parseRect(r.rect) };
     const page = optPage(r.page);
-    if (blockId) a.blockId = blockId;
     if (page) a.page = page;
     return a;
   }

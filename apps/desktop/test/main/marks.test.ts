@@ -30,6 +30,7 @@ function memDb() {
   db.prepare("INSERT INTO docs VALUES (?, '熵', 'md', 'docs/x.md', 't')").run(DOC);
   return db;
 }
+const memRaw = (s: MarkStore, id: string) => ((s as unknown as { db: Database.Database }).db.prepare("SELECT anchor_json FROM marks WHERE id = ?").get(id) as { anchor_json: string }).anchor_json;
 let n = 0;
 const ids = () => `00000000-0000-4000-8000-${String(++n).padStart(12, "0")}`;
 
@@ -83,9 +84,12 @@ describe("anchors", () => {
     const s = new MarkStore(memDb(), ids);
     const sha = "a".repeat(64);
     const t = s.create(DOC, { kind: "text", text: "  熵是无序度 ", blockId: "b3", page: 2, context: "ctx", extra: "x" });
-    const r = s.create(DOC, { kind: "region", sha, width: 40, height: 20, page: 1, path: "/etc/passwd" });
+    const r = s.create(DOC, { kind: "region", sha, page: 1, rect: { x: 10, y: 300, width: 40, height: 20 }, path: "/etc/passwd", imagePath: "/tmp/x.png", blockId: "b1" });
     expect(s.get(t.id)!.anchor).toEqual({ kind: "text", text: "熵是无序度", blockId: "b3", page: 2, context: "ctx" });
-    expect(s.get(r.id)!.anchor).toEqual({ kind: "region", sha, width: 40, height: 20, page: 1 });
+    // Only sha, page and rect are kept: never a path, no other fields.
+    expect(s.get(r.id)!.anchor).toEqual({ kind: "region", sha, page: 1, rect: { x: 10, y: 300, width: 40, height: 20 } });
+    const raw = (memRaw(s, r.id));
+    expect(raw).not.toMatch(/path|blockId/i);
     expect(s.list(DOC).map((m) => m.id)).toEqual([t.id, r.id]);
   });
 
@@ -97,11 +101,14 @@ describe("anchors", () => {
     ["huge text", { kind: "text", text: "x".repeat(6001) }],
     ["bad page", { kind: "text", text: "x", page: 0 }],
     ["float page", { kind: "text", text: "x", page: 1.5 }],
-    ["uppercase sha", { kind: "region", sha: "A".repeat(64), width: 1, height: 1 }],
-    ["traversal sha", { kind: "region", sha: "../" + "a".repeat(61), width: 1, height: 1 }],
-    ["short sha", { kind: "region", sha: "a".repeat(63), width: 1, height: 1 }],
-    ["no size", { kind: "region", sha: "a".repeat(64) }],
-    ["negative size", { kind: "region", sha: "a".repeat(64), width: -1, height: 5 }],
+    ["uppercase sha", { kind: "region", sha: "A".repeat(64), rect: { x: 0, y: 0, width: 1, height: 1 } }],
+    ["traversal sha", { kind: "region", sha: "../" + "a".repeat(61), rect: { x: 0, y: 0, width: 1, height: 1 } }],
+    ["short sha", { kind: "region", sha: "a".repeat(63), rect: { x: 0, y: 0, width: 1, height: 1 } }],
+    ["no rect", { kind: "region", sha: "a".repeat(64) }],
+    ["old width/height shape", { kind: "region", sha: "a".repeat(64), width: 4, height: 4 }],
+    ["negative size", { kind: "region", sha: "a".repeat(64), rect: { x: 0, y: 0, width: -1, height: 5 } }],
+    ["negative coord", { kind: "region", sha: "a".repeat(64), rect: { x: -1, y: 0, width: 1, height: 5 } }],
+    ["float coord", { kind: "region", sha: "a".repeat(64), rect: { x: 0.5, y: 0, width: 1, height: 5 } }],
     ["blockId not string", { kind: "text", text: "x", blockId: 3 }]
   ])("rejects %s", (_n, a) => {
     expect(() => parseAnchor(a)).toThrow("无效的标记位置");
@@ -118,7 +125,7 @@ describe("batch message", () => {
   const img = { mime: "image/png" as const, base64: "QUJD" };
   it("one user message, parts in selection order, images as image parts", () => {
     const m = buildBatchMessage("比较一下", [
-      { anchor: { kind: "region", sha: "a".repeat(64), width: 1, height: 1, page: 3 }, image: img },
+      { anchor: { kind: "region", sha: "a".repeat(64), page: 3, rect: { x: 0, y: 0, width: 1, height: 1 } }, image: img },
       { anchor: { kind: "text", text: "第二个" } },
       { anchor: { kind: "text", text: "第三个" } }
     ]);
@@ -166,15 +173,15 @@ describe("marks IPC + 一起问 (POINT_FAKE_LLM=1)", () => {
   });
 
   it("a region mark needs an existing capture; deleting the mark keeps the file", async () => {
-    await expect(invoke(IPC.marksCreate, s(), docId, { kind: "region", sha: "b".repeat(64), width: 4, height: 4 })).rejects.toThrow("截图不存在");
-    const r = (await invoke(IPC.marksCreate, s(), docId, { kind: "region", sha: shaA, width: 4, height: 4 })) as M;
+    await expect(invoke(IPC.marksCreate, s(), docId, { kind: "region", sha: "b".repeat(64), rect: { x: 0, y: 0, width: 4, height: 4 } })).rejects.toThrow("截图不存在");
+    const r = (await invoke(IPC.marksCreate, s(), docId, { kind: "region", sha: shaA, rect: { x: 0, y: 0, width: 4, height: 4 } })) as M;
     await invoke(IPC.marksRemove, s(), r.id);
     expect(existsSync(capture.capturePath(root, shaA))).toBe(true);
   });
 
   it("一起问: one message, marks in order, answer counts text + images", async () => {
     const a = (await invoke(IPC.marksCreate, s(), docId, { kind: "text", text: "甲" })) as M;
-    const b = (await invoke(IPC.marksCreate, s(), docId, { kind: "region", sha: shaA, width: 4, height: 4 })) as M;
+    const b = (await invoke(IPC.marksCreate, s(), docId, { kind: "region", sha: shaA, rect: { x: 0, y: 0, width: 4, height: 4 } })) as M;
     const sender = s();
     const r = (await invoke(IPC.tasksRun, sender, { kind: "ask", selection: "", question: "有什么关系？", docId, marks: [b.id, a.id] })) as {
       userMessage: { meta: { request: { marks: string[] }; marks: { kind: string }[] } };
@@ -188,7 +195,7 @@ describe("marks IPC + 一起问 (POINT_FAKE_LLM=1)", () => {
 
   it("一起问 with a region mark on a text-only model: no_vision, nothing stored", async () => {
     process.env.POINT_FAKE_VISION = "0";
-    const b = (await invoke(IPC.marksCreate, s(), docId, { kind: "region", sha: shaA, width: 4, height: 4 })) as M;
+    const b = (await invoke(IPC.marksCreate, s(), docId, { kind: "region", sha: shaA, rect: { x: 0, y: 0, width: 4, height: 4 } })) as M;
     const before = ((await invoke(IPC.convList, s())) as unknown[]).length;
     await expect(invoke(IPC.tasksRun, s(), { kind: "ask", selection: "", question: "q", docId, marks: [b.id] })).rejects.toThrow(/当前模型不支持图片/);
     expect(((await invoke(IPC.convList, s())) as unknown[]).length).toBe(before);
@@ -198,6 +205,18 @@ describe("marks IPC + 一起问 (POINT_FAKE_LLM=1)", () => {
     process.env.POINT_FAKE_VISION = "0";
     const a = (await invoke(IPC.marksCreate, s(), docId, { kind: "text", text: "乙" })) as M;
     await expect(invoke(IPC.tasksRun, s(), { kind: "ask", selection: "", question: "q", docId, marks: [a.id] })).resolves.toBeTruthy();
+  });
+
+  it("一起问 requires a docId, and every mark must belong to it", async () => {
+    const a = (await invoke(IPC.marksCreate, s(), docId, { kind: "text", text: "丁" })) as M;
+    for (const bad of [undefined, null, ""]) {
+      await expect(invoke(IPC.tasksRun, s(), { kind: "ask", selection: "", question: "q", docId: bad, marks: [a.id] })).rejects.toThrow("一起问需要指定文档");
+    }
+    await expect(invoke(IPC.tasksRun, s(), { kind: "ask", selection: "", question: "q", docId: "../x", marks: [a.id] })).rejects.toThrow("无效的文档 id");
+    const other = "55555555-5555-4555-8555-555555555555";
+    ws.need().db.prepare("INSERT INTO docs VALUES (?, '别的', 'md', 'docs/y.md', 't')").run(other);
+    const b = (await invoke(IPC.marksCreate, s(), other, { kind: "text", text: "戊" })) as M;
+    await expect(invoke(IPC.tasksRun, s(), { kind: "ask", selection: "", question: "q", docId, marks: [a.id, b.id] })).rejects.toThrow("标记不存在");
   });
 
   it("rejects unknown / foreign / malformed mark ids and non-ask kinds", async () => {

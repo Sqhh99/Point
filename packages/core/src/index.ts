@@ -63,6 +63,7 @@ export {
   type Mark,
   type MarkAnchor,
   type MarkDb,
+  type MarkRect,
   type RegionAnchor,
   type TextAnchor
 } from "./marks/index.js";
