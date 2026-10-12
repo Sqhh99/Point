@@ -7,6 +7,7 @@ import { FakeSender, invoke, state } from "./electron-mock.js";
 vi.mock("electron", async () => (await import("./electron-mock.js")).electronModule());
 
 const { IPC } = await import("../../src/shared/ipc.js");
+import type { OpenResult, RecentItem } from "../../src/shared/ipc.js";
 const ws = await import("../../src/main/workspace.js");
 const { registerOpenIpc, openPath, resolveOpenTarget, scratchRoot } = await import("../../src/main/open-ipc.js");
 const { pushRecent, RECENT_MAX } = await import("../../src/main/recent.js");
@@ -29,7 +30,7 @@ beforeEach(() => {
 describe("single-file mode", () => {
   it("opening a file without a workspace uses the private scratch workspace", async () => {
     state.openResult = { canceled: false, filePaths: [mdFile()] };
-    const r = await invoke(IPC.openFile, s());
+    const r = (await invoke(IPC.openFile, s())) as OpenResult;
     expect(r.workspace.path).toBe(scratchRoot());
     expect(r.doc).toMatchObject({ type: "md", title: "标题" });
     expect(ws.listDocs()).toHaveLength(1);
@@ -48,7 +49,7 @@ describe("single-file mode", () => {
     await openPath(mdFile());
     await openPath(root);
     expect(ws.workspacePath()).toBe(root);
-    const recent = await invoke(IPC.openRecent, s());
+    const recent = (await invoke(IPC.openRecent, s())) as RecentItem[];
     expect(recent.map((x: { kind: string }) => x.kind)).toEqual(["workspace", "file"]);
     expect(recent.some((x: { path: string }) => x.path === scratchRoot())).toBe(false);
   });
@@ -95,7 +96,7 @@ describe("recent by index", () => {
     const f = mdFile();
     await openPath(f);
     ws.closeWorkspace();
-    const r = await invoke(IPC.openRecentAt, s(), 0);
+    const r = (await invoke(IPC.openRecentAt, s(), 0)) as OpenResult;
     expect(r.doc?.type).toBe("md");
     for (const bad of [-1, 1, 99, 0.5, "0", null, "/etc/passwd"]) await expect(invoke(IPC.openRecentAt, s(), bad)).rejects.toThrow("无效的最近记录");
   });
