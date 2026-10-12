@@ -90,6 +90,11 @@ export interface StoredMessage {
   createdAt: string;
 }
 
+export type ExportResult =
+  | { ok: true; path: string }
+  | { ok: false; canceled: true }
+  | { ok: false; canceled?: false; message: string };
+
 export interface PointAPI {
   platform: string;
   settings: {
@@ -123,6 +128,8 @@ export interface PointAPI {
     list(): Promise<ConversationMeta[]>;
     messages(conversationId: string): Promise<StoredMessage[]>;
     remove(conversationId: string): Promise<void>;
+    /** System save dialog → one .md of the conversation. */
+    export(conversationId: string): Promise<ExportResult>;
   };
   notes: {
     list(): Promise<NoteMeta[]>;
@@ -130,6 +137,10 @@ export interface PointAPI {
     create(input: NoteInput): Promise<Note>;
     update(id: string, patch: { title?: string; body?: string; tags?: string[] }): Promise<Note>;
     append(id: string, text: string): Promise<Note>;
+    /** System save dialog → one .md with export frontmatter. */
+    exportCurrent(id: string): Promise<ExportResult>;
+    /** System save dialog → zip of every note in the workspace. */
+    exportAll(): Promise<ExportResult>;
   };
 }
 
@@ -156,5 +167,8 @@ export const IPC = {
   notesRead: "notes:read",
   notesCreate: "notes:create",
   notesUpdate: "notes:update",
-  notesAppend: "notes:append"
+  notesAppend: "notes:append",
+  notesExportCurrent: "notes:exportCurrent",
+  notesExportAll: "notes:exportAll",
+  convExport: "conversations:export"
 } as const;

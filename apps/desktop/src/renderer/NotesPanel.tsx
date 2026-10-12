@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Note, NoteMeta } from "@point/core";
+import type { ExportResult } from "../shared/ipc";
 import { Markdown } from "./Markdown";
 
 const api = window.point;
@@ -23,8 +24,87 @@ interface Props {
   pending: boolean;
 }
 
+type Toast = { kind: "ok" | "err"; text: string; retry?: () => void };
+
 const FLASH_MS = 1500;
+const TOAST_MS = 2000;
 const parseTags = (s: string) => s.split(/[,，\s]+/).map((t) => t.trim()).filter(Boolean);
+
+function ExportMenu({
+  canSaveAs,
+  onSaveAs,
+  onPack,
+  toast
+}: {
+  canSaveAs: boolean;
+  onSaveAs(): void;
+  onPack(): void;
+  toast: Toast | null;
+}) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      if (!root.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="export-menu" ref={root}>
+      <button
+        className="link"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        data-testid="export-menu"
+        onClick={() => setOpen((o) => !o)}
+      >
+        导出 ▾
+      </button>
+      {open && (
+        <div className="export-dropdown" role="menu">
+          <button
+            role="menuitem"
+            disabled={!canSaveAs}
+            onClick={() => {
+              setOpen(false);
+              onSaveAs();
+            }}
+          >
+            另存为…
+          </button>
+          <button
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              onPack();
+            }}
+          >
+            打包导出…
+          </button>
+        </div>
+      )}
+      {toast && (
+        <span className={`export-toast ${toast.kind}`} data-testid="export-toast" role="status">
+          {toast.text}
+          {toast.retry && (
+            <button className="link" onClick={toast.retry}>
+              重试
+            </button>
+          )}
+        </span>
+      )}
+    </div>
+  );
+}
 
 export function NotesPanel({ current, onSelect, version, docId, docTitle, flash, pending }: Props) {
   const [list, setList] = useState<NoteMeta[]>([]);
@@ -35,6 +115,8 @@ export function NotesPanel({ current, onSelect, version, docId, docTitle, flash,
   const [mode, setMode] = useState<"edit" | "preview">("edit");
   const [status, setStatus] = useState("");
   const [activeFlash, setActiveFlash] = useState<NoteFlash | null>(null);
+  const [toast, setToast] = useState<Toast | null>(null);
+  const toastTimer = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     api.notes.list().then(setList, () => setList([]));
@@ -54,7 +136,6 @@ export function NotesPanel({ current, onSelect, version, docId, docTitle, flash,
     );
   }, [current, version, onSelect]);
 
-  // Show the inserted paragraph highlighted, then fade back to the editor.
   useEffect(() => {
     if (!flash || flash.noteId !== current) return;
     setActiveFlash(flash);
@@ -62,15 +143,48 @@ export function NotesPanel({ current, onSelect, version, docId, docTitle, flash,
     return () => clearTimeout(t);
   }, [flash, current]);
 
+  useEffect(() => () => window.clearTimeout(toastTimer.current), []);
+
   const dirty = !!note && (title !== note.title || body !== note.body || tags !== note.tags.join(", "));
 
+  const showToast = (t: Toast) => {
+    window.clearTimeout(toastTimer.current);
+    setToast(t);
+    if (t.kind === "ok") toastTimer.current = window.setTimeout(() => setToast(null), TOAST_MS);
+  };
+
+  const applyResult = (r: ExportResult, retry: () => void) => {
+    if (r.ok) showToast({ kind: "ok", text: "已导出" });
+    else if ("canceled" in r && r.canceled) setToast(null);
+    else showToast({ kind: "err", text: "message" in r ? r.message : "导出失败", retry });
+  };
+
   const save = async () => {
-    if (!note) return;
+    if (!note) return note;
     const n = await api.notes.update(note.id, { title, body, tags: parseTags(tags) });
     setNote(n);
     setTags(n.tags.join(", "));
     setList(await api.notes.list());
     setStatus("已保存");
+    return n;
+  };
+
+  const exportCurrent = async () => {
+    if (!note) return;
+    try {
+      if (dirty) await save();
+      applyResult(await api.notes.exportCurrent(note.id), () => void exportCurrent());
+    } catch (err) {
+      showToast({ kind: "err", text: (err as Error).message, retry: () => void exportCurrent() });
+    }
+  };
+
+  const exportAll = async () => {
+    try {
+      applyResult(await api.notes.exportAll(), () => void exportAll());
+    } catch (err) {
+      showToast({ kind: "err", text: (err as Error).message, retry: () => void exportAll() });
+    }
   };
 
   const create = async () => {
@@ -81,12 +195,17 @@ export function NotesPanel({ current, onSelect, version, docId, docTitle, flash,
   };
 
   const pendingBar = pending && <div className="note-pending hint">AI 正在整理笔记…</div>;
+  const exportControls = (
+    <ExportMenu canSaveAs={!!note || !!current} onSaveAs={() => void exportCurrent()} onPack={() => void exportAll()} toast={toast} />
+  );
 
   if (!note) {
     return (
       <div className="notes">
         <div className="notes-toolbar">
           <button onClick={() => void create()}>新建笔记</button>
+          <span className="push-right" />
+          {exportControls}
         </div>
         {pendingBar}
         <ul className="note-list" data-testid="note-list">
@@ -113,6 +232,7 @@ export function NotesPanel({ current, onSelect, version, docId, docTitle, flash,
           ‹ 全部笔记
         </button>
         <span className="push-right" />
+        {exportControls}
         <button className="link" onClick={() => setMode(mode === "edit" ? "preview" : "edit")}>
           {mode === "edit" ? "预览" : "编辑"}
         </button>

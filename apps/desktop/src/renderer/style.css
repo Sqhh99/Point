@@ -180,3 +180,19 @@ button.link.active { color: var(--accent); }
 .status { font-size: 13px; }
 .status.ok { color: var(--success); }
 .status.err { color: var(--danger); }
+
+/* export menu (notes toolbar) */
+.export-menu { position: relative; display: inline-flex; align-items: center; gap: 6px; }
+.export-dropdown {
+  position: absolute; top: calc(100% + 4px); right: 0; z-index: 20;
+  min-width: 140px; padding: 4px; background: var(--bg-elevated); border: 1px solid var(--border);
+  border-radius: 8px; box-shadow: var(--shadow); display: flex; flex-direction: column;
+}
+.export-dropdown button {
+  border: none; border-radius: 6px; text-align: left; padding: 7px 10px; font-size: 13px; color: var(--text);
+}
+.export-dropdown button:hover:not(:disabled) { background: var(--hover); }
+.export-dropdown button:disabled { opacity: 0.4; }
+.export-toast { font-size: 12px; white-space: nowrap; animation: pop-in 0.12s ease-out; }
+.export-toast.ok { color: var(--success); }
+.export-toast.err { color: var(--danger); display: inline-flex; align-items: center; gap: 2px; }

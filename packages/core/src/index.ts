@@ -36,3 +36,13 @@ export {
   type TaskOutput
 } from "./tasks/index.js";
 export { NoteStore, parseNote, serializeNote, type Note, type NoteInput, type NoteMeta } from "./notes/index.js";
+export {
+  formatConversationMarkdown,
+  formatExportedNote,
+  noteFileName,
+  zipExportedNotes,
+  type ConversationExportMessage,
+  type ExportFrontmatter,
+  type FormatExportOptions,
+  type NoteExportEntry
+} from "./notes/export.js";
