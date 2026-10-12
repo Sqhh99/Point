@@ -25,12 +25,28 @@ artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 # (Inno Setup) turns it into the installer. See scripts/package.mjs.
 win:
   target: dir
+  icon: build/icon.ico
 mac:
   category: public.app-category.education
   target: dmg
+  icon: build/icon.png
+# Background arrow runs from (140,190) to (400,190); see build/dmg-background.png.
+dmg:
+  background: build/dmg-background.png
+  window:
+    width: 540
+    height: 380
+  contents:
+    - x: 140
+      y: 190
+    - x: 400
+      y: 190
+      type: link
+      path: /Applications
 # Linux is not shipped; `dir` exists only so packaging can be smoke-tested locally.
 linux:
   target: dir
+  icon: build/icon.png
   executableName: point
 publish:
   provider: github
