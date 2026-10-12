@@ -42,6 +42,42 @@ const stripIpcPrefix = (m: string) => m.replace(/^Error invoking remote method '
 
 export const captureUrl = (sha: string) => `point-capture://${sha}`;
 
+/** A capture image; a 404 (deleted file, other workspace) becomes a same-size 「截图已失效」 box. */
+function CaptureImg({ sha, alt, onBroken }: { sha: string; alt: string; onBroken?(): void }) {
+  const [broken, setBroken] = useState(false);
+  if (broken)
+    return (
+      <span className="capture-missing" data-testid="capture-missing" role="img" aria-label="截图已失效">
+        截图已失效
+      </span>
+    );
+  return (
+    <img
+      src={captureUrl(sha)}
+      alt={alt}
+      onError={() => {
+        setBroken(true);
+        onBroken?.();
+      }}
+    />
+  );
+}
+
+function BubbleImage({ sha, onOpen }: { sha: string; onOpen(sha: string): void }) {
+  const [broken, setBroken] = useState(false);
+  if (broken)
+    return (
+      <div className="quote-image missing" data-testid="bubble-image">
+        <CaptureImg sha={sha} alt="截图" />
+      </div>
+    );
+  return (
+    <button className="quote-image" data-testid="bubble-image" onClick={() => onOpen(sha)} title="查看大图">
+      <CaptureImg sha={sha} alt="截图" onBroken={() => setBroken(true)} />
+    </button>
+  );
+}
+
 /** Full-size view of a screenshot; Esc or any click closes it. */
 function Lightbox({ sha, onClose }: { sha: string; onClose(): void }) {
   useEffect(() => {
@@ -64,9 +100,7 @@ function QuoteCard({ meta, onOpenImage }: { meta: MessageMeta; onOpenImage(sha: 
   return (
     <blockquote className={`quote-card${open ? " open" : ""}`} data-testid="quote-card">
       {image && (
-        <button className="quote-image" data-testid="bubble-image" onClick={() => onOpenImage(image)} title="查看大图">
-          <img src={captureUrl(image)} alt="截图" />
-        </button>
+        <BubbleImage sha={image} onOpen={onOpenImage} />
       )}
       {selection?.trim() && (
         <button className="quote-text" onClick={() => setOpen((o) => !o)} title={open ? "收起" : "展开"}>
@@ -366,7 +400,7 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
             )}
             {image && (
               <div className="attached-thumb" data-testid="attached-image">
-                <img src={captureUrl(image.sha)} alt={`截图 ${image.width}×${image.height}`} />
+                <CaptureImg key={image.sha} sha={image.sha} alt={`截图 ${image.width}×${image.height}`} />
                 <button className="thumb-remove" onClick={() => setImage(null)} aria-label="移除截图">
                   ×
                 </button>

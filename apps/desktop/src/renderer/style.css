@@ -252,3 +252,7 @@ button.link.active { color: var(--accent); }
 .statusbar-sep { padding: 0 4px; }
 .statusbar-right { margin-left: auto; display: flex; gap: 12px; min-width: 0; }
 .check { display: flex; align-items: center; gap: 8px; margin: -4px 0 16px; font-size: 13px; color: var(--text); }
+.capture-missing { display: grid; place-items: center; box-sizing: border-box; background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.attached-thumb .capture-missing { height: 48px; width: 86px; }
+.quote-image.missing { cursor: default; width: fit-content; max-width: 240px; }
+.quote-image.missing .capture-missing { width: 240px; max-width: 100%; height: 135px; }

@@ -431,4 +431,39 @@ test("status bar shows workspace, doc and model; region capture attaches a scree
 
   // The renderer cannot name a path: only a 64-hex sha is accepted.
   await expect(win.evaluate(() => window.point.tasks.run({ kind: "ask", selection: "", question: "q", image: "../index.db" }))).rejects.toThrow(/无效的截图标识/);
+
+  // Expired screenshots (file deleted / other workspace): main is stubbed so capture and the question both
+  // name a sha with no file on disk, so the real protocol answers 404. Input and bubble show 「截图已失效」.
+  const gone = "f".repeat(64);
+  await app.evaluate(({ ipcMain }, sha) => {
+    ipcMain.removeHandler("capture:region");
+    ipcMain.handle("capture:region", () => ({ sha, width: 140, height: 60 }));
+    ipcMain.removeHandler("tasks:run");
+    ipcMain.handle("tasks:run", (_e, req: { question?: string }) => {
+      const now = new Date().toISOString();
+      return {
+        requestId: "stub-req",
+        conversationId: "stub-conv",
+        userMessage: { id: "stub-msg", conversationId: "stub-conv", parentId: null, role: "user", content: req.question ?? "", kind: "ask", meta: { request: { kind: "ask", selection: "", question: req.question, image: sha } }, createdAt: now }
+      };
+    });
+  }, gone);
+  await win.getByTestId("capture-button").click();
+  await win.mouse.move(box.x + 30, box.y + 50);
+  await win.mouse.down();
+  await win.mouse.move(box.x + 170, box.y + 110, { steps: 5 });
+  await win.mouse.up();
+  const missingThumb = attached.getByTestId("capture-missing");
+  await expect(missingThumb).toHaveText("截图已失效");
+  expect((await missingThumb.boundingBox())?.height).toBe(48);
+  await expect(attached.getByRole("button", { name: "移除截图" })).toBeVisible();
+  await input.fill("失效截图");
+  await input.press("Enter");
+  const missingBubble = log.getByTestId("bubble-image").last();
+  await expect(missingBubble.getByTestId("capture-missing")).toHaveText("截图已失效");
+  expect((await missingBubble.boundingBox())!.width).toBeLessThanOrEqual(240);
+  expect(await missingBubble.evaluate((e) => e.tagName)).not.toBe("BUTTON");
+  await missingBubble.click();
+  await expect(lightbox).toBeHidden();
+
 });
