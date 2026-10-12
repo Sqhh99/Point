@@ -67,6 +67,7 @@ const api: PointAPI = {
   conversations: {
     list: () => ipcRenderer.invoke(IPC.convList),
     messages: (id) => ipcRenderer.invoke(IPC.convMessages, id),
+    tree: (id) => ipcRenderer.invoke(IPC.convTree, id),
     remove: (id) => ipcRenderer.invoke(IPC.convRemove, id),
     export: (id) => ipcRenderer.invoke(IPC.convExport, id)
   },

@@ -126,3 +126,49 @@ export function locateOrigin(text: string, o: Pick<BranchOrigin, "start" | "end"
   }
   return best === -1 ? null : { start: best, end: best + o.quote.length };
 }
+
+/** Children of `parentId` ("" for roots) that are not span branches: the alternatives shown by 「‹ 2/3 ›」. */
+function plainChildren<T extends TreeNode>(kids: Map<string, T[]>, branched: Set<string>, parentId: string): T[] {
+  return (kids.get(parentId) ?? []).filter((n) => !branched.has(n.id));
+}
+
+/**
+ * Alternatives at the position of `id`, oldest first: messages with the same parent that are not
+ * span branches (regenerated answers, re-asked questions). A span branch has no siblings of its own
+ * kind and returns just itself. Unknown id gives [].
+ */
+export function siblingsOf<T extends TreeNode>(nodes: readonly T[], origins: readonly BranchOrigin[], id: string): T[] {
+  const node = nodes.find((n) => n.id === id);
+  if (!node) return [];
+  const branched = new Set(origins.map((o) => o.childId));
+  if (branched.has(id)) return [node];
+  const ids = new Set(nodes.map((n) => n.id));
+  const key = node.parentId && ids.has(node.parentId) ? node.parentId : "";
+  return plainChildren(childrenOf(nodes), branched, key);
+}
+
+/** Leaf reached from `fromId` by always taking the newest non-branch child (design: newest answer shows by default). */
+export function latestLeaf<T extends TreeNode>(nodes: readonly T[], origins: readonly BranchOrigin[], fromId: string): T | undefined {
+  const kids = childrenOf(nodes);
+  const branched = new Set(origins.map((o) => o.childId));
+  let cur = nodes.find((n) => n.id === fromId);
+  const seen = new Set<string>();
+  while (cur && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    const next: T | undefined = plainChildren(kids, branched, cur.id).at(-1);
+    if (!next) break;
+    cur = next;
+  }
+  return cur;
+}
+
+/** What a conversation opens on: newest root, then newest answers all the way down. */
+export function defaultLeaf<T extends TreeNode>(nodes: readonly T[], origins: readonly BranchOrigin[]): T | undefined {
+  const root = plainChildren(childrenOf(nodes), new Set(origins.map((o) => o.childId)), "").at(-1);
+  return root ? latestLeaf(nodes, origins, root.id) : undefined;
+}
+
+/** Branch origins whose source is `id` (for the 「⑂ n 个分支」 chip of the answer being shown). */
+export function branchesFrom(origins: readonly BranchOrigin[], id: string): BranchOrigin[] {
+  return origins.filter((o) => o.sourceId === id);
+}
