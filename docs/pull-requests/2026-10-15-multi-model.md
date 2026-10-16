@@ -1,7 +1,7 @@
 ## 做了什么
 对话输入框上方增加**当前供应商**的模型下拉和思考等级分段；设置里的 DeepSeek / OpenAI / GLM 迁到数据驱动的 `ModelSpec`（密钥仍在 safeStorage）。
 
-![模型栏与思考等级](https://raw.githubusercontent.com/Sqhh99/Point/COMMIT/docs/assets/pr/2026-10-15-multi-model.png)
+![模型栏与思考等级](https://raw.githubusercontent.com/Sqhh99/Point/fef9cc244622d2369f9061e5699e37872009df9c/docs/assets/pr/2026-10-15-multi-model.png)
 
 - Migration 004：对话可记住 `model` / `effort`（可空 = 用默认）
 - DeepSeek 旧名映射：`deepseek-chat`→flash+思考关，`deepseek-reasoner`→flash+高；未知名回退默认并提示
