@@ -23,6 +23,10 @@ export interface ChatOptions {
   model: string;
   temperature?: number;
   maxTokens?: number;
+  /** When set, these dotted paths are merged into the request body (thinking / reasoning_effort / …). */
+  effortWrites?: Readonly<Record<string, string | boolean | number | null>>;
+  /** Omit temperature (thinking mode). */
+  omitTemperature?: boolean;
   signal?: AbortSignal;
 }
 

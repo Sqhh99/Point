@@ -62,7 +62,14 @@ describe("002 on the real v0.1.0 fixture", () => {
     expect(ws.need().notes.list().map((x) => ({ title: x.title }))).toEqual(notesBefore);
     ws.closeWorkspace();
     const after = readOld(db);
-    expect(after.convs).toEqual(before.convs);
+    expect(
+      after.convs.map((row) => {
+        const r = { ...(row as Record<string, unknown>) };
+        delete r.model;
+        delete r.effort;
+        return r;
+      })
+    ).toEqual(before.convs);
     expect(after.docs).toEqual(before.docs);
   });
 

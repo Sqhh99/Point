@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { LLMError, createProvider, getPreset, type ChatMessage, type LLMProvider, type ProviderId } from "@point/core";
 import { IPC, type ChatEvent, type ProviderPatch, type TestResult } from "../shared/ipc.js";
 import { FakeProvider, fakeEnabled, fakeVision } from "./fake-llm.js";
-import { resolveProvider, setKey, update, view } from "./settings.js";
+import { listModels, resolveProvider, setKey, update, view } from "./settings.js";
 
 const running = new Map<string, AbortController>();
 
@@ -44,6 +44,7 @@ async function runChat(sender: WebContents, requestId: string, messages: ChatMes
 
 export function registerIpc(): void {
   ipcMain.handle(IPC.settingsGet, () => view());
+  ipcMain.handle(IPC.modelsList, () => listModels());
   ipcMain.handle(IPC.settingsUpdate, (_e, patch: ProviderPatch) => {
     assertProviderId(patch?.id);
     return update(patch);

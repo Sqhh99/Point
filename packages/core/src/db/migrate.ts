@@ -1,6 +1,7 @@
 import init from "./migrations/001_init.js";
 import branches from "./migrations/002_branches.js";
 import marks from "./migrations/003_marks.js";
+import modelEffort from "./migrations/004_model_effort.js";
 
 /** The subset of better-sqlite3 the migrator needs, so core stays free of native deps. */
 export interface MigratableDb {
@@ -11,7 +12,8 @@ export interface MigratableDb {
 }
 
 /** Ordered list; migration N (1-based) brings the schema to user_version N. Append only, never edit. */
-export const MIGRATIONS: readonly string[] = [init, branches, marks];
+export type Migration = string | ((db: MigratableDb) => void);
+export const MIGRATIONS: readonly Migration[] = [init, branches, marks, modelEffort];
 
 export class DbTooNewError extends Error {
   constructor(
@@ -40,7 +42,7 @@ function adoptLegacy(db: MigratableDb): void {
 }
 
 /** Runs every missing migration in one transaction. Throws (with nothing changed) on failure. */
-export function migrate(db: MigratableDb, migrations: readonly string[] = MIGRATIONS): number {
+export function migrate(db: MigratableDb, migrations: readonly Migration[] = MIGRATIONS): number {
   const run = db.transaction(() => {
     let version = Number(db.pragma("user_version", { simple: true }));
     if (version > migrations.length) throw new DbTooNewError(version, migrations.length);
@@ -49,7 +51,9 @@ export function migrate(db: MigratableDb, migrations: readonly string[] = MIGRAT
       version = Number(db.pragma("user_version", { simple: true }));
     }
     for (let v = version; v < migrations.length; v++) {
-      db.exec(migrations[v]);
+      const step = migrations[v]!;
+      if (typeof step === "string") db.exec(step);
+      else step(db);
       db.pragma(`user_version = ${v + 1}`, { simple: true });
     }
     return migrations.length;

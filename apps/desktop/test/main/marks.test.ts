@@ -36,10 +36,10 @@ const ids = () => `00000000-0000-4000-8000-${String(++n).padStart(12, "0")}`;
 describe("migration 003 (marks)", () => {
   it("runs after 001/002 and is idempotent", () => {
     const db = new Database(":memory:");
-    expect(MIGRATIONS).toHaveLength(3);
+    expect(MIGRATIONS).toHaveLength(4);
     migrate(db);
     migrate(db);
-    expect(db.pragma("user_version", { simple: true })).toBe(3);
+    expect(db.pragma("user_version", { simple: true })).toBe(4);
     const cols = (db.prepare("PRAGMA table_info(marks)").all() as { name: string }[]).map((c) => c.name);
     expect(cols).toEqual(["id", "doc_id", "anchor_json", "note", "created_at"]);
   });
@@ -49,7 +49,7 @@ describe("migration 003 (marks)", () => {
     migrate(db, MIGRATIONS.slice(0, 2));
     db.prepare("INSERT INTO docs VALUES ('d', 't', 'md', 'p', 't')").run();
     migrate(db);
-    expect(db.pragma("user_version", { simple: true })).toBe(3);
+    expect(db.pragma("user_version", { simple: true })).toBe(4);
     expect(db.prepare("SELECT id FROM docs").all()).toEqual([{ id: "d" }]);
   });
 

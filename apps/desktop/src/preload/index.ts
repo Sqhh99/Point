@@ -26,6 +26,9 @@ const api: PointAPI = {
     setKey: (id, key) => ipcRenderer.invoke(IPC.settingsSetKey, id, key),
     testConnection: (id) => ipcRenderer.invoke(IPC.settingsTest, id)
   },
+  models: {
+    list: () => ipcRenderer.invoke(IPC.modelsList)
+  },
   chat: {
     start: (messages, providerId) => ipcRenderer.invoke(IPC.chatStart, messages, providerId),
     cancel: (requestId) => ipcRenderer.invoke(IPC.chatCancel, requestId),
@@ -71,7 +74,8 @@ const api: PointAPI = {
     messages: (id) => ipcRenderer.invoke(IPC.convMessages, id),
     tree: (id) => ipcRenderer.invoke(IPC.convTree, id),
     remove: (id) => ipcRenderer.invoke(IPC.convRemove, id),
-    export: (id) => ipcRenderer.invoke(IPC.convExport, id)
+    export: (id) => ipcRenderer.invoke(IPC.convExport, id),
+    setModel: (id, model, effort) => ipcRenderer.invoke(IPC.conversationModel, id, model, effort)
   },
   notes: {
     list: () => ipcRenderer.invoke(IPC.notesList),

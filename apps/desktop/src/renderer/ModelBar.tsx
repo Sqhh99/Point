@@ -1,0 +1,94 @@
+import { useCallback, useEffect, useState } from "react";
+import type { ModelSpec } from "@point/core";
+
+type Listed = ModelSpec & { configured: boolean };
+type List = { providerId: string; providerName: string; notice?: string; models: Listed[] };
+
+/**
+ * One row above the input: current-provider model dropdown (left) and thinking-level control (right).
+ * Provider switching stays in Settings; this list is only that provider's models.
+ */
+export function ModelBar({
+  conversationId,
+  model,
+  effort,
+  onChange
+}: {
+  conversationId: string | null;
+  model: string | null;
+  effort: string | null;
+  onChange(model: string, effort: string | null): void;
+}) {
+  const [list, setList] = useState<List | null>(null);
+
+  const refresh = useCallback(() => {
+    window.point.models.list().then(setList, () => setList(null));
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh, conversationId]);
+
+  if (!list) return null;
+  const active = list.models.find((m) => m.id === model) ?? list.models.find((m) => m.id === list.models[0]?.id);
+  const efforts = active?.efforts ?? [];
+  const currentEffort = effort && efforts.some((e) => e.id === effort) ? effort : active?.defaultEffort ?? null;
+
+  const pick = async (nextModel: string, nextEffort: string | null) => {
+    onChange(nextModel, nextEffort);
+    if (conversationId) {
+      try {
+        await window.point.conversations.setModel(conversationId, nextModel, nextEffort);
+      } catch {
+        /* ask still works; memory is best-effort */
+      }
+    }
+  };
+
+  return (
+    <div className="model-bar" data-testid="model-bar" role="group" aria-label="模型和思考">
+      <label className="model-pick">
+        <span className="sr-only">模型</span>
+        <select
+          data-testid="model-select"
+          value={active?.id ?? ""}
+          onChange={(e) => {
+            const m = list.models.find((x) => x.id === e.target.value);
+            if (!m) return;
+            void pick(m.id, m.defaultEffort);
+          }}
+        >
+          {list.models.map((m) => (
+            <option key={m.id} value={m.id} disabled={!m.configured} title={m.configured ? undefined : "未配置密钥"}>
+              {m.label}
+              {m.vision ? " · 看图" : ""}
+              {m.efforts.length ? " · 思考" : ""}
+              {m.configured ? "" : "（未配置密钥）"}
+            </option>
+          ))}
+        </select>
+      </label>
+      {efforts.length > 0 && (
+        <div className="effort-seg" data-testid="effort-control" role="group" aria-label="思考等级">
+          {efforts.map((e) => (
+            <button
+              key={e.id}
+              type="button"
+              className={currentEffort === e.id ? "active" : undefined}
+              aria-pressed={currentEffort === e.id}
+              data-testid={`effort-${e.id}`}
+              onClick={() => active && void pick(active.id, e.id)}
+            >
+              {e.label}
+            </button>
+          ))}
+        </div>
+      )}
+      {list.notice && (
+        <span className="model-notice" data-testid="model-notice" role="status">
+          {list.notice}
+        </span>
+      )}
+    </div>
+  );
+}

@@ -193,7 +193,7 @@ describe("settings: capabilities.vision", () => {
 
   it("defaults from the preset list", async () => {
     const v = (await invoke(IPC.settingsGet, new FakeSender())) as View;
-    expect(v.active).toMatchObject({ model: "deepseek-chat", vision: false });
+    expect(v.active).toMatchObject({ model: "deepseek-flash", vision: true });
     expect(v.providers.find((p) => p.id === "openai")!.capabilities.vision).toBe(true);
     expect(v.providers.find((p) => p.id === "glm")!.capabilities.vision).toBe(false);
   });
@@ -203,7 +203,7 @@ describe("settings: capabilities.vision", () => {
     expect(v.active.vision).toBe(true);
     expect(v.providers.find((p) => p.id === "deepseek")!.visionOverride).toBe(true);
     v = (await invoke(IPC.settingsUpdate, new FakeSender(), { id: "deepseek", vision: null })) as View;
-    expect(v.active.vision).toBe(false);
+    expect(v.active.vision).toBe(true); // preset: deepseek-flash has vision
     v = (await invoke(IPC.settingsUpdate, new FakeSender(), { id: "glm", model: "glm-4v-flash", makeActive: true })) as View;
     expect(v.active).toMatchObject({ model: "glm-4v-flash", vision: true });
   });
