@@ -3,11 +3,11 @@ PDF、Word、Excel 现在在中间栏按**原貌**显示（此前只是提取文
 
 | PDF | Word |
 |---|---|
-| ![PDF](https://raw.githubusercontent.com/Sqhh99/Point/COMMIT/docs/assets/pr/2026-10-15-viewer-pdf.png) | ![Word](https://raw.githubusercontent.com/Sqhh99/Point/COMMIT/docs/assets/pr/2026-10-15-viewer-docx.png) |
+| ![PDF](https://raw.githubusercontent.com/Sqhh99/Point/4cb1ec24899d0b6851f2be04d11ebe0f39bfada1/docs/assets/pr/2026-10-15-viewer-pdf.png) | ![Word](https://raw.githubusercontent.com/Sqhh99/Point/4cb1ec24899d0b6851f2be04d11ebe0f39bfada1/docs/assets/pr/2026-10-15-viewer-docx.png) |
 
 | Excel（底部工作表标签） | 解析失败的空状态 |
 |---|---|
-| ![Excel](https://raw.githubusercontent.com/Sqhh99/Point/COMMIT/docs/assets/pr/2026-10-15-viewer-xlsx.png) | ![空状态](https://raw.githubusercontent.com/Sqhh99/Point/COMMIT/docs/assets/pr/2026-10-15-viewer-empty.png) |
+| ![Excel](https://raw.githubusercontent.com/Sqhh99/Point/4cb1ec24899d0b6851f2be04d11ebe0f39bfada1/docs/assets/pr/2026-10-15-viewer-xlsx.png) | ![空状态](https://raw.githubusercontent.com/Sqhh99/Point/4cb1ec24899d0b6851f2be04d11ebe0f39bfada1/docs/assets/pr/2026-10-15-viewer-empty.png) |
 
 - PDF：pdf.js 逐页 canvas + 文字层，可选字、框选、标记；Word：清洗后的 HTML，图片内联；Excel：列字母/行号/合并/列宽的真实网格。
 - 选区提问、框选提问、标记在三种格式上行为一致，高亮同一颜色。
