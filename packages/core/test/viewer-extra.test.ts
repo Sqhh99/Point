@@ -144,9 +144,11 @@ function encryptedPdf(): Uint8Array {
 }
 
 describe("pdf / docx edge files", () => {
+  // Windows CI cold-loads pdf.js then rejects (~15–20s); mac/Linux are sub-second.
+  // Same budget family as edge-cases CORRUPT_TIMEOUT (20s) plus headroom.
   it("encrypted PDF rejects (no hang, no crash)", async () => {
     await expect(parseDocument("pdf", encryptedPdf(), "t")).rejects.toThrow();
-  }, 15_000);
+  }, 30_000);
 
   it.each(["pdf", "docx"] as const)("0-byte %s rejects", async (type) => {
     await expect(parseDocument(type, new Uint8Array(), "t")).rejects.toThrow();
