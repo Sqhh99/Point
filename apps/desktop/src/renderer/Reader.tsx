@@ -1,17 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Block, Mark, MarkAnchor, ParsedDoc, TaskKind } from "@point/core";
+import type { Block, DocView, Mark, MarkAnchor, PageRect, ParsedDoc, TaskKind } from "@point/core";
 import type { JSX } from "react";
 import type { CaptureResult } from "../shared/ipc";
 import { CaptureOverlay } from "./Capture";
 import { EmptyState } from "./EmptyState";
 import { IconAsk, IconCapture, IconDiagram, IconExplain, IconMark, IconMore, IconNote } from "./icons";
 import { isCaptureKey, placeBar, type Box } from "./layout";
+import { DocError } from "./viewers/DocError";
+import { DocxView } from "./viewers/DocxView";
+import { PdfView, type PdfState } from "./viewers/PdfView";
+import { ReaderBar } from "./viewers/ReaderBar";
+import { SheetGrid, SheetTabs } from "./viewers/SheetView";
 
 export interface SelectionInfo {
   text: string;
   context: string;
   page?: number;
   blockId?: string;
+  /** PDF: extracted-text context around the quote, and where it sits on the page. */
+  prefix?: string;
+  suffix?: string;
+  rects?: PageRect[];
 }
 
 /** A finished region capture, with where it sits in the document. */
@@ -59,6 +68,30 @@ function contextOf(range: Range): string {
     .filter(Boolean)
     .join("\n\n");
 }
+
+/** PDF selections also record where they sit on the page (rects) and ~32 chars of text either side. */
+function pdfAnchor(range: Range, text: string): Pick<SelectionInfo, "prefix" | "suffix" | "rects"> {
+  const el = range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement;
+  const page = el?.closest<HTMLElement>(".pdf-page");
+  if (!page) return {};
+  const box = page.getBoundingClientRect();
+  const k = Number(page.dataset.scale) / (96 / 72);
+  const rects = Array.from(range.getClientRects())
+    .filter((r) => r.width > 0.5 && r.height > 0.5 && r.right > box.left && r.left < box.right && r.bottom > box.top && r.top < box.bottom)
+    .slice(0, 64)
+    .map((r) => ({ x: (r.left - box.left) / k, y: (r.top - box.top) / k, w: r.width / k, h: r.height / k }))
+    .map((r) => ({ x: Math.max(0, r.x), y: Math.max(0, r.y), w: r.w, h: r.h }));
+  const flat = (page.querySelector(".textLayer")?.textContent ?? "").replace(/\s+/g, " ");
+  const q = text.replace(/\s+/g, " ");
+  const i = flat.indexOf(q);
+  return {
+    rects: rects.length ? rects : undefined,
+    prefix: i > 0 ? flat.slice(Math.max(0, i - 32), i) : undefined,
+    suffix: i >= 0 && i + q.length < flat.length ? flat.slice(i + q.length, i + q.length + 32) : undefined
+  };
+}
+
+const stripIpc = (e: unknown): string => String((e as Error)?.message ?? e).replace(/^Error invoking remote method '[^']+': (Error: )?/, "");
 
 function BlockView({ b }: { b: Block }) {
   const common = { "data-block-id": b.id, "data-page": b.page };
@@ -124,13 +157,21 @@ interface ReaderProps {
   onRegionExplain(r: RegionInfo): void;
   marks: Mark[];
   /** Scroll to a block (from the marks list); a new seq re-runs. */
-  locate: { blockId: string; seq: number } | null;
+  locate: { blockId?: string; page?: number; seq: number } | null;
 }
 
 export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorkspace, onOpenFile, onOpenRecent, vision, onCapture, onCaptureError, onMark, onRegionExplain, marks, locate }: ReaderProps) {
   const [capture, setCapture] = useState<Box | null>(null);
   const [more, setMore] = useState(false);
   const [doc, setDoc] = useState<ParsedDoc | null>(null);
+  const [view, setView] = useState<DocView | null>(null);
+  const [title, setTitle] = useState("");
+  const [zoom, setZoom] = useState(100);
+  const [sheet, setSheet] = useState(0);
+  const [pdf, setPdf] = useState<PdfState>({ count: 0, current: 1 });
+  const [pdfReady, setPdfReady] = useState(false);
+  const [goto, setGoto] = useState<{ page: number; seq: number } | null>(null);
+  const [fit, setFit] = useState<{ seq: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toolbar, setToolbar] = useState<{ top: number; left: number; sel?: SelectionInfo; region?: RegionInfo } | null>(null);
   const articleRef = useRef<HTMLElement>(null);
@@ -162,7 +203,7 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
     const top = p.top + scroller.scrollTop;
     const left = p.left;
     const where = blockAt(range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement);
-    setToolbar({ top, left, sel: { text, context: contextOf(range), page: pageOf(range), blockId: where.blockId } });
+    setToolbar({ top, left, sel: { text, context: contextOf(range), page: pageOf(range), blockId: where.blockId, ...pdfAnchor(range, text) } });
   }, []);
 
   const onSelectEnd = useCallback(() => {
@@ -200,16 +241,21 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
 
   useEffect(() => () => window.clearTimeout(timer.current), []);
 
-  // Jump back to a mark's block and flash it briefly.
+  // Jump back to a mark: its block (switching sheet first for Excel) or, in a PDF, its page.
   useEffect(() => {
-    if (!locate || !doc) return;
-    const el = articleRef.current?.querySelector(`[data-block-id="${CSS.escape(locate.blockId)}"]`)?.closest(".block");
-    if (!el) return;
-    el.scrollIntoView({ block: "center" });
-    el.classList.add("located");
-    const t = window.setTimeout(() => el.classList.remove("located"), 1200);
-    return () => window.clearTimeout(t);
-  }, [locate?.seq, doc]);
+    if (!locate || !(doc || view)) return;
+    if (locate.blockId) {
+      const m = /^s(\d+)r\d+$/.exec(locate.blockId);
+      if (m && view?.kind === "xlsx" && Number(m[1]) !== sheet) return setSheet(Number(m[1]));
+      const el = articleRef.current?.querySelector(`[data-block-id="${CSS.escape(locate.blockId)}"]`)?.closest(".block");
+      if (!el) return;
+      el.scrollIntoView({ block: "center" });
+      el.classList.add("located");
+      const t = window.setTimeout(() => el.classList.remove("located"), 1200);
+      return () => window.clearTimeout(t);
+    }
+    if (locate.page && view?.kind === "pdf") setGoto({ page: locate.page, seq: locate.seq });
+  }, [locate?.seq, doc, view, sheet, pdfReady]);
 
   /** Same floating bar for a region: above the captured rectangle (below when there is no room). */
   const showRegionBar = (r: CaptureResult, rect: Box) => {
@@ -235,7 +281,7 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
     }
     if (!sel) return;
     if (id === "mark") {
-      onMark({ kind: "text", text: sel.text, blockId: sel.blockId, page: sel.page, context: sel.context });
+      onMark({ kind: "text", text: sel.text, blockId: sel.blockId, page: sel.page, context: sel.context, prefix: sel.prefix, suffix: sel.suffix, rects: sel.rects });
       window.getSelection()?.removeAllRanges();
     } else onAction(id, sel);
   };
@@ -262,20 +308,30 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
 
   useEffect(() => {
     setDoc(null);
+    setView(null);
     setError(null);
     setCapture(null);
+    setZoom(100);
+    setSheet(0);
+    setPdf({ count: 0, current: 1 });
+    setPdfReady(false);
+    setTitle("");
     close();
     onDocLoaded?.(null);
     if (!docId) return;
     let live = true;
-    window.point.docs
-      .get(docId)
-      .then((d) => {
-        if (!live) return;
-        setDoc(d);
-        onDocLoaded?.(d);
-      })
-      .catch((e: Error) => live && setError(e.message));
+    const api = window.point.docs;
+    // The text blocks (title, markdown, prompts) and the original-looking view load side by side.
+    void Promise.allSettled([api.get(docId), api.view(docId)]).then(([text, shown]) => {
+      if (!live) return;
+      if (shown.status === "rejected") return setError(stripIpc(shown.reason));
+      if (shown.value.kind === "md" && text.status === "rejected") return setError(stripIpc(text.reason));
+      const d = text.status === "fulfilled" ? text.value : null;
+      setTitle(d?.title ?? "");
+      setView(shown.value);
+      if (shown.value.kind === "md") setDoc(d);
+      onDocLoaded?.(d);
+    });
     return () => {
       live = false;
     };
@@ -287,22 +343,43 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
     ) : (
       <EmptyState onOpenWorkspace={onOpenWorkspace} onOpenFile={onOpenFile} onOpenRecent={onOpenRecent} />
     );
-  if (error) return <div className="placeholder">无法打开文档：{error}</div>;
-  if (!doc) return <div className="placeholder">正在解析…</div>;
+  if (error && docId) return <DocError docId={docId} message={error} />;
+  if (!view || (view.kind === "md" && !doc))
+    return (
+      <div className="placeholder" aria-busy="true" data-testid="doc-loading">
+        正在打开…
+      </div>
+    );
 
-  const marked = new Set(marks.map((m) => m.anchor.blockId).filter((x): x is string => !!x));
+  const markedIds = new Set(marks.map((m) => (m.anchor.kind === "text" ? m.anchor.blockId : undefined)).filter((x): x is string => !!x));
+  const markTexts = new Map<number, string[]>();
+  const markRects = new Map<number, PageRect[]>();
+  for (const m of marks) {
+    const a = m.anchor;
+    if (a.kind !== "text" || !a.page) continue;
+    if (a.rects?.length) markRects.set(a.page, [...(markRects.get(a.page) ?? []), ...a.rects]);
+    else markTexts.set(a.page, [...(markTexts.get(a.page) ?? []), a.text]);
+  }
   let lastPage: number | undefined;
   const mod = window.point.platform === "darwin" ? "⌘⇧S" : "Ctrl+Shift+S";
+  const sheets = view.kind === "xlsx" ? view.sheets : [];
+  const loading = view.kind === "pdf" && !pdfReady;
+  const switcher =
+    view.kind === "pdf"
+      ? { unit: "页" as const, label: `${pdf.current} / ${pdf.count || "…"}`, canPrev: pdf.current > 1, canNext: pdf.current < pdf.count, onPrev: () => setGoto({ page: pdf.current - 1, seq: Date.now() }), onNext: () => setGoto({ page: pdf.current + 1, seq: Date.now() }) }
+      : view.kind === "xlsx" && sheets.length > 0
+        ? { unit: "工作表" as const, label: `${sheet + 1} / ${sheets.length}`, canPrev: sheet > 0, canNext: sheet < sheets.length - 1, onPrev: () => setSheet(sheet - 1), onNext: () => setSheet(sheet + 1) }
+        : undefined;
   return (
     <>
-    <div className="reader-toolbar" role="toolbar" aria-label="阅读工具">
+    <ReaderBar title={title || "文档"} switcher={switcher} zoom={zoom} onZoom={setZoom} onFitWidth={view.kind === "pdf" ? () => setFit({ seq: Date.now() }) : undefined} loading={loading}>
       {/* Disabled buttons swallow hover, so the tooltip lives on the wrapper. */}
       <span title={vision ? undefined : "当前模型不支持图片"}>
       <button
         className="tool-button"
         data-testid="capture-button"
         onClick={startCapture}
-        disabled={!vision}
+        disabled={!vision || loading}
         title={vision ? `框选截图（${mod}）` : "当前模型不支持图片"}
         aria-pressed={!!capture}
       >
@@ -310,7 +387,7 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
         <span>框选</span>
       </button>
       </span>
-    </div>
+    </ReaderBar>
     {capture && (
       <CaptureOverlay
         bounds={capture}
@@ -351,19 +428,48 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
         )}
       </div>
     )}
-    <article className="reader" data-testid="reader" ref={articleRef} onMouseUp={onSelectEnd} onKeyUp={(e) => e.key !== "Escape" && onSelectEnd()}>
-      {doc.blocks.map((b) => {
-        const marker = b.page !== undefined && b.page !== lastPage ? b.page : undefined;
-        lastPage = b.page ?? lastPage;
-        return (
-          <div key={b.id} className={marked.has(b.id) ? "block marked" : "block"}>
-            {marker !== undefined && marker > 1 && <div className="page-marker">第 {marker} 页</div>}
-            <BlockView b={b} />
-          </div>
-        );
-      })}
-      {doc.blocks.length === 0 && <div className="placeholder">这篇文档没有可提取的文字</div>}
+    <article
+      className={view.kind === "md" ? "reader" : `reader-doc doc-${view.kind}`}
+      data-testid="reader"
+      data-kind={view.kind}
+      ref={articleRef}
+      onMouseUp={onSelectEnd}
+      onKeyUp={(e) => e.key !== "Escape" && onSelectEnd()}
+    >
+      {view.kind === "md" && doc && (
+        <div style={{ zoom: zoom / 100 }}>
+          {doc.blocks.map((b) => {
+            const marker = b.page !== undefined && b.page !== lastPage ? b.page : undefined;
+            lastPage = b.page ?? lastPage;
+            return (
+              <div key={b.id} className={markedIds.has(b.id) ? "block marked" : "block"}>
+                {marker !== undefined && marker > 1 && <div className="page-marker">第 {marker} 页</div>}
+                <BlockView b={b} />
+              </div>
+            );
+          })}
+          {doc.blocks.length === 0 && <div className="placeholder">这篇文档没有可提取的文字</div>}
+        </div>
+      )}
+      {view.kind === "pdf" && (
+        <PdfView
+          data={view.data}
+          zoom={zoom}
+          goto={goto}
+          markTexts={markTexts}
+          markRects={markRects}
+          fit={fit}
+          onFit={setZoom}
+          onState={setPdf}
+          onReady={() => setPdfReady(true)}
+          onError={(m) => setError(`PDF 无法渲染：${m}`)}
+        />
+      )}
+      {view.kind === "docx" && <DocxView html={view.html} images={view.images} zoom={zoom} markedIds={markedIds} />}
+      {view.kind === "xlsx" &&
+        (sheets[sheet] ? <SheetGrid sheet={sheets[sheet]} index={sheet} zoom={zoom} markedIds={markedIds} /> : <div className="placeholder">这个表格是空的</div>)}
     </article>
+    {view.kind === "xlsx" && sheets.length > 0 && <SheetTabs sheets={sheets} active={sheet} onSelect={setSheet} />}
     </>
   );
 }

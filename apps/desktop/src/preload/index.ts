@@ -53,7 +53,9 @@ const api: PointAPI = {
   docs: {
     list: () => ipcRenderer.invoke(IPC.docsList),
     import: () => ipcRenderer.invoke(IPC.docsImport),
-    get: (id) => ipcRenderer.invoke(IPC.docsGet, id)
+    get: (id) => ipcRenderer.invoke(IPC.docsGet, id),
+    view: (id) => ipcRenderer.invoke(IPC.docsView, id),
+    openExternal: (id) => ipcRenderer.invoke(IPC.docsOpenExternal, id)
   },
   tasks: {
     run: (req) => ipcRenderer.invoke(IPC.tasksRun, req),

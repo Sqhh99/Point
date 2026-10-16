@@ -1,10 +1,10 @@
-import { app, dialog } from "electron";
+import { app, dialog, shell } from "electron";
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, extname, join, resolve, sep } from "node:path";
 import { friendlyParseError } from "./open-errors.js";
-import { DbTooNewError, NoteStore, docTypeOf, migrate, parseDocument, type ParsedDoc } from "@point/core";
+import { DbTooNewError, NoteStore, buildDocView, docTypeOf, migrate, parseDocument, type DocView, type ParsedDoc } from "@point/core";
 import type { DocMeta } from "../shared/ipc.js";
 
 /**
@@ -118,4 +118,32 @@ export async function getDoc(id: string): Promise<ParsedDoc> {
   } catch (err) {
     throw friendlyParseError(err, data.byteLength);
   }
+}
+
+/** The stored original of a document: only ever main's own `<workspace>/docs/<id>.<ext>`, never a renderer path. */
+function docFile(id: string): { abs: string; row: Row } {
+  const ws = need();
+  const row = ws.db.prepare("SELECT * FROM docs WHERE id = ?").get(id) as Row | undefined;
+  if (!row) throw new Error("文档不存在");
+  const abs = resolve(ws.root, row.path);
+  if (!abs.startsWith(join(ws.root, "docs") + sep) || !existsSync(abs)) throw new Error("文档路径无效");
+  return { abs, row };
+}
+
+/** What the reader renders: PDF bytes for pdf.js, sanitized HTML for Word, a cell grid per sheet for Excel. */
+export async function getDocView(id: string): Promise<DocView> {
+  const { abs, row } = docFile(id);
+  const data = readFileSync(abs);
+  try {
+    return await buildDocView(row.type, data);
+  } catch (err) {
+    throw friendlyParseError(err, data.byteLength);
+  }
+}
+
+/** 用系统应用打开: hands the validated stored copy to the OS. The renderer sends only a doc id. */
+export async function openDocExternally(id: string): Promise<void> {
+  const { abs } = docFile(id);
+  const err = await shell.openPath(abs);
+  if (err) throw new Error(`无法用系统应用打开：${err}`);
 }

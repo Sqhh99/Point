@@ -7,12 +7,25 @@ export function isCaptureSha(v: unknown): v is string {
 }
 
 /** A run of selected text in a document. `blockId` lets the reader scroll back to it. */
+/** A highlight rectangle in PDF page coordinates (CSS px at 100% zoom, top-left origin), one per text line. */
+export interface PageRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 export interface TextAnchor {
   kind: "text";
   text: string;
   blockId?: string;
   page?: number;
   context?: string;
+  /** PDF: ~32 chars of extracted page text before / after the quote, to relocate it by fuzzy match. */
+  prefix?: string;
+  suffix?: string;
+  /** PDF: where the quote was drawn on `page` (one rect per line). A hint; the quote itself is the anchor. */
+  rects?: PageRect[];
 }
 
 /** A region screenshot, referenced only by the sha of its PNG in `.point/captures/`. */
@@ -35,7 +48,7 @@ export interface Mark {
   createdAt: string;
 }
 
-export const MARK_LIMITS = { text: 6000, context: 3000, blockId: 128, note: 2000, batch: 20 } as const;
+export const MARK_LIMITS = { text: 6000, context: 3000, blockId: 128, note: 2000, batch: 20, affix: 200, rects: 64 } as const;
 
 const fail = (): never => {
   throw new Error("无效的标记位置");
@@ -49,6 +62,15 @@ const optPage = (v: unknown): number | undefined => {
   if (v === undefined || v === null) return undefined;
   return typeof v === "number" && Number.isInteger(v) && v > 0 && v < 1_000_000 ? v : fail();
 };
+const dim = (v: unknown, min: number): number => (typeof v === "number" && Number.isFinite(v) && v >= min && v <= 100_000 ? Math.round(v * 100) / 100 : fail());
+function parseRects(v: unknown): PageRect[] {
+  if (!Array.isArray(v) || v.length > MARK_LIMITS.rects) return fail();
+  return v.map((r) => {
+    if (!r || typeof r !== "object") return fail();
+    const o = r as Record<string, unknown>;
+    return { x: dim(o.x, 0), y: dim(o.y, 0), w: dim(o.w, 0.01), h: dim(o.h, 0.01) };
+  });
+}
 const side = (v: unknown): number => (typeof v === "number" && Number.isInteger(v) && v > 0 && v <= 10_000 ? v : fail());
 
 /** Validates untrusted input into an anchor with only known fields. Throws 「无效的标记位置」. */
@@ -62,9 +84,14 @@ export function parseAnchor(raw: unknown): MarkAnchor {
     const blockId = optStr(r.blockId, MARK_LIMITS.blockId);
     const page = optPage(r.page);
     const context = optStr(r.context, MARK_LIMITS.context);
+    const prefix = optStr(r.prefix, MARK_LIMITS.affix);
+    const suffix = optStr(r.suffix, MARK_LIMITS.affix);
     if (blockId) a.blockId = blockId;
     if (page) a.page = page;
     if (context) a.context = context;
+    if (prefix) a.prefix = prefix;
+    if (suffix) a.suffix = suffix;
+    if (r.rects !== undefined && r.rects !== null) a.rects = parseRects(r.rects);
     return a;
   }
   if (r.kind === "region") {
