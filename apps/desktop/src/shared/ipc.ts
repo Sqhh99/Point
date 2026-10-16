@@ -139,7 +139,9 @@ export interface TaskStarted {
 export type TaskEvent =
   | { requestId: string; type: "delta"; text: string }
   | { requestId: string; type: "done"; message: StoredMessage }
-  | { requestId: string; type: "error"; code: string; message: string; partial?: StoredMessage };
+  | { requestId: string; type: "error"; code: string; message: string; partial?: StoredMessage }
+  /** Shown once when resolveAsk fell back (e.g. deleted/unconfigured model). */
+  | { requestId: string; type: "model-notice"; message: string };
 
 export interface ConversationMeta {
   id: string;
@@ -198,6 +200,8 @@ export interface PointAPI {
     update(patch: ProviderPatch): Promise<SettingsView>;
     setKey(id: ProviderId, key: string): Promise<SettingsView>;
     testConnection(id: ProviderId): Promise<TestResult>;
+    /** Fires after a successful save (update / setKey); ModelBar and the status bar re-fetch. */
+    onChanged(cb: () => void): () => void;
   };
   models: {
     list(): Promise<{
@@ -282,6 +286,7 @@ export const IPC = {
   settingsUpdate: "settings:update",
   settingsSetKey: "settings:setKey",
   settingsTest: "settings:test",
+  settingsChanged: "settings:changed",
   modelsList: "models:list",
   conversationModel: "conversations:setModel",
   chatStart: "chat:start",

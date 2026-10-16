@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MIGRATIONS, migrate } from "@point/core";
 import { FakeSender, invoke } from "./electron-mock.js";
 
@@ -82,5 +82,70 @@ describe("tasks:run effort gate", () => {
     await expect(run({ kind: "ask", selection: "", question: "hi", effort: "nope" })).rejects.toThrow(/不支持思考等级/);
     expect((ws.need().db.prepare("SELECT count(*) AS n FROM messages").get() as { n: number }).n).toBe(before);
     expect((ws.need().db.prepare("SELECT count(*) AS n FROM conversations").get() as { n: number }).n).toBe(0);
+  });
+});
+
+describe("settings:changed broadcast", () => {
+  it("fires to every open window after update and setKey", async () => {
+    const { state } = await import("./electron-mock.js");
+    const a = new FakeSender();
+    const b = new FakeSender();
+    state.windows = [
+      { isDestroyed: () => false, webContents: a },
+      { isDestroyed: () => false, webContents: b }
+    ];
+    await invoke(IPC.settingsUpdate, new FakeSender(), { id: "deepseek", model: "deepseek-flash", makeActive: true });
+    expect(a.events.filter((e) => e.channel === IPC.settingsChanged)).toHaveLength(1);
+    expect(b.events.filter((e) => e.channel === IPC.settingsChanged)).toHaveLength(1);
+    a.events = [];
+    b.events = [];
+    state.encryption = true;
+    await invoke(IPC.settingsSetKey, new FakeSender(), "deepseek", "sk-test");
+    expect(a.events.some((e) => e.channel === IPC.settingsChanged)).toBe(true);
+    expect(b.events.some((e) => e.channel === IPC.settingsChanged)).toBe(true);
+    state.windows = [];
+  });
+});
+
+describe("tasks:run model/effort body + first-ask memory", () => {
+  beforeEach(() => {
+    process.env.POINT_FAKE_LLM = "1";
+  });
+  afterEach(() => {
+    delete process.env.POINT_FAKE_LLM;
+  });
+
+  it("stores model/effort from the run body on a brand-new conversation", async () => {
+    const { until } = await import("./electron-mock.js");
+    const sender = new FakeSender();
+    const started = (await invoke(IPC.tasksRun, sender, {
+      kind: "ask",
+      selection: "",
+      question: "hi",
+      model: "deepseek-v4-pro",
+      effort: "high"
+    })) as { conversationId: string; requestId: string };
+    const row = ws.need().db.prepare("SELECT model, effort FROM conversations WHERE id = ?").get(started.conversationId) as {
+      model: string | null;
+      effort: string | null;
+    };
+    expect(row).toEqual({ model: "deepseek-v4-pro", effort: "high" });
+    await until(() => sender.events.some((e) => (e.payload as { type?: string }).type === "done"));
+  });
+
+  it("emits model-notice once when the requested model is gone", async () => {
+    const { until } = await import("./electron-mock.js");
+    const sender = new FakeSender();
+    const started = (await invoke(IPC.tasksRun, sender, {
+      kind: "ask",
+      selection: "",
+      question: "hi",
+      model: "deepseek-chat-gone"
+    })) as { requestId: string };
+    await until(() => sender.events.some((e) => (e.payload as { type?: string }).type === "done"));
+    const notices = sender.events.filter((e) => e.channel === IPC.tasksEvent && (e.payload as { type: string }).type === "model-notice");
+    expect(notices).toHaveLength(1);
+    expect((notices[0]!.payload as { message: string }).message).toMatch(/原模型已不可用/);
+    expect(notices[0]!.payload).toMatchObject({ requestId: started.requestId, type: "model-notice" });
   });
 });

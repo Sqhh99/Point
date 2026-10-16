@@ -186,6 +186,7 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
   const [question, setQuestion] = useState("");
   const [pickModel, setPickModel] = useState<string | null>(null);
   const [pickEffort, setPickEffort] = useState<string | null>(null);
+  const [modelNotice, setModelNotice] = useState<string | null>(null);
   // Seed from models:list default; conversation memory overrides when we have an id.
   useEffect(() => {
     let live = true;
@@ -241,6 +242,10 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
   handleRef.current = (e: TaskEvent) => {
     const cur = requestRef.current;
     if (!cur || e.requestId !== cur.id) return;
+    if (e.type === "model-notice") {
+      setModelNotice(e.message);
+      return;
+    }
     if (e.type === "delta") {
       setDraft((d) => (d && d.requestId === e.requestId ? { ...d, text: d.text + e.text } : d));
       return;
@@ -276,6 +281,7 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
   const start = useCallback(
     async (req: TaskRequest) => {
       setFailure(null);
+      setModelNotice(null);
       if (requestRef.current) await api.tasks.cancel(requestRef.current.id);
       try {
         const started = await api.tasks.run(req);
@@ -307,16 +313,25 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
         page: sel?.page,
         question: q,
         docId: docId ?? undefined,
+        model: pickModel ?? undefined,
+        effort: pickEffort ?? undefined,
         // Selection actions start a fresh thread; questions continue the thread being shown.
         conversationId: kind === "ask" ? (conversationId ?? undefined) : undefined,
         parentId: kind === "ask" && conversationId ? (leafId ?? undefined) : undefined
       }),
-    [start, docId, conversationId, leafId]
+    [start, docId, conversationId, leafId, pickModel, pickEffort]
   );
 
   /** 重新生成 / 重试: answer `user` again as a new sibling answer. */
   const regenerate = (req: TaskRequest, user?: StoredMessage) =>
-    start({ ...req, conversationId: conversationId ?? undefined, regenerate: !!conversationId, parentId: user?.id });
+    start({
+      ...req,
+      conversationId: conversationId ?? undefined,
+      regenerate: !!conversationId,
+      parentId: user?.id,
+      model: pickModel ?? req.model,
+      effort: pickEffort ?? req.effort
+    });
   const userBefore = (id: string): StoredMessage | undefined => {
     const i = messages.findIndex((m) => m.id === id);
     return [...messages.slice(0, i)].reverse().find((m) => m.role === "user");
@@ -423,6 +438,8 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
         question: q,
         docId: docId ?? undefined,
         conversationId: conversationId ?? undefined,
+        model: pickModel ?? undefined,
+        effort: pickEffort ?? undefined,
         ...(branchDraft ? { branch: branchDraft } : "siblingOf" in fork! ? { siblingOf: fork!.siblingOf } : { parentId: fork!.parentId })
       };
       setQuestion("");
@@ -694,6 +711,14 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
                 setPickEffort(e);
               }}
             />
+            {modelNotice && (
+              <div className="model-notice banner" data-testid="task-model-notice" role="status">
+                <span>{modelNotice}</span>
+                <button type="button" className="link" aria-label="关闭提示" onClick={() => setModelNotice(null)}>
+                  ×
+                </button>
+              </div>
+            )}
             {branchDraft && (
               <div className="attached" data-testid="branch-draft">
                 <span title={branchDraft.quote}>追问分支：「{branchDraft.quote.slice(0, 40)}」</span>

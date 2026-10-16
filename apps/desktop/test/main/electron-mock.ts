@@ -18,7 +18,9 @@ export const state = {
   handlers: new Map<string, Handler>(),
   encryption: true,
   saveResult: { canceled: false, filePath: "" as string | undefined },
-  openResult: { canceled: false, filePaths: [] as string[] }
+  openResult: { canceled: false, filePaths: [] as string[] },
+  /** Windows that receive settings:changed broadcasts in unit tests. */
+  windows: [] as { isDestroyed(): boolean; webContents: FakeSender }[]
 };
 
 /** Reversible "encryption" so tests can check the key is not stored in plain text. */
@@ -38,7 +40,10 @@ export function electronModule() {
       showSaveDialog: vi.fn(async () => state.saveResult),
       showOpenDialog: vi.fn(async () => state.openResult)
     },
-    BrowserWindow: { fromWebContents: () => null },
+    BrowserWindow: {
+      fromWebContents: () => null,
+      getAllWindows: () => state.windows
+    },
     protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() }
   };
 }
