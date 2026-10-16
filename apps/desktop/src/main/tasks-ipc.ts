@@ -20,7 +20,7 @@ import {
   setConversationModel,
   threadOf
 } from "./conversations.js";
-import { resolveProvider } from "./settings.js";
+import { view as settingsView } from "./settings.js";
 import { fakeEnabled } from "./fake-llm.js";
 import { errInfo, providerFor } from "./ipc.js";
 import { docTitle, need } from "./workspace.js";
@@ -125,24 +125,30 @@ function resolveAsk(req: TaskRequest, conversationId: string | undefined): {
   omitTemperature: boolean;
   notice?: string;
 } {
+  // Effort is validated against ModelSpec before any write and without decrypting the API key.
+  // The fake LLM ignores effort (e2e); real providers still reject unsupported levels below.
   if (fakeEnabled()) return { model: "fake", omitTemperature: false };
-  const cfg = resolveProvider();
+  const active = settingsView();
   const remembered = conversationId ? getConversationModel(conversationId) : { model: null, effort: null };
-  const wantModel = req.model ?? remembered.model ?? cfg.model;
-  const p = providerConfig(cfg.id)!;
-  let spec = modelSpec(cfg.id, wantModel);
+  const wantModel = req.model ?? remembered.model ?? active.active.model;
+  const p = providerConfig(active.activeProvider)!;
+  let spec = modelSpec(active.activeProvider, wantModel);
   let notice: string | undefined;
   if (!spec) {
-    spec = modelSpec(cfg.id, p.defaultModel)!;
+    spec = modelSpec(active.activeProvider, p.defaultModel)!;
     notice = `原模型已不可用，已改用 ${spec.label}`;
   }
-  const wantEffort = req.effort ?? remembered.effort ?? spec.defaultEffort;
-  if (wantEffort) {
-    const level = effortOf(spec, wantEffort);
-    if (!level || level.id !== wantEffort) throw new Error(`该模型不支持思考等级「${wantEffort}」`);
+  // Explicit effort that the model does not declare → hard reject (no silent ignore).
+  if (req.effort !== undefined && req.effort !== null && req.effort !== "") {
+    const level = effortOf(spec, req.effort);
+    if (!level || level.id !== req.effort) throw new Error(`该模型不支持思考等级「${req.effort}」`);
     return { model: spec.id, effortWrites: level.writes, omitTemperature: level.thinking, notice };
   }
-  if (req.effort !== undefined && req.effort !== null && spec.efforts.length === 0) throw new Error("该模型不支持思考等级");
+  const wantEffort = remembered.effort ?? spec.defaultEffort;
+  if (wantEffort) {
+    const level = effortOf(spec, wantEffort);
+    if (level) return { model: spec.id, effortWrites: level.writes, omitTemperature: level.thinking, notice };
+  }
   return { model: spec.id, omitTemperature: false, notice };
 }
 

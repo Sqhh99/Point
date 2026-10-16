@@ -67,7 +67,7 @@ describe("migration 003", () => {
     const s = new MarkStore(db, nextId);
     const m = s.create(DOC_A, { kind: "text", text: "保留" });
     expect(migrate(db)).toBe(4);
-    db.exec(MIGRATIONS[2]!); // IF NOT EXISTS everywhere
+    db.exec(MIGRATIONS[2] as string); // IF NOT EXISTS everywhere
     expect(db.pragma("user_version", { simple: true })).toBe(4);
     expect(s.get(m.id)?.anchor).toEqual({ kind: "text", text: "保留" });
   });

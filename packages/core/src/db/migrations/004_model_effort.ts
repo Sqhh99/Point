@@ -1,9 +1,8 @@
-/**
- * Per-conversation remembered model and thinking level. Null = use the workspace default.
- * Idempotent: ADD COLUMN is skipped when the column already exists (SQLite cannot IF NOT EXISTS on ADD COLUMN
- * in older versions, so the migrator runs this once via user_version).
- */
-export default `
-ALTER TABLE conversations ADD COLUMN model TEXT;
-ALTER TABLE conversations ADD COLUMN effort TEXT;
-`;
+import type { MigratableDb } from "../migrate.js";
+
+/** Per-conversation remembered model and thinking level. Null = workspace default. Idempotent. */
+export default function migrateModelEffort(db: MigratableDb): void {
+  const cols = new Set((db.prepare("PRAGMA table_info(conversations)").all() as { name: string }[]).map((c) => c.name));
+  if (!cols.has("model")) db.exec("ALTER TABLE conversations ADD COLUMN model TEXT");
+  if (!cols.has("effort")) db.exec("ALTER TABLE conversations ADD COLUMN effort TEXT");
+}

@@ -115,8 +115,8 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
     await openWorkspace(app, win);
     await win.getByRole("button", { name: "设置" }).click();
     await expect(win.getByRole("heading", { name: "模型设置" })).toBeVisible();
-    await expect(win.getByTestId("status-model")).toHaveText("deepseek-chat");
-    await expect(win.getByTestId("status-vision")).toHaveText("不支持看图");
+    await expect(win.getByTestId("status-model")).toHaveText("deepseek-flash");
+    await expect(win.getByTestId("status-vision")).toHaveText("支持看图");
 
     await save(win, "OpenAI GPT", "gpt-4o");
     await leaveAndReopen(win);
@@ -132,34 +132,30 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
     await expect(win.getByTestId("status-vision")).toHaveText("不支持看图");
 
     await win.getByRole("button", { name: "设置" }).click();
-    await save(win, "DeepSeek", "deepseek-reasoner");
+    await save(win, "DeepSeek", "deepseek-flash");
     await leaveAndReopen(win);
-    await expect(win.getByTestId("status-model")).toHaveText("deepseek-reasoner");
+    await expect(win.getByTestId("status-model")).toHaveText("deepseek-flash");
   });
 
-  // Known bug: the status bar stays on the old model while the settings page is still open, right
-  // after 「已保存」 (App.tsx:97 refreshes only after leaving settings). Expected-to-fail; flip to
-  // a plain test() once the status bar follows the save.
+  // Fixed in feat/multi-model: onSaved refreshes the status bar without leaving settings.
   test("status bar follows a save immediately, without leaving settings", async () => {
-    test.fail();
     const win = await app.firstWindow();
     await win.getByRole("button", { name: "设置" }).click();
     try {
       await save(win, "OpenAI GPT", "gpt-4.1");
       await expect(win.getByTestId("status-model")).toHaveText("gpt-4.1", { timeout: 2000 });
     } finally {
-      // Put the active model back for the tests that follow.
-      await save(win, "DeepSeek", "deepseek-reasoner");
+      await save(win, "DeepSeek", "deepseek-flash");
     }
   });
 
   test("the choice survives a restart, and the form shows it", async () => {
     await app.close();
     const win = await start();
-    await expect(win.getByTestId("status-model")).toHaveText("deepseek-reasoner");
+    await expect(win.getByTestId("status-model")).toHaveText("deepseek-flash");
     await win.getByRole("button", { name: "设置" }).click();
     await expect(win.getByLabel("模型服务")).toHaveValue("deepseek");
-    await expect(win.getByLabel("模型", { exact: true })).toHaveValue("deepseek-reasoner");
+    await expect(win.getByLabel("模型", { exact: true })).toHaveValue("deepseek-flash");
     // Other providers keep their own last model.
     await win.getByLabel("模型服务").selectOption({ label: "OpenAI GPT" });
     await expect(win.getByLabel("模型", { exact: true })).toHaveValue("gpt-4.1");
@@ -184,5 +180,40 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
       await expect(win.getByText("无法安全保存 API Key")).toBeVisible();
       await expect(win.getByRole("button", { name: "测试连接" })).toBeDisabled();
     }
+  });
+});
+
+
+test.describe("per-conversation model and effort", () => {
+  test.describe.configure({ mode: "serial" });
+  let app: ElectronApplication;
+  test.beforeAll(async () => {
+    // Fake LLM so the composer is usable; models:list still comes from the real DeepSeek preset.
+    app = await launch(launchEnv({ POINT_USER_DATA: mkdtempSync(join(tmpdir(), "point-e2e-mm-")), POINT_FAKE_LLM: "1" }));
+  });
+  test.afterAll(async () => {
+    await app?.close();
+  });
+
+  test("dropdown lists only the current provider; effort control appears for DeepSeek Flash", async () => {
+    const win = await app.firstWindow();
+    await openWorkspace(app, win);
+    const bar = win.getByTestId("model-bar");
+    await expect(bar).toBeVisible();
+    const select = bar.getByTestId("model-select");
+    await expect(select).toBeVisible();
+    const labels = await select.locator("option").allTextContents();
+    expect(labels.some((t) => /Flash/i.test(t))).toBe(true);
+    expect(labels.some((t) => /gpt-4o/i.test(t))).toBe(false); // other providers stay in Settings
+    await expect(bar.getByTestId("effort-control")).toBeVisible();
+    await expect(bar.getByTestId("effort-off")).toBeVisible();
+    await expect(bar.getByTestId("effort-high")).toBeVisible();
+    await bar.getByTestId("effort-off").click();
+    await expect(bar.getByTestId("effort-off")).toHaveAttribute("aria-pressed", "true");
+    // Second model under the same provider (clearly labelled mock alternative to Flash).
+    await select.selectOption("deepseek-v4-pro");
+    await expect(select).toHaveValue("deepseek-v4-pro");
+    await expect(bar.getByTestId("effort-control")).toBeVisible();
+    await win.screenshot({ path: join(results, "multi-model.png") });
   });
 });

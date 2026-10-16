@@ -360,3 +360,16 @@ button.link.active { color: var(--accent); }
 .doc-error .primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); height: 32px; padding: 0 16px; border-radius: 8px; }
 .doc-error .primary:disabled { opacity: 0.6; cursor: default; }
 .doc-error-detail { margin-top: 12px; font-size: 12px; color: var(--danger); }
+
+/* Per-conversation model + thinking level above the input. */
+.model-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 0 8px; }
+.model-pick select { height: 28px; max-width: 28ch; padding: 0 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text); font-size: 13px; }
+.model-pick select:hover { border-color: var(--accent); }
+.model-pick select:disabled { opacity: 0.45; }
+.effort-seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); }
+.effort-seg button { height: 24px; min-width: 32px; padding: 0 8px; border: none; border-radius: 6px; background: transparent; color: var(--muted); font-size: 12px; }
+.effort-seg button:hover { background: var(--hover); color: var(--text); }
+.effort-seg button.active, .effort-seg button[aria-pressed="true"] { background: var(--bg-elevated); color: var(--accent); font-weight: 600; box-shadow: 0 0 0 1px var(--border); }
+.effort-seg button:disabled { opacity: 0.45; cursor: default; }
+.model-notice { font-size: 12px; color: var(--muted); }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }

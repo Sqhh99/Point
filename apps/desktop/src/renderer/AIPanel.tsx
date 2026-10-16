@@ -4,6 +4,7 @@ import type { Mark, MarkAnchor, TaskKind } from "@point/core";
 import { branchTree, branchesFrom, breadcrumb, defaultLeaf, latestLeaf, pathTo, siblingsOf, type BranchOrigin, type BranchTreeNode } from "@point/core/tree";
 import type { CaptureResult, MessageMeta, StoredMessage, TaskEvent, TaskRequest } from "../shared/ipc";
 import { IconBranch } from "./icons";
+import { ModelBar } from "./ModelBar";
 import { Markdown } from "./Markdown";
 import { NotesPanel, type NoteFlash } from "./NotesPanel";
 import type { SelectionInfo } from "./Reader";
@@ -183,6 +184,33 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
   const [failure, setFailure] = useState<Failure | null>(null);
   const [attached, setAttached] = useState<SelectionInfo | null>(null);
   const [question, setQuestion] = useState("");
+  const [pickModel, setPickModel] = useState<string | null>(null);
+  const [pickEffort, setPickEffort] = useState<string | null>(null);
+  // Seed from models:list default; conversation memory overrides when we have an id.
+  useEffect(() => {
+    let live = true;
+    void window.point.models.list().then((l) => {
+      if (!live || pickModel) return;
+      const def = l.models.find((m) => m.configured) ?? l.models[0];
+      if (def) {
+        setPickModel(def.id);
+        setPickEffort(def.defaultEffort);
+      }
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  useEffect(() => {
+    if (!conversationId) return;
+    void window.point.conversations.list().then((all) => {
+      const c = all.find((x) => x.id === conversationId);
+      if (!c) return;
+      if (c.model) setPickModel(c.model);
+      if (c.effort !== undefined) setPickEffort(c.effort ?? null);
+    });
+  }, [conversationId]);
+
   const [noteId, setNoteId] = useState<string | null>(null);
   const [notesVersion, setNotesVersion] = useState(0);
   const [flash, setFlash] = useState<NoteFlash | null>(null);
@@ -405,14 +433,14 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
     }
     if (batchMarks) {
       const ids = batchMarks.map((m) => m.id);
-      const req: TaskRequest = { kind: "ask", selection: "", question: q, marks: ids };
+      const req: TaskRequest = { kind: "ask", selection: "", question: q, marks: ids, model: pickModel ?? undefined, effort: pickEffort ?? undefined };
       if (batchMarks.some((m) => m.anchor.kind === "region") && !vision) return setFailure({ code: "no_vision", message: NO_VISION_TEXT, request: req });
       setQuestion("");
       void run("ask", null, q, undefined, ids);
       setBatchMarks(null);
       return;
     }
-    const req: TaskRequest = { kind: "ask", selection: attached?.text ?? "", question: q, image: image?.sha };
+    const req: TaskRequest = { kind: "ask", selection: attached?.text ?? "", question: q, image: image?.sha, model: pickModel ?? undefined, effort: pickEffort ?? undefined };
     // Checked again in main; this keeps the question and the image so the user can switch models.
     if (image && !vision) return setFailure({ code: "no_vision", message: NO_VISION_TEXT, request: req });
     setQuestion("");
@@ -657,6 +685,15 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
             )}
           </div>
           <div className="composer">
+            <ModelBar
+              conversationId={conversationId}
+              model={pickModel}
+              effort={pickEffort}
+              onChange={(m, e) => {
+                setPickModel(m);
+                setPickEffort(e);
+              }}
+            />
             {branchDraft && (
               <div className="attached" data-testid="branch-draft">
                 <span title={branchDraft.quote}>追问分支：「{branchDraft.quote.slice(0, 40)}」</span>

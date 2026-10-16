@@ -90,7 +90,11 @@ export function update(patch: ProviderPatch): SettingsView {
   const cur = providerOf(s, patch.id);
   const preset = getPreset(patch.id)!;
   if (patch.baseURL !== undefined) cur.baseURL = assertBaseUrl(patch.baseURL.trim() || preset.baseURL);
-  if (patch.model !== undefined) cur.model = patch.model.trim() || preset.defaultModel;
+  if (patch.model !== undefined) {
+    const raw = patch.model.trim() || preset.defaultModel;
+    const mapped = migrateSavedModel(patch.id, raw);
+    cur.model = mapped?.model ?? (modelSpec(patch.id, raw) ? raw : preset.defaultModel);
+  }
   if (patch.vision === null) delete cur.vision;
   else if (typeof patch.vision === "boolean") cur.vision = patch.vision;
   s.providers[patch.id] = cur;

@@ -110,7 +110,10 @@ describe("real v0.1.0 workspace fixture", () => {
     const before = withDb(db, (d) => Object.fromEntries(TABLES.map((t) => [t, rowsHex(d, t)])));
     const cols = withDb(db, (d) => Object.fromEntries(TABLES.map((t) => [t, colsOf(d, t)])));
     const files = treeHashes(root, (rel) => rel.startsWith(".point"));
-    const settingsBefore = sha(join(ud, "settings.json"));
+    const settingsBefore = JSON.parse(readFileSync(join(ud, "settings.json"), "utf8")) as {
+      activeProvider: string;
+      providers: Record<string, { model?: string; encKey?: string }>;
+    };
 
     ws.openWorkspace(root);
 
@@ -133,7 +136,10 @@ describe("real v0.1.0 workspace fixture", () => {
       expect(shape(d)).toEqual(freshShape());
     });
     expect(treeHashes(root, (rel) => rel.startsWith(".point"))).toEqual(files);
-    expect(sha(join(ud, "settings.json"))).toBe(settingsBefore);
+    // Legacy model ids may be rewritten; encrypted keys and active provider must stay.
+    const settingsAfter = JSON.parse(readFileSync(join(ud, "settings.json"), "utf8")) as typeof settingsBefore;
+    expect(settingsAfter.activeProvider).toBe(settingsBefore.activeProvider);
+    expect(settingsAfter.providers.glm?.encKey).toBe(settingsBefore.providers.glm?.encKey);
   });
 
   it("reopening the upgraded workspace twice changes nothing", () => {
