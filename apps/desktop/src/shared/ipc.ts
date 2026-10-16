@@ -1,4 +1,4 @@
-import type { BranchOrigin, ChatMessage, DocType, Mark, MarkAnchor, Note, NoteInput, NoteMeta, ParsedDoc, ProviderId, ProviderPreset, TaskKind } from "@point/core";
+import type { BranchOrigin, ChatMessage, DocType, DocView, Mark, MarkAnchor, Note, NoteInput, NoteMeta, ParsedDoc, ProviderId, ProviderPreset, TaskKind } from "@point/core";
 
 export interface ProviderSettings {
   id: ProviderId;
@@ -207,6 +207,10 @@ export interface PointAPI {
     /** Opens a file picker (pdf/docx/md) and copies the picks into the workspace. */
     import(): Promise<DocMeta[]>;
     get(id: string): Promise<ParsedDoc>;
+    /** The original-looking view: pdf bytes, sanitized docx html + images, or xlsx grids. */
+    view(id: string): Promise<DocView>;
+    /** 用系统应用打开 the stored copy; main resolves the path from the id. */
+    openExternal(id: string): Promise<void>;
   };
   open: {
     /** Folder picker → becomes the workspace. */
@@ -269,6 +273,8 @@ export const IPC = {
   docsList: "docs:list",
   docsImport: "docs:import",
   docsGet: "docs:get",
+  docsView: "docs:view",
+  docsOpenExternal: "docs:openExternal",
   tasksRun: "tasks:run",
   tasksCancel: "tasks:cancel",
   tasksEvent: "tasks:event",

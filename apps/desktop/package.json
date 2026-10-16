@@ -15,7 +15,8 @@
     "verify:package": "node scripts/verify-package.mjs"
   },
   "dependencies": {
-    "better-sqlite3": "^11.10.0"
+    "better-sqlite3": "^11.10.0",
+    "pdfjs-dist": "4.10.38"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.0",

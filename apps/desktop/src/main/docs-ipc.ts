@@ -1,7 +1,7 @@
 import { BrowserWindow, dialog, ipcMain } from "electron";
 import { DOC_EXTENSIONS } from "@point/core";
 import { IPC, type WorkspaceInfo } from "../shared/ipc.js";
-import { getDoc, importFile, listDocs, openWorkspace, workspacePath } from "./workspace.js";
+import { getDoc, getDocView, importFile, openDocExternally, listDocs, openWorkspace, workspacePath } from "./workspace.js";
 
 const info = (): WorkspaceInfo => ({ path: workspacePath() });
 
@@ -36,5 +36,15 @@ export function registerDocsIpc(): void {
   ipcMain.handle(IPC.docsGet, (_e, id: unknown) => {
     if (typeof id !== "string") throw new Error("无效的文档 id");
     return getDoc(id);
+  });
+
+  ipcMain.handle(IPC.docsView, (_e, id: unknown) => {
+    if (typeof id !== "string") throw new Error("无效的文档 id");
+    return getDocView(id);
+  });
+
+  ipcMain.handle(IPC.docsOpenExternal, (_e, id: unknown) => {
+    if (typeof id !== "string") throw new Error("无效的文档 id");
+    return openDocExternally(id);
   });
 }

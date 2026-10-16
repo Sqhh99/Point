@@ -2,7 +2,7 @@ import { test, expect, _electron as electron, type ElectronApplication } from "@
 import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { makePdf } from "../../../packages/core/test/fixtures/make";
+import { makeDocx, makePdf, makeXlsx } from "../../../packages/core/test/fixtures/make";
 
 // Requires `pnpm build` first: launches the built main entry (out/main/index.js).
 let app: ElectronApplication;
@@ -160,8 +160,9 @@ test("imports documents into a workspace and renders them in the reader", async 
   await stubOpenDialog([pdf]);
   await win.getByRole("button", { name: "导入文档" }).click();
   await expect(list.getByRole("button", { name: /paper/ })).toBeVisible();
-  await expect(reader).toContainText("Entropy in PDF");
-  await expect(reader.locator('[data-page="2"]')).toHaveText("Second page line");
+  await expect(reader.getByTestId("pdf-page")).toHaveCount(2);
+  await expect(reader.locator('[data-page="1"] canvas')).toBeVisible();
+  await expect(reader.locator('[data-page="1"] .pdf-text')).toContainText("Entropy in PDF");
 
   // CSV goes through the same SheetJS path as .xlsx (the real-xlsx cases live in core's xlsx.test.ts).
   const sheet = join(src, "scores.csv");
@@ -640,4 +641,152 @@ test("status bar shows workspace, doc and model; region capture attaches a scree
   expect(await missingBubble.evaluate((e) => e.tagName)).not.toBe("BUTTON");
   await missingBubble.click();
   await expect(lightbox).toBeHidden();
+});
+
+// ⑦ original-looking viewers: PDF canvases, Word html, Excel grid, one shared bar, same mark color, empty state.
+async function selectIn(win: Awaited<ReturnType<ElectronApplication["firstWindow"]>>, selector: string, needle: string) {
+  await win.getByTestId("reader").evaluate(
+    (article, [sel, text]) => {
+      const el = [...article.querySelectorAll(sel!)].find((e) => e.textContent?.includes(text!));
+      if (!el) throw new Error(`nothing matches ${sel} / ${text}`);
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const s = window.getSelection()!;
+      s.removeAllRanges();
+      s.addRange(range);
+      article.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    },
+    [selector, needle]
+  );
+}
+
+test("PDF, Word and Excel open in their original look with one shared bar, marks and empty state", async () => {
+  const win = await app.firstWindow();
+  const src = mkdtempSync(join(tmpdir(), "point-view-"));
+  const files = {
+    pdf: join(src, "论文.pdf"),
+    docx: join(src, "报告.docx"),
+    xlsx: join(src, "成绩.xlsx"),
+    bad: join(src, "损坏.docx")
+  };
+  writeFileSync(files.pdf, makePdf([["Viewer page one"], ["Viewer page two"], ["Viewer page three"]]));
+  writeFileSync(files.docx, await makeDocx([{ style: "Heading1", text: "季度报告" }, { text: "收入同比增长二十个百分点" }]));
+  writeFileSync(files.xlsx, await makeXlsx([{ name: "成绩", rows: [["班级成绩", "分数"], ["张三", 90], ["李四", 85]] }, { name: "备注", rows: [["说明"], ["第二张表的内容"]] }]));
+  writeFileSync(files.bad, await makeDocx([{ text: "will be corrupted" }]));
+  const list = win.getByTestId("doc-list");
+  const reader = win.getByTestId("reader");
+  const bar = win.getByTestId("reader-bar");
+  const toolbar = win.getByRole("toolbar", { name: "选区操作" });
+  const csp = await win.evaluate(() => document.querySelector('meta[http-equiv="Content-Security-Policy"]')!.getAttribute("content"));
+  const importOne = async (p: string) => {
+    await stubOpenDialog([p]);
+    await win.getByRole("button", { name: "导入文档" }).click();
+  };
+  const markColor = (loc: ReturnType<typeof win.locator>) => loc.evaluate((e) => getComputedStyle(e).backgroundColor);
+  const colors: string[] = [];
+
+  // --- PDF: real page canvases, page switcher, zoom, text-layer selection → mark with rects
+  await importOne(files.pdf);
+  await expect(reader).toHaveAttribute("data-kind", "pdf");
+  await expect(reader.getByTestId("pdf-page")).toHaveCount(3);
+  await expect(reader.locator('[data-page="1"] canvas')).toBeVisible();
+  await expect(bar.getByTestId("reader-title")).toContainText("论文");
+  await expect(bar.getByTestId("switcher-label")).toHaveText("1 / 3");
+  await bar.getByRole("button", { name: "下一页" }).click();
+  await expect(bar.getByTestId("switcher-label")).toHaveText("2 / 3");
+  const w100 = (await reader.locator('[data-page="1"]').boundingBox())!.width;
+  await bar.getByRole("button", { name: "放大" }).click();
+  await expect.poll(async () => (await reader.locator('[data-page="1"]').boundingBox())!.width).toBeGreaterThan(w100);
+  await bar.getByRole("button", { name: "恢复 100%" }).click();
+  await expect(bar.getByRole("button", { name: "恢复 100%" })).toBeDisabled();
+  await expect(bar.getByTestId("capture-button")).toBeVisible();
+  await selectIn(win, '[data-page="2"] .pdf-text span', "Viewer page two");
+  await expect(toolbar).toBeVisible();
+  await toolbar.getByRole("button", { name: "标记" }).click();
+  const marks = win.getByTestId("marks").getByTestId("mark-item");
+  await expect(marks).toHaveCount(1);
+  const rect = reader.locator('[data-page="2"] [data-testid="mark-rect"]').first();
+  await expect(rect).toBeVisible();
+  colors.push(await markColor(rect));
+  const stored = await win.evaluate(async () => {
+    const id = (await window.point.docs.list())[0]!.id;
+    return (await window.point.marks.list(id))[0]!.anchor;
+  });
+  expect(stored).toMatchObject({ kind: "text", page: 2, text: expect.stringContaining("Viewer page two") });
+  expect((stored as { rects: unknown[] }).rects.length).toBeGreaterThan(0);
+  expect((stored as { prefix?: string }).prefix ?? "").not.toContain("Viewer page two");
+  await win.screenshot({ path: join(resultsDir, "viewer-pdf.png") });
+
+  // --- Word: inline html, same bar, mark highlight
+  await importOne(files.docx);
+  await expect(reader).toHaveAttribute("data-kind", "docx");
+  await expect(reader.locator("h1")).toHaveText("季度报告");
+  await expect(bar.getByTestId("reader-title")).toContainText("报告");
+  await expect(bar.getByTestId("capture-button")).toBeVisible();
+  await expect(bar.getByRole("button", { name: "放大" })).toBeEnabled();
+  await selectIn(win, "p", "收入同比增长");
+  await toolbar.getByRole("button", { name: "标记" }).click();
+  await expect(marks).toHaveCount(1);
+  const dm = reader.locator(".block.marked, .docx-body .marked").first();
+  await expect(dm).toBeVisible();
+  colors.push(await markColor(dm));
+  await win.screenshot({ path: join(resultsDir, "viewer-docx.png") });
+
+  // --- Excel: grid with headers, bottom sheet tabs, switching, mark
+  await importOne(files.xlsx);
+  await expect(reader).toHaveAttribute("data-kind", "xlsx");
+  const grid = reader.getByTestId("sheet-grid");
+  await expect(grid).toHaveAttribute("data-sheet", "成绩");
+  await expect(grid.locator("thead th").nth(1)).toHaveText("A");
+  await expect(grid.locator("tbody .row-head").first()).toHaveText("1");
+  await expect(grid.locator("td").filter({ hasText: "张三" })).toBeVisible();
+  await expect(bar.getByTestId("switcher-label")).toHaveText("1 / 2");
+  const tabs = win.getByTestId("sheet-tabs");
+  await expect(tabs.getByRole("tab")).toHaveText(["成绩", "备注"]);
+  expect((await tabs.boundingBox())!.y).toBeGreaterThan((await reader.boundingBox())!.y);
+  await tabs.getByRole("tab", { name: "备注" }).click();
+  await expect(grid).toHaveAttribute("data-sheet", "备注");
+  await expect(grid.locator("td").filter({ hasText: "第二张表的内容" })).toBeVisible();
+  await expect(bar.getByTestId("switcher-label")).toHaveText("2 / 2");
+  await expect(bar.getByRole("button", { name: "下一个工作表" })).toBeDisabled();
+  await bar.getByRole("button", { name: "上一个工作表" }).click();
+  await expect(grid).toHaveAttribute("data-sheet", "成绩");
+  await selectIn(win, "tr", "张三");
+  await toolbar.getByRole("button", { name: "标记" }).click();
+  await expect(marks).toHaveCount(1);
+  const xm = reader.locator("tr.marked td").first();
+  await expect(xm).toBeVisible();
+  colors.push(await markColor(xm));
+  await win.screenshot({ path: join(resultsDir, "viewer-xlsx.png") });
+
+  // Same highlight color for all three formats (accent @12%).
+  expect(new Set(colors).size).toBe(1);
+
+  // --- Empty state: corrupted file → explicit message + 「用系统应用打开」 hands main's own stored copy to the OS
+  await importOne(files.bad);
+  const ws = (await win.evaluate(() => window.point.workspace.get())).path!;
+  const bad = (await win.evaluate(() => window.point.docs.list())).find((d) => d.title.includes("损坏") || d.path.endsWith(".docx"))!;
+  expect(bad).toBeTruthy();
+  await app.evaluate(({ shell }) => {
+    (globalThis as unknown as { __opened: string[] }).__opened = [];
+    (shell as unknown as { openPath: (p: string) => Promise<string> }).openPath = async (p) => {
+      (globalThis as unknown as { __opened: string[] }).__opened.push(p);
+      return "";
+    };
+  });
+  writeFileSync(join(ws, bad.path), "not a docx at all");
+  await list.getByRole("button", { name: /季度报告|报告/ }).first().click();
+  await list.getByRole("button", { name: new RegExp(bad.title) }).click();
+  const err = win.getByTestId("doc-error");
+  await expect(err).toBeVisible();
+  await expect(win.getByTestId("doc-error-message")).not.toBeEmpty();
+  await win.screenshot({ path: join(resultsDir, "viewer-empty.png") });
+  await err.getByRole("button", { name: "用系统应用打开" }).click();
+  await expect.poll(() => app.evaluate(() => (globalThis as unknown as { __opened: string[] }).__opened.length)).toBe(1);
+  const opened = await app.evaluate(() => (globalThis as unknown as { __opened: string[] }).__opened[0]);
+  expect(opened).toBe(join(ws, bad.path));
+
+  // CSP never loosened: no remote or inline script/img sources were added for the viewers.
+  expect(csp).not.toMatch(/https?:|unsafe-eval|data:/);
+  expect(csp).toContain("img-src 'self' point-capture:");
 });

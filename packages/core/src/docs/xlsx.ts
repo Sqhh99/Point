@@ -6,12 +6,17 @@ import type { BlockInput, ParsedDoc } from "./types.js";
 export const XLSX_MAX_ROWS = 2000;
 
 /** Each sheet becomes a heading plus one table of its formatted cell text; empty sheets are skipped. */
-export function parseXlsx(data: Uint8Array, fallbackTitle = "未命名"): ParsedDoc {
-  const opts = { cellFormula: false, cellHTML: false } as const;
-  const wb = isBinaryWorkbook(data)
+export function readWorkbook(data: Uint8Array): XLSX.WorkBook {
+  // No formulas, no HTML, no VBA/macros (vbaraw stays off). cellStyles only makes SheetJS keep column widths.
+  const opts = { cellFormula: false, cellHTML: false, bookVBA: false, cellStyles: true } as const;
+  return isBinaryWorkbook(data)
     ? XLSX.read(data, { ...opts, type: "array" })
     : // CSV: SheetJS guesses a legacy codepage for raw bytes, which garbles Chinese, so decode it ourselves.
       XLSX.read(decodeCsv(data), { ...opts, type: "string" });
+}
+
+export function parseXlsx(data: Uint8Array, fallbackTitle = "未命名"): ParsedDoc {
+  const wb = readWorkbook(data);
   const blocks: BlockInput[] = [];
   for (const name of wb.SheetNames) {
     const sheet = wb.Sheets[name];

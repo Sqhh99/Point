@@ -56,3 +56,16 @@ export async function makeDocx(paras: { style?: "Heading1" | "Heading2"; text: s
   );
   return zip.generateAsync({ type: "uint8array" });
 }
+
+/** A real .xlsx: one entry per sheet (name + rows); the first sheet merges its first row across the columns. */
+export async function makeXlsx(sheets: { name: string; rows: (string | number)[][] }[]): Promise<Uint8Array> {
+  const XLSX = await import("xlsx");
+  const wb = XLSX.utils.book_new();
+  sheets.forEach((s, i) => {
+    const ws = XLSX.utils.aoa_to_sheet(s.rows);
+    ws["!cols"] = s.rows[0]?.map(() => ({ wch: 14 }));
+    if (i === 0 && (s.rows[0]?.length ?? 0) > 1) ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: s.rows[0]!.length - 1 } }];
+    XLSX.utils.book_append_sheet(wb, ws, s.name);
+  });
+  return new Uint8Array(XLSX.write(wb, { type: "array", bookType: "xlsx" }));
+}
