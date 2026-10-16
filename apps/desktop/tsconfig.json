@@ -4,7 +4,7 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["node"],
     "jsx": "react-jsx",
-    "paths": { "@point/core": ["../../packages/core/src/index.ts"], "@point/core/tree": ["../../packages/core/src/conversations/tree.ts"] }
+    "paths": { "@point/core": ["../../packages/core/src/index.ts"], "@point/core/relocate": ["../../packages/core/src/docs/relocate.ts"], "@point/core/tree": ["../../packages/core/src/conversations/tree.ts"] }
   },
   "include": ["src", "e2e", "test", "vitest.config.ts", "../../packages/core/src/**/*.d.ts", "electron.vite.config.ts", "playwright.config.ts"]
 }

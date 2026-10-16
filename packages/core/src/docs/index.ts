@@ -26,3 +26,4 @@ export { XLSX_MAX_ROWS, decodeCsv } from "./xlsx.js";
 export type { Block, DocType, OutlineItem, ParsedDoc } from "./types.js";
 export { XLSX_MAX_COLS, buildDocView, renderDocx, renderSheets, sanitizeDocxHtml } from "./view.js";
 export type { DocView, DocxImage, SheetCell, SheetView } from "./view.js";
+export { docxBlockTexts, isViewBlockId, relocateBlock } from "./relocate.js";
