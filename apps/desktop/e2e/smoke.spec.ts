@@ -700,6 +700,7 @@ test("PDF, Word and Excel open in their original look with one shared bar, marks
   await bar.getByRole("button", { name: "恢复 100%" }).click();
   await expect(bar.getByRole("button", { name: "恢复 100%" })).toBeDisabled();
   await expect(bar.getByTestId("capture-button")).toBeVisible();
+  // Zoom remounts pages; wait until page 2's text layer is back before selecting (same selector the CI uses).
   await selectIn(win, '[data-page="2"] .pdf-text span', "Viewer page two");
   await expect(toolbar).toBeVisible();
   await toolbar.getByRole("button", { name: "标记" }).click();

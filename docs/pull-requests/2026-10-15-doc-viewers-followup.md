@@ -11,6 +11,8 @@
 
 跳过 6、7。
 
+**CI 修复：** 适应宽度后再缩放时按 `{page, offsetRatio}` 重新锚定当前页（scrollTop 否则停在旧比例像素上，页离开 IO、文字层被清）；保留 IO 卸载。
+
 ## 安全
 CSP 未改动；字体/CMap 随包打入，无网络、无 `file://` 请求；Word 的 style 属性只允许 `color:#RRGGBB`，两层校验。
 

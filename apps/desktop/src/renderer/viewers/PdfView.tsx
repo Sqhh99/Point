@@ -179,6 +179,63 @@ export function PdfView({ data, zoom, goto, markTexts, markRects, fit, onFit, on
 
   const scale = (BASE * zoom) / 100;
 
+  // Zoom / fit-width change the page height in CSS px; scrollTop is still in the old scale's pixels, so the
+  // page that was centred walks out of the IntersectionObserver and its text layer is cleared. Re-anchor
+  // to the page we were looking at (and, when possible, the same offset within it).
+  const anchor = useRef<{ page: number; ratio: number }>({ page: 1, ratio: 0 });
+  useEffect(() => {
+    const scroller = root.current?.closest(".reader-doc")?.parentElement;
+    if (!doc || !scroller) return;
+    const mid = scroller.getBoundingClientRect().top + scroller.clientHeight / 2;
+    let page = 1;
+    let ratio = 0;
+    let best = Infinity;
+    root.current?.querySelectorAll<HTMLElement>(".pdf-page").forEach((el) => {
+      const r = el.getBoundingClientRect();
+      const d = Math.abs((r.top + r.bottom) / 2 - mid);
+      if (d < best) {
+        best = d;
+        page = Number(el.dataset.page) || 1;
+        ratio = r.height > 0 ? (mid - r.top) / r.height : 0;
+      }
+    });
+    anchor.current = { page, ratio: Math.min(1, Math.max(0, ratio)) };
+    const on = () => {
+      const mid2 = scroller.getBoundingClientRect().top + scroller.clientHeight / 2;
+      let p = 1;
+      let rat = 0;
+      let b = Infinity;
+      root.current?.querySelectorAll<HTMLElement>(".pdf-page").forEach((el) => {
+        const r = el.getBoundingClientRect();
+        const d = Math.abs((r.top + r.bottom) / 2 - mid2);
+        if (d < b) {
+          b = d;
+          p = Number(el.dataset.page) || 1;
+          rat = r.height > 0 ? (mid2 - r.top) / r.height : 0;
+        }
+      });
+      anchor.current = { page: p, ratio: Math.min(1, Math.max(0, rat)) };
+    };
+    scroller.addEventListener("scroll", on, { passive: true });
+    return () => scroller.removeEventListener("scroll", on);
+  }, [doc]);
+
+  useEffect(() => {
+    const scroller = root.current?.closest(".reader-doc")?.parentElement;
+    if (!doc || !scroller) return;
+    const { page, ratio } = anchor.current;
+    const el = root.current?.querySelector<HTMLElement>(`[data-page="${page}"]`);
+    if (!el) return;
+    // After layout for the new scale: put the same page (same relative offset) back under the viewport middle.
+    const apply = () => {
+      const box = scroller.getBoundingClientRect();
+      const r = el.getBoundingClientRect();
+      const target = scroller.scrollTop + (r.top - box.top) + r.height * ratio - scroller.clientHeight / 2;
+      scroller.scrollTop = Math.max(0, target);
+    };
+    requestAnimationFrame(() => requestAnimationFrame(apply));
+  }, [scale, doc]);
+
   // Current page = the one nearest the middle of the scroller.
   useEffect(() => {
     const scroller = root.current?.closest(".reader-doc")?.parentElement;

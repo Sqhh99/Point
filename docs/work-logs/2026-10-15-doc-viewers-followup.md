@@ -17,6 +17,9 @@
 - e2e：新增跟进用例——未嵌入字体 PDF 的 canvas 有非白像素；默认适应宽度（页面右缘在阅读区内）；切换文档滚动归零；Word 红字（`rgb(255,0,0)`，style 恰为 `color:#FF0000`）；用旧格式（`b7`、`b9`）创建的标记在 Word/Excel 上高亮并可跳转（Excel 跳到 B 工作表）。
 - lint 0、typecheck 0、`pnpm test` 721 + core 171 通过、build 0、e2e 22 通过。
 
+## CI 跟进（缩放后 page 2 文字层消失）
+根因（测试员）：适应宽度后再缩放时 `scrollTop` 仍是旧缩放比例下的像素，当前页离开 IntersectionObserver，文字层被清空。产品修复：缩放变化后按 `{page, offsetRatio}` 重新锚定当前页；保留 IO 卸载，不常驻屏外页。断言未削弱。
+
 ## 缺口
 - 非嵌入字体的 CJK PDF：CMap 已打包（编码可解），但字形仍需系统字体；没有 CJK 标准字体可打包，未做像素断言。
 - 只保留文字颜色，Word 的高亮/背景色未保留。
