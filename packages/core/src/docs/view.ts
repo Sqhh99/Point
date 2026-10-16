@@ -1,3 +1,4 @@
+import JSZip from "jszip";
 import mammoth from "mammoth";
 import * as XLSX from "xlsx";
 import { XLSX_MAX_ROWS, readWorkbook } from "./xlsx.js";
@@ -84,6 +85,9 @@ export function sanitizeDocxHtml(html: string): string {
       out += id !== undefined ? `<span data-docx-img="${Number(id)}"></span>` : "[图片]";
     } else if (ALLOWED.has(name)) {
       let extra = "";
+      // Run colour (see tagColors): only a validated #RRGGBB survives, written as the sole style property.
+      const col = name === "span" ? /^ptc-([0-9A-F]{6})$/.exec(attrs.get("class") ?? "")?.[1] : undefined;
+      if (col) extra += ` style="color:#${col}"`;
       if (name === "td" || name === "th") {
         for (const k of ["colspan", "rowspan"]) {
           const v = attrs.get(k);
@@ -94,6 +98,38 @@ export function sanitizeDocxHtml(html: string): string {
     }
   }
   return out + src.slice(last).replace(/[<>]/g, (c) => (c === "<" ? "&lt;" : "&gt;"));
+}
+
+/**
+ * mammoth drops run colours. Before converting, each `<w:color w:val="RRGGBB"/>` becomes a character style
+ * `ptc-RRGGBB` (declared in styles.xml) that the style map turns into `span.ptc-RRGGBB`; the sanitizer then
+ * emits `style="color:#RRGGBB"` for exactly that class. Any failure just means "no colours".
+ */
+async function tagColors(data: Uint8Array): Promise<{ data: Uint8Array; colors: string[] }> {
+  try {
+    const zip = await JSZip.loadAsync(data);
+    const doc = zip.file("word/document.xml");
+    const styles = zip.file("word/styles.xml");
+    if (!doc || !styles) return { data, colors: [] };
+    const colors = new Set<string>();
+    const xml = (await doc.async("string")).replace(/<w:rPr>[\s\S]*?<\/w:rPr>/g, (rpr) => {
+      if (rpr.includes("<w:rStyle")) return rpr;
+      return rpr.replace(/<w:color\b[^>]*?\bw:val="([0-9A-Fa-f]{6})"[^>]*?\/>/, (_m, hex: string) => {
+        const c = hex.toUpperCase();
+        if (colors.size >= 64 && !colors.has(c)) return "";
+        colors.add(c);
+        return `<w:rStyle w:val="ptc${c}"/>`;
+      });
+    });
+    if (colors.size === 0) return { data, colors: [] };
+    const defs = [...colors].map((c) => `<w:style w:type="character" w:styleId="ptc${c}"><w:name w:val="ptc-${c}"/></w:style>`).join("");
+    const st = (await styles.async("string")).replace(/<\/w:styles>\s*$/, `${defs}</w:styles>`);
+    zip.file("word/document.xml", xml);
+    zip.file("word/styles.xml", st);
+    return { data: await zip.generateAsync({ type: "uint8array" }), colors: [...colors] };
+  } catch {
+    return { data, colors: [] };
+  }
 }
 
 /** DOCX → sanitized HTML (headings, lists, tables, bold/italic/underline) plus its images as bytes. */
@@ -107,7 +143,9 @@ export async function renderDocx(data: Uint8Array): Promise<{ html: string; imag
     images.push({ mime: mime as DocxImage["mime"], base64 });
     return { src: `point-img:${images.length - 1}` };
   });
-  const { value } = await mammoth.convertToHtml({ buffer: Buffer.from(data) }, { convertImage });
+  const tagged = await tagColors(data);
+  const styleMap = tagged.colors.map((c) => `r[style-name='ptc-${c}'] => span.ptc-${c}`);
+  const { value } = await mammoth.convertToHtml({ buffer: Buffer.from(tagged.data) }, { convertImage, styleMap });
   return { html: sanitizeDocxHtml(value), images };
 }
 

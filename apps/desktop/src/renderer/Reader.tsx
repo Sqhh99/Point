@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useMemo, useEffect, useRef, useState } from "react";
 import type { Block, DocView, Mark, MarkAnchor, PageRect, ParsedDoc, TaskKind } from "@point/core";
 import type { JSX } from "react";
 import type { CaptureResult } from "../shared/ipc";
@@ -6,6 +6,7 @@ import { CaptureOverlay } from "./Capture";
 import { EmptyState } from "./EmptyState";
 import { IconAsk, IconCapture, IconDiagram, IconExplain, IconMark, IconMore, IconNote } from "./icons";
 import { isCaptureKey, placeBar, type Box } from "./layout";
+import { isViewBlockId, relocateBlock } from "@point/core/relocate";
 import { DocError } from "./viewers/DocError";
 import { DocxView } from "./viewers/DocxView";
 import { PdfView, type PdfState } from "./viewers/PdfView";
@@ -157,7 +158,7 @@ interface ReaderProps {
   onRegionExplain(r: RegionInfo): void;
   marks: Mark[];
   /** Scroll to a block (from the marks list); a new seq re-runs. */
-  locate: { blockId?: string; page?: number; seq: number } | null;
+  locate: { blockId?: string; page?: number; text?: string; seq: number } | null;
 }
 
 export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorkspace, onOpenFile, onOpenRecent, vision, onCapture, onCaptureError, onMark, onRegionExplain, marks, locate }: ReaderProps) {
@@ -171,7 +172,7 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
   const [pdf, setPdf] = useState<PdfState>({ count: 0, current: 1 });
   const [pdfReady, setPdfReady] = useState(false);
   const [goto, setGoto] = useState<{ page: number; seq: number } | null>(null);
-  const [fit, setFit] = useState<{ seq: number } | null>(null);
+  const [fit, setFit] = useState<{ seq: number; max?: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toolbar, setToolbar] = useState<{ top: number; left: number; sel?: SelectionInfo; region?: RegionInfo } | null>(null);
   const articleRef = useRef<HTMLElement>(null);
@@ -241,13 +242,25 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
 
   useEffect(() => () => window.clearTimeout(timer.current), []);
 
+  /** The block a text mark sits on in this view; marks from the extracted-text era (`b<n>`) are relocated by their quote. */
+  const blockFor = useCallback(
+    (a: { blockId?: string; text: string }): string | undefined => {
+      if (!view || view.kind === "pdf") return a.blockId;
+      if (view.kind === "md" || (a.blockId && isViewBlockId(a.blockId))) return a.blockId;
+      return relocateBlock(view, a.text);
+    },
+    [view]
+  );
+  const markedIds = useMemo(() => new Set(marks.map((m) => (m.anchor.kind === "text" ? blockFor(m.anchor) : undefined)).filter((x): x is string => !!x)), [marks, blockFor]);
+
   // Jump back to a mark: its block (switching sheet first for Excel) or, in a PDF, its page.
   useEffect(() => {
     if (!locate || !(doc || view)) return;
-    if (locate.blockId) {
-      const m = /^s(\d+)r\d+$/.exec(locate.blockId);
+    const target = locate.blockId && blockFor({ blockId: locate.blockId, text: locate.text ?? "" });
+    if (target) {
+      const m = /^s(\d+)r\d+$/.exec(target);
       if (m && view?.kind === "xlsx" && Number(m[1]) !== sheet) return setSheet(Number(m[1]));
-      const el = articleRef.current?.querySelector(`[data-block-id="${CSS.escape(locate.blockId)}"]`)?.closest(".block");
+      const el = articleRef.current?.querySelector(`[data-block-id="${CSS.escape(target)}"]`)?.closest(".block");
       if (!el) return;
       el.scrollIntoView({ block: "center" });
       el.classList.add("located");
@@ -315,7 +328,12 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
     setSheet(0);
     setPdf({ count: 0, current: 1 });
     setPdfReady(false);
+    setGoto(null); // a previous PDF's "go to page 2" must not replay on the next one
+    setFit(null);
     setTitle("");
+    // A new document starts at the top, whatever the previous one's scroll position was.
+    const scroller = articleRef.current?.parentElement;
+    if (scroller) scroller.scrollTop = scroller.scrollLeft = 0;
     close();
     onDocLoaded?.(null);
     if (!docId) return;
@@ -351,7 +369,6 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
       </div>
     );
 
-  const markedIds = new Set(marks.map((m) => (m.anchor.kind === "text" ? m.anchor.blockId : undefined)).filter((x): x is string => !!x));
   const markTexts = new Map<number, string[]>();
   const markRects = new Map<number, PageRect[]>();
   for (const m of marks) {
@@ -461,7 +478,11 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
           fit={fit}
           onFit={setZoom}
           onState={setPdf}
-          onReady={() => setPdfReady(true)}
+          onReady={() => {
+            setPdfReady(true);
+            // Open at the panel width instead of a fixed 100% that clips the right edge.
+            setFit({ seq: Date.now(), max: 100 });
+          }}
           onError={(m) => setError(`PDF 无法渲染：${m}`)}
         />
       )}
