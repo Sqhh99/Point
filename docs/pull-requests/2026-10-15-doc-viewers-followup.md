@@ -1,7 +1,7 @@
 ## 做了什么
 修复 #53 合并后测试员在真实构建上发现的问题。
 
-![跟进用例：Excel 旧标记定位到 B 工作表](https://raw.githubusercontent.com/Sqhh99/Point/COMMIT/docs/assets/pr/2026-10-15-viewer-followup.png)
+![跟进用例：Excel 旧标记定位到 B 工作表](https://raw.githubusercontent.com/Sqhh99/Point/49d00f8f2764fc442309529de1190cec453f78a5/docs/assets/pr/2026-10-15-viewer-followup.png)
 
 1. **（高）未嵌入字体的 PDF 空白**：根因是 `disableFontFace:true` 与进程内 worker 竞态，字形全被丢弃。改为用字节建 FontFace（无 URL，CSP 不变），并把 pdf.js 标准字体和 CMap 作为懒加载 chunk 打进包，通过工厂钩子读取，不发请求。e2e 对 canvas 做非白像素断言。
 2. **（高）旧 docx/xlsx 标记失效**：`b<n>` 的标记按引文重新定位到 `d<i>` / `s<n>r<m>`，高亮和点击跳转（含切换工作表）都生效；新增 core 纯函数和测试。
