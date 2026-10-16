@@ -1,4 +1,4 @@
-import { ipcMain, type WebContents } from "electron";
+import { BrowserWindow, ipcMain, type WebContents } from "electron";
 import { randomUUID } from "node:crypto";
 import { LLMError, createProvider, getPreset, type ChatMessage, type LLMProvider, type ProviderId } from "@point/core";
 import { IPC, type ChatEvent, type ProviderPatch, type TestResult } from "../shared/ipc.js";
@@ -42,17 +42,27 @@ async function runChat(sender: WebContents, requestId: string, messages: ChatMes
   }
 }
 
+function broadcastSettingsChanged(): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send(IPC.settingsChanged);
+  }
+}
+
 export function registerIpc(): void {
   ipcMain.handle(IPC.settingsGet, () => view());
   ipcMain.handle(IPC.modelsList, () => listModels());
   ipcMain.handle(IPC.settingsUpdate, (_e, patch: ProviderPatch) => {
     assertProviderId(patch?.id);
-    return update(patch);
+    const v = update(patch);
+    broadcastSettingsChanged();
+    return v;
   });
   ipcMain.handle(IPC.settingsSetKey, (_e, id: unknown, key: unknown) => {
     assertProviderId(id);
     if (typeof key !== "string") throw new Error("无效的 API Key");
-    return setKey(id, key);
+    const v = setKey(id, key);
+    broadcastSettingsChanged();
+    return v;
   });
   ipcMain.handle(IPC.settingsTest, async (_e, id: unknown): Promise<TestResult> => {
     assertProviderId(id);

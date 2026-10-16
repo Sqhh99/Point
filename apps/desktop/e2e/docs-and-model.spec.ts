@@ -216,4 +216,65 @@ test.describe("per-conversation model and effort", () => {
     await expect(bar.getByTestId("effort-control")).toBeVisible();
     await win.screenshot({ path: join(results, "multi-model.png") });
   });
+
+  test("settings save broadcasts: ModelBar re-fetches models:list for the new provider", async () => {
+    const win = await app.firstWindow();
+    const select = win.getByTestId("model-bar").getByTestId("model-select");
+    await expect(select.locator('option[value="deepseek-flash"]')).toHaveCount(1);
+    // Switch active provider in Settings; broadcast must refresh ModelBar without remounting the chat.
+    await win.getByRole("button", { name: "设置" }).click();
+    await win.getByLabel("模型服务").selectOption({ label: "OpenAI GPT" });
+    await win.getByLabel("模型", { exact: true }).fill("gpt-4o");
+    await win.getByRole("button", { name: "保存" }).click();
+    await expect(win.getByText("已保存", { exact: true })).toBeVisible();
+    await win.getByRole("button", { name: "返回阅读" }).click();
+    // settings:changed → models:list; DeepSeek options gone, GPT present (conversationId unchanged).
+    await expect(select.locator('option[value="gpt-4o"]')).toHaveCount(1);
+    await expect(select.locator('option[value="deepseek-flash"]')).toHaveCount(0);
+    // Switch back so later asks still use DeepSeek presets in this serial suite.
+    await win.getByRole("button", { name: "设置" }).click();
+    await win.getByLabel("模型服务").selectOption({ label: "DeepSeek" });
+    await win.getByLabel("模型", { exact: true }).fill("deepseek-flash");
+    await win.getByRole("button", { name: "保存" }).click();
+    await expect(win.getByText("已保存", { exact: true })).toBeVisible();
+    await win.getByRole("button", { name: "返回阅读" }).click();
+    await expect(select.locator('option[value="deepseek-flash"]')).toHaveCount(1);
+  });
+
+  test("first ask stores ModelBar model/effort; unavailable model emits one model-notice", async () => {
+    const win = await app.firstWindow();
+    const bar = win.getByTestId("model-bar");
+    await bar.getByTestId("model-select").selectOption("deepseek-flash");
+    await bar.getByTestId("effort-off").click();
+    await win.getByPlaceholder(/问点什么/).fill("记住模型和思考");
+    await win.getByRole("button", { name: "发送" }).click();
+    await expect(win.locator(".msg.user").filter({ hasText: "记住模型和思考" })).toBeVisible({ timeout: 15_000 });
+    await expect(win.locator(".msg.assistant").getByText("模拟回答")).toBeVisible({ timeout: 15_000 });
+    const remembered = await win.evaluate(async () => {
+      const list = await window.point.conversations.list();
+      return list[0] ?? null;
+    });
+    expect(remembered?.model).toBe("deepseek-flash");
+    expect(remembered?.effort).toBe("off");
+
+    // resolveAsk → TaskEvent model-notice (renderer shows it when the panel owns the request).
+    const notice = await win.evaluate(async () => {
+      return await new Promise<string>((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error("model-notice timeout")), 10_000);
+        const off = window.point.tasks.onEvent((e) => {
+          if (e.type === "model-notice") {
+            clearTimeout(t);
+            off();
+            resolve(e.message);
+          }
+        });
+        void window.point.tasks.run({ kind: "ask", selection: "", question: "触发回退提示", model: "no-such-model-xyz" }).catch((err) => {
+          clearTimeout(t);
+          off();
+          reject(err);
+        });
+      });
+    });
+    expect(notice).toMatch(/原模型已不可用/);
+  });
 });

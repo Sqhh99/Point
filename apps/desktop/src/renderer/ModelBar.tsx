@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ModelSpec } from "@point/core";
 
 type Listed = ModelSpec & { configured: boolean };
@@ -7,6 +7,7 @@ type List = { providerId: string; providerName: string; notice?: string; models:
 /**
  * One row above the input: current-provider model dropdown (left) and thinking-level control (right).
  * Provider switching stays in Settings; this list is only that provider's models.
+ * Re-fetches on mount and whenever main broadcasts `settings:changed` (not only on conversationId).
  */
 export function ModelBar({
   conversationId,
@@ -27,7 +28,18 @@ export function ModelBar({
 
   useEffect(() => {
     refresh();
-  }, [refresh, conversationId]);
+    return window.point.settings.onChanged(refresh);
+  }, [refresh]);
+
+  // When the selected model disappears after a settings change, fall back to the first configured one.
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  useEffect(() => {
+    if (!list?.models.length) return;
+    if (model && list.models.some((m) => m.id === model && m.configured)) return;
+    const def = list.models.find((m) => m.configured) ?? list.models[0];
+    if (def) onChangeRef.current(def.id, def.defaultEffort);
+  }, [list, model]);
 
   if (!list) return null;
   const active = list.models.find((m) => m.id === model) ?? list.models.find((m) => m.id === list.models[0]?.id);

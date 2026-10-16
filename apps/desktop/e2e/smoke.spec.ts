@@ -92,7 +92,7 @@ test("preload exposes the typed window.point API", async () => {
     return { settings: fns(p.settings), chat: fns(p.chat) };
   });
   expect(shape).toEqual({
-    settings: ["get", "setKey", "testConnection", "update"],
+    settings: ["get", "onChanged", "setKey", "testConnection", "update"],
     chat: ["cancel", "onEvent", "start"]
   });
 });

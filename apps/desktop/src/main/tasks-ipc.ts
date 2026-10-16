@@ -121,13 +121,13 @@ function placement(
 
 function resolveAsk(req: TaskRequest, conversationId: string | undefined): {
   model: string;
+  effort: string | null;
   effortWrites?: ReturnType<typeof effortOf> extends infer E ? E extends { writes: infer W } ? W : never : never;
   omitTemperature: boolean;
   notice?: string;
 } {
   // Effort is validated against ModelSpec before any write and without decrypting the API key.
-  // The fake LLM ignores effort (e2e); real providers still reject unsupported levels below.
-  if (fakeEnabled()) return { model: "fake", omitTemperature: false };
+  // Fake LLM still resolves model/effort (and notice) so first-ask memory and UI match production.
   const active = settingsView();
   const remembered = conversationId ? getConversationModel(conversationId) : { model: null, effort: null };
   const wantModel = req.model ?? remembered.model ?? active.active.model;
@@ -142,14 +142,18 @@ function resolveAsk(req: TaskRequest, conversationId: string | undefined): {
   if (req.effort !== undefined && req.effort !== null && req.effort !== "") {
     const level = effortOf(spec, req.effort);
     if (!level || level.id !== req.effort) throw new Error(`该模型不支持思考等级「${req.effort}」`);
-    return { model: spec.id, effortWrites: level.writes, omitTemperature: level.thinking, notice };
+    if (fakeEnabled()) return { model: spec.id, effort: level.id, omitTemperature: false, notice };
+    return { model: spec.id, effort: level.id, effortWrites: level.writes, omitTemperature: level.thinking, notice };
   }
   const wantEffort = remembered.effort ?? spec.defaultEffort;
   if (wantEffort) {
     const level = effortOf(spec, wantEffort);
-    if (level) return { model: spec.id, effortWrites: level.writes, omitTemperature: level.thinking, notice };
+    if (level) {
+      if (fakeEnabled()) return { model: spec.id, effort: level.id, omitTemperature: false, notice };
+      return { model: spec.id, effort: level.id, effortWrites: level.writes, omitTemperature: level.thinking, notice };
+    }
   }
-  return { model: spec.id, omitTemperature: false, notice };
+  return { model: spec.id, effort: null, omitTemperature: false, notice };
 }
 
 async function stream(
@@ -169,6 +173,7 @@ async function stream(
   };
   let text = "";
   try {
+    if (ask.notice) send({ requestId, type: "model-notice", message: ask.notice });
     const { provider } = llm ?? providerFor();
     for await (const d of provider.chat(messages, {
       model: ask.model,
@@ -219,6 +224,8 @@ export function registerTasksIpc(): void {
     if (!conversationId) {
       const sel = req.selection.trim().replace(/\s+/g, " ");
       conversationId = createConversation(`${TASK_LABELS[req.kind]}：${sel.slice(0, 30) || req.question?.slice(0, 30) || (image ? "截图" : "")}`, req.docId).id;
+      // First ask: remember the same model/effort the run just resolved (ModelBar had nowhere to write yet).
+      setConversationModel(conversationId, ask.model, ask.effort);
     }
     const meta = { request: { kind: req.kind, selection: req.selection, context: req.context, question: req.question, docId: req.docId, page: req.page, image: req.image, marks: batch?.marks.map((m) => m.id) }, docTitle: title, marks: batch?.marks.map((m) => m.anchor) };
     const userMessage = place.answerTo

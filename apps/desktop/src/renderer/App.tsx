@@ -97,11 +97,12 @@ export function App() {
   const refreshModel = useCallback(() => {
     api.settings.get().then((s) => setModel(s.active), () => setModel(null));
   }, []);
-  // Re-read after leaving settings (and immediately on save — see Settings onSaved).
+  // Re-read after leaving settings, and whenever main broadcasts settings:changed (save / setKey).
   useEffect(() => {
     if (view !== "reader") return;
     refreshModel();
   }, [view, refreshModel]);
+  useEffect(() => api.settings.onChanged(refreshModel), [refreshModel]);
 
   const run = (fn: () => Promise<void>) => () => {
     setError(null);

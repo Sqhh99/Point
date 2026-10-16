@@ -24,7 +24,12 @@ const api: PointAPI = {
     get: () => ipcRenderer.invoke(IPC.settingsGet),
     update: (patch) => ipcRenderer.invoke(IPC.settingsUpdate, patch),
     setKey: (id, key) => ipcRenderer.invoke(IPC.settingsSetKey, id, key),
-    testConnection: (id) => ipcRenderer.invoke(IPC.settingsTest, id)
+    testConnection: (id) => ipcRenderer.invoke(IPC.settingsTest, id),
+    onChanged: (cb) => {
+      const listener = () => cb();
+      ipcRenderer.on(IPC.settingsChanged, listener);
+      return () => ipcRenderer.removeListener(IPC.settingsChanged, listener);
+    }
   },
   models: {
     list: () => ipcRenderer.invoke(IPC.modelsList)
