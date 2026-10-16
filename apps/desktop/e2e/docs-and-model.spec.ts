@@ -248,7 +248,8 @@ test.describe("per-conversation model and effort", () => {
     await bar.getByTestId("effort-off").click();
     await win.getByPlaceholder(/问点什么/).fill("记住模型和思考");
     await win.getByRole("button", { name: "发送" }).click();
-    await expect(win.getByText(/记住模型和思考|答：/)).toBeVisible({ timeout: 15_000 });
+    await expect(win.locator(".msg.user").filter({ hasText: "记住模型和思考" })).toBeVisible({ timeout: 15_000 });
+    await expect(win.locator(".msg.assistant").getByText("模拟回答")).toBeVisible({ timeout: 15_000 });
     const remembered = await win.evaluate(async () => {
       const list = await window.point.conversations.list();
       return list[0] ?? null;
