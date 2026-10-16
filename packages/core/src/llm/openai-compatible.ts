@@ -1,5 +1,6 @@
 import { LLMError, errorFromStatus } from "./errors.js";
 import { sseData } from "./sse.js";
+import { applyWrites } from "./models.js";
 import type { ChatMessage, ChatOptions, Delta, FetchLike, LLMProvider } from "./types.js";
 
 export interface OpenAICompatibleConfig {
@@ -16,7 +17,7 @@ interface ChunkJSON {
 type OpenAIContent = string | ({ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } })[];
 
 /** OpenAI chat/completions body. Messages with images use the content-parts form (`image_url` data URLs). */
-export function buildOpenAIBody(messages: ChatMessage[], opts: Pick<ChatOptions, "model" | "temperature" | "maxTokens">): Record<string, unknown> {
+export function buildOpenAIBody(messages: ChatMessage[], opts: Pick<ChatOptions, "model" | "temperature" | "maxTokens" | "effortWrites" | "omitTemperature">): Record<string, unknown> {
   const out = messages.map((m): { role: string; content: OpenAIContent } => {
     if (m.parts?.length) {
       return {
@@ -36,8 +37,9 @@ export function buildOpenAIBody(messages: ChatMessage[], opts: Pick<ChatOptions,
     };
   });
   const body: Record<string, unknown> = { model: opts.model, messages: out, stream: true };
-  if (opts.temperature !== undefined) body.temperature = opts.temperature;
+  if (!opts.omitTemperature && opts.temperature !== undefined) body.temperature = opts.temperature;
   if (opts.maxTokens !== undefined) body.max_tokens = opts.maxTokens;
+  if (opts.effortWrites) applyWrites(body, opts.effortWrites);
   return body;
 }
 
@@ -63,6 +65,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
     let res: Response;
     try {
+      const expectedHost = new URL(this.url).host;
       res = await this.fetch(this.url, {
         method: "POST",
         headers: {
@@ -71,8 +74,17 @@ export class OpenAICompatibleProvider implements LLMProvider {
           Authorization: `Bearer ${this.apiKey}`
         },
         body: JSON.stringify(body),
-        signal: opts.signal
-      });
+        signal: opts.signal,
+        redirect: "manual"
+      } as RequestInit);
+      // Refuse cross-host redirects (and any 3xx): the request must stay on the configured address.
+      if (res.status >= 300 && res.status < 400) {
+        const loc = res.headers.get("location");
+        throw new LLMError("network", loc ? `拒绝跨主机重定向到 ${loc}` : "拒绝跟随重定向");
+      }
+      if (new URL(res.url || this.url).host !== expectedHost) {
+        throw new LLMError("network", "响应来自非配置主机");
+      }
     } catch (err) {
       if (isAbort(err) || opts.signal?.aborted) throw new LLMError("aborted", "请求已取消");
       throw new LLMError("network", `网络错误: ${(err as Error).message}`);

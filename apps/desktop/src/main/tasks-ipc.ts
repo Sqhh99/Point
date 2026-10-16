@@ -1,6 +1,6 @@
 import { ipcMain, type WebContents } from "electron";
 import { randomUUID } from "node:crypto";
-import { TASK_LABELS, buildTaskMessages, describeTask, parseTaskOutput, type BranchOrigin, type ChatMessage, type TaskKind } from "@point/core";
+import { TASK_LABELS, buildTaskMessages, describeTask, effortOf, modelSpec, parseTaskOutput, providerConfig, type BranchOrigin, type ChatMessage, type TaskKind } from "@point/core";
 import { exportAllNotes, exportConversation, exportNote } from "./export.js";
 import { IPC, type TaskEvent, type TaskRequest, type TaskStarted } from "../shared/ipc.js";
 import {
@@ -15,9 +15,13 @@ import {
   getTree,
   hasConversation,
   historyFor,
+  getConversationModel,
   listConversations,
+  setConversationModel,
   threadOf
 } from "./conversations.js";
+import { resolveProvider } from "./settings.js";
+import { fakeEnabled } from "./fake-llm.js";
 import { errInfo, providerFor } from "./ipc.js";
 import { docTitle, need } from "./workspace.js";
 import { assertCaptureSha, captureImage } from "./capture.js";
@@ -46,7 +50,9 @@ function validate(raw: unknown): TaskRequest {
     regenerate: r.regenerate === true,
     parentId: messageRef(r, "parentId", true),
     branch: branchOf(r.branch),
-    siblingOf: messageRef(r, "siblingOf", false) ?? undefined
+    siblingOf: messageRef(r, "siblingOf", false) ?? undefined,
+    model: str(r.model, 128),
+    effort: str(r.effort, 32)
   };
 }
 
@@ -113,6 +119,33 @@ function placement(
   return { history: historyFor(conversationId) };
 }
 
+function resolveAsk(req: TaskRequest, conversationId: string | undefined): {
+  model: string;
+  effortWrites?: ReturnType<typeof effortOf> extends infer E ? E extends { writes: infer W } ? W : never : never;
+  omitTemperature: boolean;
+  notice?: string;
+} {
+  if (fakeEnabled()) return { model: "fake", omitTemperature: false };
+  const cfg = resolveProvider();
+  const remembered = conversationId ? getConversationModel(conversationId) : { model: null, effort: null };
+  const wantModel = req.model ?? remembered.model ?? cfg.model;
+  const p = providerConfig(cfg.id)!;
+  let spec = modelSpec(cfg.id, wantModel);
+  let notice: string | undefined;
+  if (!spec) {
+    spec = modelSpec(cfg.id, p.defaultModel)!;
+    notice = `原模型已不可用，已改用 ${spec.label}`;
+  }
+  const wantEffort = req.effort ?? remembered.effort ?? spec.defaultEffort;
+  if (wantEffort) {
+    const level = effortOf(spec, wantEffort);
+    if (!level || level.id !== wantEffort) throw new Error(`该模型不支持思考等级「${wantEffort}」`);
+    return { model: spec.id, effortWrites: level.writes, omitTemperature: level.thinking, notice };
+  }
+  if (req.effort !== undefined && req.effort !== null && spec.efforts.length === 0) throw new Error("该模型不支持思考等级");
+  return { model: spec.id, omitTemperature: false, notice };
+}
+
 async function stream(
   sender: WebContents,
   requestId: string,
@@ -120,7 +153,8 @@ async function stream(
   req: TaskRequest,
   messages: ReturnType<typeof buildTaskMessages>,
   llm: ReturnType<typeof providerFor> | undefined,
-  parentId: string
+  parentId: string,
+  ask: ReturnType<typeof resolveAsk>
 ) {
   const ctrl = new AbortController();
   running.set(requestId, ctrl);
@@ -129,8 +163,13 @@ async function stream(
   };
   let text = "";
   try {
-    const { provider, model } = llm ?? providerFor();
-    for await (const d of provider.chat(messages, { model, signal: ctrl.signal })) {
+    const { provider } = llm ?? providerFor();
+    for await (const d of provider.chat(messages, {
+      model: ask.model,
+      signal: ctrl.signal,
+      effortWrites: ask.effortWrites,
+      omitTemperature: ask.omitTemperature
+    })) {
       text += d.text;
       send({ requestId, type: "delta", text: d.text });
     }
@@ -160,6 +199,8 @@ export function registerTasksIpc(): void {
     let conversationId = req.conversationId && hasConversation(req.conversationId) ? req.conversationId : undefined;
     const regenerate = !!(req.regenerate && conversationId);
     if (req.branch && (req.kind !== "ask" || regenerate)) throw new Error("追问分支只能和问题一起发送");
+    // Resolve model/effort before any write: unsupported effort throws with nothing stored.
+    const ask = resolveAsk(req, conversationId);
     const place = placement(conversationId, { ...req, regenerate });
     const history = place.history;
     // Build first so invalid input (empty selection, missing question) fails before anything is stored.
@@ -182,7 +223,7 @@ export function registerTasksIpc(): void {
           ? addSibling(place.siblingOf, describeTask(req), req.kind, meta)
           : addMessage(conversationId, "user", describeTask(req), req.kind, meta, place.userParent);
     const requestId = randomUUID();
-    void stream(e.sender, requestId, conversationId, req, messages, llm, place.answerTo ?? userMessage!.id);
+    void stream(e.sender, requestId, conversationId, req, messages, llm, place.answerTo ?? userMessage!.id, ask);
     return { requestId, conversationId, userMessage };
   });
   ipcMain.handle(IPC.tasksCancel, (_e, id: unknown) => {
@@ -192,6 +233,12 @@ export function registerTasksIpc(): void {
   ipcMain.handle(IPC.convList, () => listConversations());
   ipcMain.handle(IPC.convMessages, (_e, id: unknown) => (typeof id === "string" ? getMessages(id) : []));
   ipcMain.handle(IPC.convTree, (_e, id: unknown) => (typeof id === "string" ? getTree(id) : { messages: [], origins: [] }));
+  ipcMain.handle(IPC.conversationModel, (_e, id: unknown, model: unknown, effort: unknown) => {
+    if (typeof id !== "string") throw new Error("无效的对话 id");
+    if (!(model === null || typeof model === "string")) throw new Error("无效的模型");
+    if (!(effort === null || typeof effort === "string")) throw new Error("无效的思考等级");
+    setConversationModel(id, model, effort);
+  });
   ipcMain.handle(IPC.convRemove, (_e, id: unknown) => {
     if (typeof id === "string") deleteConversation(id);
   });

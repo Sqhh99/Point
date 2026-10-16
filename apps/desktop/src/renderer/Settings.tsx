@@ -4,7 +4,7 @@ import type { SettingsView } from "../shared/ipc";
 
 const api = window.point;
 
-export function Settings({ onClose }: { onClose(): void }) {
+export function Settings({ onClose, onSaved }: { onClose(): void; onSaved?(): void }) {
   const [state, setState] = useState<SettingsView | null>(null);
   const [id, setId] = useState<ProviderId>("deepseek");
   const [baseURL, setBaseURL] = useState("");
@@ -43,6 +43,7 @@ export function Settings({ onClose }: { onClose(): void }) {
       if (key) s = await api.settings.setKey(id, key);
       setState(s);
       setStatus({ text: "已保存", kind: "ok" });
+      onSaved?.();
     } catch (e) {
       setStatus({ text: (e as Error).message, kind: "err" });
     } finally {

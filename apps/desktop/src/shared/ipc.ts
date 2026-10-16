@@ -84,6 +84,10 @@ export interface WorkspaceInfo {
 }
 
 export interface TaskRequest {
+  /** Override the conversation's model for this ask; must be a ModelSpec id of the current provider. */
+  model?: string;
+  /** Thinking level id declared by the ModelSpec; rejected when the model has no such level. */
+  effort?: string;
   kind: TaskKind;
   selection: string;
   context?: string;
@@ -143,6 +147,9 @@ export interface ConversationMeta {
   docId?: string;
   createdAt: string;
   updatedAt: string;
+  /** Remembered model id; null = workspace default. */
+  model?: string | null;
+  effort?: string | null;
 }
 
 export interface StoredMessage {
@@ -192,6 +199,14 @@ export interface PointAPI {
     setKey(id: ProviderId, key: string): Promise<SettingsView>;
     testConnection(id: ProviderId): Promise<TestResult>;
   };
+  models: {
+    list(): Promise<{
+      providerId: string;
+      providerName: string;
+      notice?: string;
+      models: (import("@point/core").ModelSpec & { configured: boolean })[];
+    }>;
+  };
   chat: {
     start(messages: ChatMessage[], providerId?: ProviderId): Promise<string>;
     cancel(requestId: string): Promise<void>;
@@ -239,6 +254,8 @@ export interface PointAPI {
     remove(conversationId: string): Promise<void>;
     /** System save dialog → one .md of the conversation. */
     export(conversationId: string): Promise<ExportResult>;
+    /** Remember model + effort for this conversation (null = workspace default). */
+    setModel(conversationId: string, model: string | null, effort: string | null): Promise<void>;
   };
   notes: {
     list(): Promise<NoteMeta[]>;
@@ -265,6 +282,8 @@ export const IPC = {
   settingsUpdate: "settings:update",
   settingsSetKey: "settings:setKey",
   settingsTest: "settings:test",
+  modelsList: "models:list",
+  conversationModel: "conversations:setModel",
   chatStart: "chat:start",
   chatCancel: "chat:cancel",
   chatEvent: "chat:event",

@@ -41,7 +41,7 @@ const marksTable = (db: Database.Database) => !!db.prepare("SELECT 1 FROM sqlite
 
 describe("migration 003", () => {
   it("is the third migration and creates marks + its index", () => {
-    expect(MIGRATIONS).toHaveLength(3);
+    expect(MIGRATIONS).toHaveLength(4);
     expect(MIGRATIONS[2]).toMatch(/CREATE TABLE IF NOT EXISTS marks/);
     const db = new Database(":memory:");
     migrate(db);
@@ -58,7 +58,7 @@ describe("migration 003", () => {
     expect(db.pragma("user_version", { simple: true })).toBe(2);
     expect(marksTable(db)).toBe(false);
     migrate(db);
-    expect(db.pragma("user_version", { simple: true })).toBe(3);
+    expect(db.pragma("user_version", { simple: true })).toBe(4);
     expect(marksTable(db)).toBe(true);
   });
 
@@ -66,9 +66,9 @@ describe("migration 003", () => {
     const db = memDb();
     const s = new MarkStore(db, nextId);
     const m = s.create(DOC_A, { kind: "text", text: "保留" });
-    expect(migrate(db)).toBe(3);
+    expect(migrate(db)).toBe(4);
     db.exec(MIGRATIONS[2]!); // IF NOT EXISTS everywhere
-    expect(db.pragma("user_version", { simple: true })).toBe(3);
+    expect(db.pragma("user_version", { simple: true })).toBe(4);
     expect(s.get(m.id)?.anchor).toEqual({ kind: "text", text: "保留" });
   });
 
@@ -84,7 +84,7 @@ describe("migration 003", () => {
     db.prepare("INSERT INTO docs VALUES (?, 'old', 'md', 'docs/o.md', 't')").run(DOC_A);
     db.close();
     ws.openWorkspace(root);
-    expect(ws.need().db.pragma("user_version", { simple: true })).toBe(3);
+    expect(ws.need().db.pragma("user_version", { simple: true })).toBe(4);
     expect(ws.need().db.prepare("SELECT title FROM docs WHERE id = ?").get(DOC_A)).toEqual({ title: "old" });
     ws.closeWorkspace();
   });

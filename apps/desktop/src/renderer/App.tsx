@@ -94,11 +94,14 @@ export function App() {
     setChecked([]);
   };
 
-  // Re-read after leaving settings: the active model or its vision flag may have changed.
+  const refreshModel = useCallback(() => {
+    api.settings.get().then((s) => setModel(s.active), () => setModel(null));
+  }, []);
+  // Re-read after leaving settings (and immediately on save — see Settings onSaved).
   useEffect(() => {
     if (view !== "reader") return;
-    api.settings.get().then((s) => setModel(s.active), () => setModel(null));
-  }, [view]);
+    refreshModel();
+  }, [view, refreshModel]);
 
   const run = (fn: () => Promise<void>) => () => {
     setError(null);
@@ -166,7 +169,7 @@ export function App() {
             {error}
           </div>
         )}
-        {view === "settings" ? <Settings onClose={() => setView("reader")} /> : (
+        {view === "settings" ? <Settings onClose={() => setView("reader")} onSaved={refreshModel} /> : (
           <Reader
             docId={activeId}
             hasWorkspace={!!workspace.path}

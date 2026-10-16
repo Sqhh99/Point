@@ -3,10 +3,10 @@ import { mainLeaf, pathTo, spanMatches, type BranchOrigin, type ChatMessage, typ
 import type { ConversationMeta, MessageMeta, StoredMessage } from "../shared/ipc.js";
 import { need } from "./workspace.js";
 
-type ConvRow = { id: string; title: string; doc_id: string | null; created_at: string; updated_at: string };
+type ConvRow = { id: string; title: string; doc_id: string | null; created_at: string; updated_at: string; model: string | null; effort: string | null };
 type MsgRow = { id: string; conversation_id: string; parent_id: string | null; role: "user" | "assistant"; content: string; kind: TaskKind | null; meta: string | null; created_at: string };
 
-const conv = (r: ConvRow): ConversationMeta => ({ id: r.id, title: r.title, docId: r.doc_id ?? undefined, createdAt: r.created_at, updatedAt: r.updated_at });
+const conv = (r: ConvRow): ConversationMeta => ({ id: r.id, title: r.title, docId: r.doc_id ?? undefined, createdAt: r.created_at, updatedAt: r.updated_at, model: r.model ?? null, effort: r.effort ?? null });
 function parseMeta(raw: string | null): MessageMeta | undefined {
   if (!raw) return undefined;
   try {
@@ -33,8 +33,8 @@ export function listConversations(): ConversationMeta[] {
 
 export function createConversation(title: string, docId?: string): ConversationMeta {
   const now = new Date().toISOString();
-  const row: ConvRow = { id: randomUUID(), title: title.slice(0, 80) || "新对话", doc_id: docId ?? null, created_at: now, updated_at: now };
-  need().db.prepare("INSERT INTO conversations VALUES (@id, @title, @doc_id, @created_at, @updated_at)").run(row);
+  const row: ConvRow = { id: randomUUID(), title: title.slice(0, 80) || "新对话", doc_id: docId ?? null, created_at: now, updated_at: now, model: null, effort: null };
+  need().db.prepare("INSERT INTO conversations (id, title, doc_id, created_at, updated_at) VALUES (@id, @title, @doc_id, @created_at, @updated_at)").run(row);
   return conv(row);
 }
 
@@ -149,4 +149,15 @@ export function addSibling(originalId: string, content: string, kind?: TaskKind,
     if (o) db.prepare("INSERT INTO branch_origin (child_msg_id, source_msg_id, start, end, quote) VALUES (?, ?, ?, ?, ?)").run(child.id, o.sourceId, o.start, o.end, o.quote);
     return child;
   })();
+}
+
+export function getConversationModel(id: string): { model: string | null; effort: string | null } {
+  const r = need().db.prepare("SELECT model, effort FROM conversations WHERE id = ?").get(id) as { model: string | null; effort: string | null } | undefined;
+  if (!r) throw new Error("对话不存在");
+  return { model: r.model ?? null, effort: r.effort ?? null };
+}
+
+export function setConversationModel(id: string, model: string | null, effort: string | null): void {
+  const info = need().db.prepare("UPDATE conversations SET model = ?, effort = ?, updated_at = ? WHERE id = ?").run(model, effort, new Date().toISOString(), id);
+  if (info.changes === 0) throw new Error("对话不存在");
 }
