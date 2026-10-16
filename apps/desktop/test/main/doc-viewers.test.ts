@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeDocx, makePdf, makeXlsx } from "../../../../packages/core/test/fixtures/make";
 import { FakeSender, invoke as rawInvoke } from "./electron-mock.js";
 
-const openPath = vi.fn(async (_p: string) => "");
+const openPath = vi.fn<(p: string) => Promise<string>>(async () => "");
 vi.mock("electron", async () => ({ ...(await import("./electron-mock.js")).electronModule(), shell: { openPath: (p: string) => openPath(p) } }));
 
 const { IPC } = await import("../../src/shared/ipc.js");
