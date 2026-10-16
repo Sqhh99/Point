@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ModelSpec } from "@point/core";
 
 type Listed = ModelSpec & { configured: boolean };
@@ -32,13 +32,13 @@ export function ModelBar({
   }, [refresh]);
 
   // When the selected model disappears after a settings change, fall back to the first configured one.
-  // Intentionally omit onChange from deps: parent passes an inline callback.
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
   useEffect(() => {
     if (!list?.models.length) return;
     if (model && list.models.some((m) => m.id === model && m.configured)) return;
     const def = list.models.find((m) => m.configured) ?? list.models[0];
-    if (def) onChange(def.id, def.defaultEffort);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- onChange is unstable from parent
+    if (def) onChangeRef.current(def.id, def.defaultEffort);
   }, [list, model]);
 
   if (!list) return null;
