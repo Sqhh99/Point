@@ -790,3 +790,81 @@ test("PDF, Word and Excel open in their original look with one shared bar, marks
   expect(csp).not.toMatch(/https?:|unsafe-eval|data:/);
   expect(csp).toContain("img-src 'self' point-capture:");
 });
+
+// ⑦ follow-up: real-build defects found after the viewers landed.
+test("viewer follow-ups: PDF paints without embedded fonts and opens fit-width, old marks relocate, scroll resets, Word colours", async () => {
+  const win = await app.firstWindow();
+  const src = mkdtempSync(join(tmpdir(), "point-view2-"));
+  const reader = win.getByTestId("reader");
+  const marks = win.getByTestId("marks").getByTestId("mark-item");
+  const importOne = async (p: string) => {
+    await stubOpenDialog([p]);
+    await win.getByRole("button", { name: "导入文档" }).click();
+  };
+  const newest = () => win.evaluate(async () => (await window.point.docs.list())[0]!.id);
+
+  // 1) PDF whose fonts are not embedded (Helvetica by name) still draws glyphs: the canvas has non-white pixels.
+  const lines = Array.from({ length: 40 }, (_, i) => `Fit width line ${i + 1}`);
+  const pdf = join(src, "fonts.pdf");
+  writeFileSync(pdf, makePdf([lines, ["Second page"]]));
+  await importOne(pdf);
+  const page = reader.locator('[data-page="1"]');
+  await expect(page.locator("canvas")).toBeVisible();
+  await expect
+    .poll(
+      () =>
+        page.locator("canvas").evaluate((c: HTMLCanvasElement) => {
+          if (!c.width || !c.height) return 0; // not sized yet
+          const d = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
+          let ink = 0;
+          for (let i = 0; i < d.length; i += 4) if (d[i]! < 200 || d[i + 1]! < 200 || d[i + 2]! < 200) ink++;
+          return ink;
+        }),
+      { timeout: 15000 }
+    )
+    .toBeGreaterThan(50);
+
+  // 4) default zoom fits the panel: the page's right edge is inside the reader (nothing clipped).
+  await expect.poll(async () => (await page.boundingBox())!.x + (await page.boundingBox())!.width).toBeLessThanOrEqual((await reader.boundingBox())!.x + (await reader.boundingBox())!.width);
+
+  // 3) scrolling a long PDF, then opening another doc starts at the top.
+  const scroller = reader.locator("xpath=..");
+  await scroller.evaluate((e) => (e.scrollTop = 400));
+  expect(await scroller.evaluate((e) => e.scrollTop)).toBeGreaterThan(0);
+
+  // 5) Word keeps run colour (only color:#RRGGBB), and 2) a mark made by the old extracted-text viewer (b<n>) still highlights.
+  const docx = join(src, "colour.docx");
+  writeFileSync(docx, await makeDocx([{ text: "标题段落" }, { text: "红色强调", color: "ff0000" }, { text: "旧标记所在段落" }]));
+  await importOne(docx);
+  await expect(reader).toHaveAttribute("data-kind", "docx");
+  expect(await scroller.evaluate((e) => e.scrollTop)).toBe(0);
+  const red = reader.locator("span", { hasText: "红色强调" });
+  await expect(red).toHaveCSS("color", "rgb(255, 0, 0)");
+  expect(await red.getAttribute("style")).toBe("color:#FF0000");
+  const docxId = await newest();
+  await win.evaluate((id) => window.point.marks.create(id, { kind: "text", text: "旧标记所在段落", blockId: "b7" }), docxId);
+
+  const xlsx = join(src, "old.xlsx");
+  writeFileSync(xlsx, await makeXlsx([{ name: "A", rows: [["城市", "人口"], ["北京", 21]] }, { name: "B", rows: [["说明"], ["旧标记所在单元格"]] }]));
+  await importOne(xlsx);
+  await expect(reader).toHaveAttribute("data-kind", "xlsx");
+  const xlsxId = await newest();
+  await win.evaluate((id) => window.point.marks.create(id, { kind: "text", text: "旧标记所在单元格", blockId: "b9" }), xlsxId);
+
+  // reopen each doc so the marks reload
+  const list = win.getByTestId("doc-list");
+  await list.getByRole("button", { name: /colour/ }).click();
+  await expect(marks).toHaveCount(1);
+  await expect(reader.locator(".block.marked")).toHaveCount(1);
+  await expect(reader.locator(".block.marked")).toContainText("旧标记所在段落");
+  await marks.first().click();
+  await expect(reader.locator(".block.located")).toContainText("旧标记所在段落");
+
+  await list.getByRole("button", { name: /old/ }).click();
+  await expect(marks).toHaveCount(1);
+  // the mark is on sheet B: clicking it jumps to that sheet and highlights the row
+  await marks.first().click();
+  await expect(reader.getByTestId("sheet-grid")).toHaveAttribute("data-sheet", "B");
+  await expect(reader.locator("tr.marked")).toContainText("旧标记所在单元格");
+  await win.screenshot({ path: join(resultsDir, "viewer-followup.png") });
+});

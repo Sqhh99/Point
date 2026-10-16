@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { PageRect } from "@point/core";
+import { BundledCMaps, BundledStandardFonts } from "./pdf-assets";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist/legacy/build/pdf.mjs";
 
 type Pdfjs = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -32,7 +33,7 @@ interface Props {
   markTexts: Map<number, string[]>;
   /** Stored highlight rectangles per page (page coordinates at 100% zoom). */
   markRects: Map<number, PageRect[]>;
-  fit: { seq: number } | null;
+  fit: { seq: number; max?: number } | null;
   onFit(zoom: number): void;
   onState(s: PdfState): void;
   onReady(): void;
@@ -147,8 +148,12 @@ export function PdfView({ data, zoom, goto, markTexts, markRects, fit, onFit, on
           data: new Uint8Array(data),
           isEvalSupported: false,
           enableXfa: false,
-          disableFontFace: true,
+          // Fonts are built from the bytes pdf.js hands us (no URL, so CSP is untouched); the path-based mode drops glyphs with the in-process worker.
+          disableFontFace: false,
           useSystemFonts: true,
+          useWorkerFetch: false,
+          StandardFontDataFactory: BundledStandardFonts as never,
+          CMapReaderFactory: BundledCMaps as never,
           disableRange: true,
           disableStream: true,
           disableAutoFetch: true,
@@ -209,8 +214,9 @@ export function PdfView({ data, zoom, goto, markTexts, markRects, fit, onFit, on
 
   useEffect(() => {
     if (!fit || !doc || !root.current) return;
-    const avail = root.current.clientWidth - 48;
-    cb.current.onFit(Math.max(25, Math.min(400, Math.round(((avail / size[0]) / BASE) * 100))));
+    // Measure the panel, not the page column (which grows with the pages).
+    const avail = (root.current.closest(".reader-doc")?.clientWidth ?? root.current.clientWidth) - 48;
+    cb.current.onFit(Math.max(25, Math.min(fit.max ?? 400, Math.round(((avail / size[0]) / BASE) * 100))));
   }, [fit?.seq]);
 
   return (

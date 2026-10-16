@@ -5,8 +5,17 @@ import type { DocxImage } from "@point/core";
 const TAGS = ["p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "strong", "b", "em", "i", "u", "s", "sub", "sup", "br", "hr", "table", "thead", "tbody", "tr", "th", "td", "blockquote", "pre", "code", "span"];
 
 /** Second sanitizing pass in the renderer (main already allowlisted): tags only, no attributes but the image slot and cell spans. */
-export const cleanHtml = (html: string): string =>
-  DOMPurify.sanitize(html, { ALLOWED_TAGS: TAGS, ALLOWED_ATTR: ["colspan", "rowspan", "data-docx-img"], ALLOW_DATA_ATTR: false, KEEP_CONTENT: true });
+export const cleanHtml = (html: string): string => {
+  // The only style allowed is the colour main wrote: exactly `color:#RRGGBB`.
+  DOMPurify.addHook("uponSanitizeAttribute", (_node, d) => {
+    if (d.attrName === "style" && !/^color:#[0-9A-Fa-f]{6}$/.test(d.attrValue)) d.keepAttr = false;
+  });
+  try {
+    return DOMPurify.sanitize(html, { ALLOWED_TAGS: TAGS, ALLOWED_ATTR: ["colspan", "rowspan", "data-docx-img", "style"], ALLOW_DATA_ATTR: false, KEEP_CONTENT: true });
+  } finally {
+    DOMPurify.removeHook("uponSanitizeAttribute");
+  }
+};
 
 const bytes = (b64: string): Uint8Array<ArrayBuffer> => {
   const bin = atob(b64);

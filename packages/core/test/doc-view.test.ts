@@ -67,3 +67,15 @@ describe("pdf text anchors", () => {
     expect(() => parseAnchor({ ...base, ...extra })).toThrow();
   });
 });
+
+describe("docx colours", () => {
+  it("keeps run colour as style=color:#RRGGBB and nothing else", async () => {
+    const v = await buildDocView("docx", await makeDocx([{ text: "红字", color: "ff0000" }, { text: "黑字" }]));
+    expect(v.kind === "docx" && v.html).toContain('<span style="color:#FF0000">红字</span>');
+    expect(v.kind === "docx" && v.html).not.toContain("黑字</span>");
+  });
+  it("sanitizer drops any other style or class", () => {
+    expect(sanitizeDocxHtml('<span style="background:url(x)" class="evil">a</span>')).toBe("<span>a</span>");
+    expect(sanitizeDocxHtml('<span class="ptc-12345G">a</span>')).toBe("<span>a</span>");
+  });
+});

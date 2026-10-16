@@ -26,7 +26,7 @@ export function App() {
   const [marks, setMarks] = useState<Mark[]>([]);
   const [checked, setChecked] = useState<string[]>([]);
   const [batch, setBatch] = useState<BatchTrigger | null>(null);
-  const [locate, setLocate] = useState<{ blockId?: string; page?: number; seq: number } | null>(null);
+  const [locate, setLocate] = useState<{ blockId?: string; page?: number; text?: string; seq: number } | null>(null);
   const drag = useRef<{ x: number; w: number } | null>(null);
 
   useEffect(() => {
@@ -155,7 +155,7 @@ export function App() {
           const a = m.anchor;
           const blockId = a.blockId;
           const page = a.kind === "text" ? a.page : undefined;
-          if (blockId || page) setLocate((l) => ({ blockId, page, seq: (l?.seq ?? 0) + 1 }));
+          if (blockId || page) setLocate((l) => ({ blockId, page, text: a.kind === "text" ? a.text : undefined, seq: (l?.seq ?? 0) + 1 }));
         }}
         onRemoveMark={removeMark}
         onBatchAsk={batchAsk}
