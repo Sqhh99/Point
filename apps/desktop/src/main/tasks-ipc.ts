@@ -20,7 +20,7 @@ import {
   setConversationModel,
   threadOf
 } from "./conversations.js";
-import { activeModelId, askSpec, isConfigured, view as settingsView } from "./settings.js";
+import { activeModelId, askSpec, isConfigured, modelFallbackNotice, view as settingsView } from "./settings.js";
 import { fakeEnabled, fakeVision } from "./fake-llm.js";
 import { errInfo, providerFor } from "./ipc.js";
 import { docTitle, need } from "./workspace.js";
@@ -138,12 +138,14 @@ function resolveAsk(req: TaskRequest, conversationId: string | undefined): {
   const remembered = conversationId ? getConversationModel(conversationId) : { model: null, effort: null };
   const wantModel = req.model ?? remembered.model ?? activeModelId();
   const p = providerConfig(active.activeProvider)!;
-  // Capability source: preset id → ModelSpec table; the saved custom id → the user's declaration.
+  // Capability source: preset id → ModelSpec table; the saved custom id on a custom endpoint → the
+  // user's declaration. Anything else (unknown id on a preset endpoint, a removed remembered model)
+  // falls back to defaultModel with a notice; the unknown id is never sent to the vendor.
   let spec: ModelSpec | undefined = askSpec(wantModel);
   let notice: string | undefined;
   if (!spec) {
     spec = modelSpec(active.activeProvider, p.defaultModel)!;
-    notice = `原模型已不可用，已改用 ${spec.label}`;
+    notice = modelFallbackNotice(active.activeProvider);
   }
   // POINT_FAKE_VISION=0 is the e2e seam for a text-only fake; it can only narrow the spec, never widen it.
   const vision = spec.vision && (!fakeEnabled() || fakeVision());

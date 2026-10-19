@@ -111,11 +111,6 @@ export function ModelBar({
           ))}
         </div>
       )}
-      {list.notice && (
-        <span className="model-notice" data-testid="model-notice" role="status">
-          {list.notice}
-        </span>
-      )}
     </div>
   );
 }

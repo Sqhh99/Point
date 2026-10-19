@@ -284,11 +284,21 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
     await expect(win.getByTestId("vision-readonly")).toHaveText("看图：不支持");
     await expect(win.getByTestId("vision-toggle")).toHaveCount(0);
     await win.screenshot({ path: join(results, "settings-vision-preset.png") });
+    // Preset endpoint: an id outside the table is not a custom model (no declaration; falls back).
     await modelInput.fill("my-custom-vl");
+    await expect(win.getByTestId("vision-toggle")).toHaveCount(0);
+    await expect(win.getByTestId("model-fallback-hint")).toHaveText("预设服务只能用列表中的模型，保存后将改用 deepseek-flash");
+    await expect(win.getByTestId("vision-readonly")).toHaveText("看图：支持");
+    await win.screenshot({ path: join(results, "settings-vision-preset-unknown.png") });
+    // Custom OpenAI-compatible endpoint: the same id is a custom model with the declaration checkbox.
+    const baseInput = win.getByLabel("Base URL");
+    await baseInput.fill("https://llm.example.test/v1");
+    await expect(win.getByTestId("model-fallback-hint")).toHaveCount(0);
     await expect(win.getByTestId("vision-readonly")).toHaveCount(0);
     await expect(win.getByLabel("声明此模型支持看图")).toBeVisible();
     await expect(win.getByText("由你自行声明，应用会按此判断")).toBeVisible();
     await win.screenshot({ path: join(results, "settings-vision-custom.png") });
+    await baseInput.fill("https://api.deepseek.com/v1");
     await modelInput.fill("deepseek-flash");
   });
 });
@@ -532,5 +542,96 @@ test.describe("per-conversation model and effort", () => {
     expect(b.selection).toBe(partial);
     expect(b.quote).toBe(b.slice);
     expect(b.quote).toBe("与 [链接文字](https://example.com/docs/page) 的一");
+  });
+});
+
+test.describe("preset fallback notice", () => {
+  test.describe.configure({ mode: "serial" });
+  let app: ElectronApplication;
+  test.beforeAll(async () => {
+    // Saved DeepSeek model id that is not in the ModelSpec table, on the preset endpoint.
+    const userData = mkdtempSync(join(tmpdir(), "point-e2e-fallback-"));
+    writeFileSync(
+      join(userData, "settings.json"),
+      JSON.stringify({ activeProvider: "deepseek", providers: { deepseek: { baseURL: "https://api.deepseek.com/v1", model: "deepseek-gone-xyz", vision: true } } })
+    );
+    app = await launch(launchEnv({ POINT_USER_DATA: userData, POINT_FAKE_LLM: "1" }));
+  });
+  test.afterAll(async () => {
+    await app?.close();
+  });
+
+  test("light notice under ModelBar; 知道了 hides it for this conversation; new conversation / reconfigure show it again", async () => {
+    const win = await app.firstWindow();
+    await openWorkspace(app, win);
+    const notice = win.getByTestId("task-model-notice");
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText("原模型已不可用，已改用 deepseek-flash");
+    // Fell back: ModelBar runs the provider default, the unknown id is not listed.
+    const select = win.getByTestId("model-bar").getByTestId("model-select");
+    await expect(select).toHaveValue("deepseek-flash");
+    await expect(select.locator('option[value="deepseek-gone-xyz"]')).toHaveCount(0);
+    // Inline (follows ModelBar in the composer), design variables only.
+    const style = await notice.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      const root = getComputedStyle(document.documentElement);
+      const probe = (v: string) => {
+        const d = document.createElement("div");
+        d.style.color = `var(${v})`;
+        document.body.appendChild(d);
+        const c = getComputedStyle(d).color;
+        d.remove();
+        return c;
+      };
+      const btn = getComputedStyle(el.querySelector("button")!);
+      return {
+        position: cs.position,
+        prevIsModelBar: el.previousElementSibling?.getAttribute("data-testid") === "model-bar",
+        bg: cs.backgroundColor,
+        bgVar: (() => {
+          const d = document.createElement("div");
+          d.style.background = "var(--bg-muted)";
+          document.body.appendChild(d);
+          const c = getComputedStyle(d).backgroundColor;
+          d.remove();
+          return c;
+        })(),
+        color: cs.color,
+        secondary: probe("--text-secondary"),
+        link: btn.color,
+        accent: probe("--accent"),
+        hasBgMuted: root.getPropertyValue("--bg-muted").trim() !== ""
+      };
+    });
+    expect(style.position).not.toBe("fixed");
+    expect(style.prevIsModelBar).toBe(true);
+    expect(style.hasBgMuted).toBe(true);
+    expect(style.bg).toBe(style.bgVar);
+    expect(style.color).toBe(style.secondary);
+    expect(style.link).toBe(style.accent);
+    await win.locator(".composer").screenshot({ path: join(results, "model-fallback-notice.png") });
+    await win.emulateMedia({ colorScheme: "dark" });
+    await win.locator(".composer").screenshot({ path: join(results, "model-fallback-notice-dark.png") });
+    await win.emulateMedia({ colorScheme: "light" });
+
+    await notice.getByRole("button", { name: "知道了" }).click();
+    await expect(notice).toHaveCount(0);
+    // Once per conversation: asking (which creates the conversation) does not bring it back.
+    await win.getByPlaceholder(/问点什么/).fill("回退后提问");
+    await win.getByRole("button", { name: "发送" }).click();
+    await expect(win.locator(".msg.assistant").getByText("模拟回答")).toBeVisible({ timeout: 15_000 });
+    await expect(notice).toHaveCount(0);
+    const stored = await win.evaluate(async () => (await window.point.conversations.list())[0]?.model ?? null);
+    expect(stored).toBe("deepseek-flash");
+    // Another conversation: shown again.
+    await win.getByRole("button", { name: "新对话" }).click();
+    await expect(notice).toBeVisible();
+    await notice.getByRole("button", { name: "知道了" }).click();
+    await expect(notice).toHaveCount(0);
+    // Reconfigure (settings:changed) while the saved id is still unknown: shown again.
+    await win.evaluate(async () => {
+      await window.point.settings.update({ id: "deepseek", baseURL: "https://api.deepseek.com/v1" });
+    });
+    await expect(notice).toBeVisible();
   });
 });

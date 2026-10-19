@@ -5,6 +5,7 @@
   --bg-elevated: #ffffff;
   --panel: #f3f1ec;
   --surface-2: #ecebe6;
+  --bg-muted: var(--surface-2);
   --border: rgb(0 0 0 / 0.1);
   --line: rgb(0 0 0 / 0.08);
   --hover: rgb(0 0 0 / 0.05);
@@ -35,6 +36,7 @@
     --bg-elevated: #2a2a2d;
     --panel: #222225;
     --surface-2: #303034;
+    --bg-muted: var(--surface-2);
     --border: rgb(255 255 255 / 0.12);
     --line: rgb(255 255 255 / 0.08);
     --hover: rgb(255 255 255 / 0.06);
@@ -385,7 +387,11 @@ button.link.active { color: var(--accent); }
 .effort-seg button:hover { background: var(--hover); color: var(--text); }
 .effort-seg button.active, .effort-seg button[aria-pressed="true"] { background: var(--bg-elevated); color: var(--accent); font-weight: 600; box-shadow: 0 0 0 1px var(--border); }
 .effort-seg button:disabled { opacity: 0.45; cursor: default; }
-.model-notice { font-size: 12px; color: var(--muted); }
+/* Light inline notice under ModelBar (not a modal/toast). */
+.model-notice { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--text-secondary); background: var(--bg-muted); border-radius: 6px; padding: 6px 10px; }
+.model-notice button.link { padding: 0; font-size: 12px; color: var(--accent); background: none; }
+.model-notice button.link:hover { color: var(--accent-hover); text-decoration: underline; }
+.model-notice button.link:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .model-empty { font-size: 13px; color: var(--text-secondary); }
 .model-bar button.settings-link { padding: 0; font-size: 13px; color: var(--accent); text-decoration: none; }
 .model-bar button.settings-link:hover { color: var(--accent-hover); text-decoration: underline; }

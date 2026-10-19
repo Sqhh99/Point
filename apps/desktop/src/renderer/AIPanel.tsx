@@ -215,6 +215,11 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onPick, captur
   const [pickModel, setPickModel] = useState<string | null>(null);
   const [pickEffort, setPickEffort] = useState<string | null>(null);
   const [modelNotice, setModelNotice] = useState<string | null>(null);
+  // Fallback notice (models:list or task model-notice) shows once per conversation; dismissed keys are
+  // "<conversation>#<settings generation>", so it can show again after switching or reconfiguring.
+  const [settingsGen, setSettingsGen] = useState(0);
+  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set());
+  const noticeKey = `${conversationId ?? "new"}#${settingsGen}`;
   // models:list is the one source for "configured" and per-model vision (ModelSpec.vision), same as main.
   const [listed, setListed] = useState<Awaited<ReturnType<typeof window.point.models.list>> | null>(null);
   useEffect(() => {
@@ -223,6 +228,7 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onPick, captur
     load();
     const off = window.point.settings.onChanged(() => {
       load();
+      setSettingsGen((g) => g + 1);
       // A "not configured" refusal is stale once a key is saved.
       setFailure((f) => (f?.code === "not_configured" ? null : f));
     });
@@ -232,6 +238,7 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onPick, captur
     };
   }, []);
   const configured = !!listed?.configured;
+  const shownNotice = dismissed.has(noticeKey) ? null : (modelNotice ?? listed?.notice ?? null);
   const picked = listed?.models.find((m) => m.id === pickModel);
   const vision = !!picked?.vision;
   const NO_VISION_TEXT = picked?.custom ? NO_VISION_CUSTOM_MESSAGE : NO_VISION_MESSAGE;
@@ -339,7 +346,18 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onPick, captur
         requestRef.current = { id: started.requestId, req };
         const queued = early.current.filter((e) => e.requestId === started.requestId);
         early.current = [];
-        if (started.conversationId !== conversationId) setConversationId(started.conversationId);
+        if (started.conversationId !== conversationId) {
+          // A notice dismissed before the first ask stays dismissed in the conversation it creates.
+          if (conversationId === null)
+            setDismissed((d) => {
+              const k = `new#${settingsGen}`;
+              if (!d.has(k)) return d;
+              const n = new Set([...d, `${started.conversationId}#${settingsGen}`]);
+              n.delete(k);
+              return n;
+            });
+          setConversationId(started.conversationId);
+        }
         // Show the thread down to the question being answered; the old answer (if any) stays as a sibling.
         await refresh(started.conversationId, started.userMessage?.id ?? (req.regenerate ? (req.parentId ?? undefined) : undefined));
         setDraft({ requestId: started.requestId, text: "" });
@@ -351,7 +369,7 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onPick, captur
         setFailure({ code, message, request: req });
       }
     },
-    [conversationId, refresh]
+    [conversationId, refresh, settingsGen]
   );
 
   const run = useCallback(
@@ -557,6 +575,7 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onPick, captur
     setFork(null);
     setBranchDraft(null);
     setFailure(null);
+    setModelNotice(null);
   };
 
   const crumbs = leafId ? breadcrumb(tree.messages, tree.origins, leafId) : [];
@@ -773,11 +792,11 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onPick, captur
               }}
               onOpenSettings={onOpenSettings}
             />
-            {modelNotice && (
-              <div className="model-notice banner" data-testid="task-model-notice" role="status">
-                <span>{modelNotice}</span>
-                <button type="button" className="link" aria-label="关闭提示" onClick={() => setModelNotice(null)}>
-                  ×
+            {shownNotice && (
+              <div className="model-notice" data-testid="task-model-notice" role="status">
+                <span>{shownNotice}</span>
+                <button type="button" className="link" onClick={() => setDismissed((d) => new Set([...d, noticeKey]))}>
+                  知道了
                 </button>
               </div>
             )}

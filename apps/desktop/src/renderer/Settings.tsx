@@ -33,8 +33,14 @@ export function Settings({ onClose, onSaved }: { onClose(): void; onSaved?(): vo
   }, [id, state]);
 
   if (!state || !cfg || !preset) return <div className="placeholder">加载设置…</div>;
-  // Preset model id → capability table (read-only); any other id is custom and the user declares vision.
-  const modelId = model.trim() || preset.defaultModel;
+  // Preset model id → capability table (read-only). Only on a custom OpenAI-compatible endpoint (Base
+  // URL changed) can another id be used, and then the user declares vision. On a preset endpoint an
+  // unknown id is not kept: main falls back to defaultModel (same rule as settings.ts).
+  const norm = (u: string) => u.trim().replace(/\/+$/, "").toLowerCase();
+  const customEndpoint = norm(baseURL || preset.baseURL) !== norm(preset.baseURL);
+  const typed = model.trim() || preset.defaultModel;
+  const fallsBack = !customEndpoint && !preset.models.includes(typed);
+  const modelId = fallsBack ? preset.defaultModel : typed;
   const isPreset = preset.models.includes(modelId);
   const presetVision = preset.visionModels.includes(modelId);
 
@@ -101,6 +107,11 @@ export function Settings({ onClose, onSaved }: { onClose(): void; onSaved?(): vo
           ))}
         </datalist>
       </label>
+      {fallsBack && (
+        <div className="field-readonly" data-testid="model-fallback-hint">
+          预设服务只能用列表中的模型，保存后将改用 {preset.defaultModel}
+        </div>
+      )}
       {isPreset ? (
         <div className="field-readonly" data-testid="vision-readonly">
           看图：{presetVision ? "支持" : "不支持"}
