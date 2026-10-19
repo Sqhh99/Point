@@ -1,7 +1,7 @@
 import { app, safeStorage } from "electron";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { PROVIDER_PRESETS, assertBaseUrl, getPreset, migrateSavedModel, modelCapabilities, modelSpec, providerConfig, type ModelSpec, type ProviderId } from "@point/core";
+import { PROVIDER_PRESETS, assertBaseUrl, getPreset, migrateSavedModel, modelSpec, providerConfig, type ModelSpec, type ProviderId } from "@point/core";
 import { fakeEnabled, fakeVision } from "./fake-llm.js";
 import type { ProviderPatch, SettingsView } from "../shared/ipc.js";
 
@@ -10,7 +10,10 @@ interface StoredProvider {
   model: string;
   /** base64 of the safeStorage-encrypted API key */
   encKey?: string;
-  /** Explicit `capabilities.vision`; absent = use the preset's list of vision models. */
+  /**
+   * User declaration of `capabilities.vision`. Only read for a custom (non-preset) model id; preset
+   * models always use ModelSpec.vision.
+   */
   vision?: boolean;
 }
 
@@ -36,11 +39,8 @@ function load(): StoredSettings {
     if (mapped && mapped.model !== cur.model) {
       cur.model = mapped.model;
       dirty = true;
-    } else if (!mapped && !modelSpec(id, cur.model)) {
-      // Unknown old name: fall back to provider default (ask must not fail); UI shows a notice via models:list.
-      cur.model = providerConfig(id)?.defaultModel ?? cur.model;
-      dirty = true;
     }
+    // Any other unknown name is kept: it is a custom model whose capabilities the user declares.
   }
   if (dirty) save(s);
   return s;
@@ -59,7 +59,25 @@ function providerOf(s: StoredSettings, id: ProviderId): StoredProvider {
   return s.providers[id] ?? { baseURL: preset.baseURL, model: preset.defaultModel };
 }
 
-const visionOf = (id: ProviderId, cur: StoredProvider) => modelCapabilities(id, cur.model, { vision: cur.vision }).vision;
+/**
+ * The spec a model id runs with. Preset id → the capability table (ModelSpec), user flag ignored.
+ * The provider's saved custom model id → a spec built from the user's declaration (vision only when
+ * ticked). Anything else (e.g. a model that was removed) → undefined; callers fall back.
+ */
+function specOf(id: ProviderId, cur: StoredProvider, modelId: string): (ModelSpec & { custom: boolean }) | undefined {
+  const preset = modelSpec(id, modelId);
+  if (preset) return { ...preset, custom: false };
+  if (modelId !== cur.model) return undefined;
+  return { id: modelId, label: modelId, vision: cur.vision === true, efforts: [], defaultEffort: null, custom: true };
+}
+
+/** Main-process only: resolve a model id of the active provider (see specOf). */
+export function askSpec(modelId: string): (ModelSpec & { custom: boolean }) | undefined {
+  const s = load();
+  return specOf(s.activeProvider, providerOf(s, s.activeProvider), modelId);
+}
+
+const visionOf = (id: ProviderId, cur: StoredProvider) => !!specOf(id, cur, cur.model)?.vision;
 
 /** The active provider has a saved key (or the e2e fake LLM is on). Without it no model is usable. */
 function configuredOf(s: StoredSettings): boolean {
@@ -109,7 +127,8 @@ export function update(patch: ProviderPatch): SettingsView {
   if (patch.model !== undefined) {
     const raw = patch.model.trim() || preset.defaultModel;
     const mapped = migrateSavedModel(patch.id, raw);
-    cur.model = mapped?.model ?? (modelSpec(patch.id, raw) ? raw : preset.defaultModel);
+    // Unknown ids are kept as a custom model (e.g. a custom OpenAI-compatible endpoint).
+    cur.model = mapped?.model ?? raw;
   }
   if (patch.vision === null) delete cur.vision;
   else if (typeof patch.vision === "boolean") cur.vision = patch.vision;
@@ -145,20 +164,23 @@ export function resolveProvider(id?: ProviderId): { id: ProviderId; baseURL: str
 
 
 /** Models of the *current* provider only, plus whether a key is configured. Keys never leave main. */
-export function listModels(): { providerId: ProviderId; providerName: string; configured: boolean; models: (ModelSpec & { configured: boolean })[]; notice?: string } {
+export function listModels(): { providerId: ProviderId; providerName: string; configured: boolean; models: (ModelSpec & { configured: boolean; custom?: boolean })[]; defaultModel?: string; notice?: string } {
   const s = load();
   const p = providerConfig(s.activeProvider)!;
   const cur = providerOf(s, s.activeProvider);
   const configured = configuredOf(s);
   // No key → no usable model: list nothing (presets included) so the UI cannot default-select one.
   if (!configured) return { providerId: s.activeProvider, providerName: p.label, configured: false, models: [] };
-  const notice = modelSpec(s.activeProvider, cur.model) ? undefined : `原模型已不可用，已改用 ${p.defaultModel}`;
+  // A saved custom model is listed first (it is what the user configured); presets follow.
+  const custom = specOf(s.activeProvider, cur, cur.model);
+  const specs: (ModelSpec & { custom?: boolean })[] = custom?.custom ? [{ id: custom.id, label: custom.label, vision: custom.vision, efforts: [], defaultEffort: null, custom: true }, ...p.models] : [...p.models];
   return {
     providerId: s.activeProvider,
     providerName: p.label,
     configured: true,
-    notice,
-    // vision is ModelSpec.vision, the same field tasks:run gates on (fake text-only seam narrows it).
-    models: p.models.map((m) => ({ ...m, vision: m.vision && (!fakeEnabled() || fakeVision()), configured: true }))
+    // ModelBar's default pick: the model saved in Settings when it is listed.
+    defaultModel: specs.some((m) => m.id === cur.model) ? cur.model : p.defaultModel,
+    // vision is the same field tasks:run gates on (fake text-only seam can only narrow it).
+    models: specs.map((m) => ({ ...m, vision: m.vision && (!fakeEnabled() || fakeVision()), configured: true }))
   };
 }

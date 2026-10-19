@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { branchCounts, groupBySpan, branchesFrom, defaultLeaf, latestLeaf, siblingsOf, branchTree, breadcrumb, locateOrigin, mainLeaf, pathTo, spanMatches, sourceSpanOf, type BranchOrigin, type TreeNode } from "../src/index.js";
+import { branchCounts, groupBySpan, branchesFrom, defaultLeaf, latestLeaf, siblingsOf, branchTree, breadcrumb, locateOrigin, mainLeaf, pathTo, spanMatches, type BranchOrigin, type TreeNode } from "../src/index.js";
 
 // main: u1 → a1 → u2 → a2 ; branch b1 from a1 ; sub-branch b2 from b1's answer
 const n = (id: string, parentId: string | null, t: number): TreeNode => ({ id, parentId, createdAt: `2026-10-12T00:00:${String(t).padStart(2, "0")}Z` });
@@ -109,35 +109,5 @@ describe("branch count by distinct span (fix/branch-count)", () => {
     for (const g of groupBySpan(origins.filter((x) => x.sourceId === "a"))) {
       for (const m of g.origins) expect(siblingsOf(nodes, origins, m.childId).map((s) => s.id)).toEqual(g.origins.map((x) => x.childId));
     }
-  });
-});
-
-describe("sourceSpanOf: rendered selection → markdown source", () => {
-  const src = "结论：**收入增长**主要来自 `海外` 市场。\n\n- 第一点\n- 第二点";
-  const rendered = "结论：收入增长主要来自 海外 市场。\n第一点\n第二点";
-  const sel = (t: string) => {
-    const i = rendered.indexOf(t);
-    return sourceSpanOf(src, rendered, i, i + t.length);
-  };
-
-  it("maps text inside bold to the source chars (no ** in the quote)", () => {
-    expect(sel("收入增长")).toEqual({ start: src.indexOf("收入增长"), end: src.indexOf("收入增长") + 4, quote: "收入增长" });
-  });
-
-  it("a selection across formatting keeps the source markup and passes spanMatches", () => {
-    const s = sel("收入增长主要来自 海外")!;
-    expect(s.quote).toBe("收入增长**主要来自 `海外");
-    expect(spanMatches(src, s.start, s.end, s.quote)).toBe(true);
-  });
-
-  it("picks the selected occurrence, not the first one", () => {
-    const s2 = "**甲** 甲";
-    const r2 = "甲 甲";
-    expect(sourceSpanOf(s2, r2, 2, 3)).toEqual({ start: 6, end: 7, quote: "甲" });
-    expect(sourceSpanOf(s2, r2, 0, 1)).toEqual({ start: 2, end: 3, quote: "甲" });
-  });
-
-  it("returns null when the rendered text does not align with the source", () => {
-    expect(sourceSpanOf("abc", "xyz", 0, 3)).toBeNull();
   });
 });

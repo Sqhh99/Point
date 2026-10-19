@@ -10,9 +10,10 @@
   --hover: rgb(0 0 0 / 0.05);
   --text: #1d1d1f;
   --muted: #6e6e73;
-  --text-disabled: rgb(0 0 0 / 0.3);
-  --accent-hover: #C56A4B;
-  --focus-ring: rgba(217,119,87,0.4);
+  --text-disabled: #A8A49A;
+  /* Derived from the current --accent until the v0.3.0 palette lands. */
+  --accent-hover: color-mix(in srgb, var(--accent) 85%, black);
+  --focus-ring: color-mix(in srgb, var(--accent) 40%, transparent);
   --text-secondary: #6B6860;
   --accent: #2f6feb;
   --on-accent: #ffffff;
@@ -39,7 +40,10 @@
     --hover: rgb(255 255 255 / 0.06);
     --text: #e8e6e3;
     --muted: #9a9a9f;
-    --text-disabled: rgb(255 255 255 / 0.3);
+    --text-disabled: rgb(255 255 255 / 0.35);
+    --accent-hover: color-mix(in srgb, var(--accent) 85%, black);
+    --focus-ring: color-mix(in srgb, var(--accent) 40%, transparent);
+    --text-secondary: color-mix(in srgb, var(--muted) 75%, var(--text));
     --accent: #5b8def;
     --danger: #ff6b6b;
     --danger-soft: rgb(255 107 107 / 0.1);
@@ -266,6 +270,9 @@ button.link.active { color: var(--accent); }
 .statusbar-sep { padding: 0 4px; }
 .statusbar-right { margin-left: auto; display: flex; gap: 12px; min-width: 0; }
 .check { display: flex; align-items: center; gap: 8px; margin: -4px 0 16px; font-size: 13px; color: var(--text); }
+.check-field { display: flex; flex-direction: column; gap: 4px; margin: -4px 0 16px; }
+.check-field .check { margin: 0; }
+.field-readonly { margin: -4px 0 16px; font-size: 13px; color: var(--text-secondary); }
 .capture-missing { display: grid; place-items: center; box-sizing: border-box; background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .attached-thumb .capture-missing { height: 48px; width: 86px; }
 .quote-image.missing { cursor: default; width: fit-content; max-width: 240px; }

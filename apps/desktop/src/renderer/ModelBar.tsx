@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ModelSpec } from "@point/core";
 
 type Listed = ModelSpec & { configured: boolean };
-type List = { providerId: string; providerName: string; configured: boolean; notice?: string; models: Listed[] };
+type List = { providerId: string; providerName: string; configured: boolean; defaultModel?: string; notice?: string; models: Listed[] };
 
 /**
  * One row above the input: current-provider model dropdown (left) and thinking-level control (right).
@@ -33,13 +33,13 @@ export function ModelBar({
     return window.point.settings.onChanged(refresh);
   }, [refresh]);
 
-  // When the selected model disappears after a settings change, fall back to the first configured one.
+  // When the selected model disappears after a settings change, fall back to the Settings model.
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
   useEffect(() => {
     if (!list?.models.length) return;
     if (model && list.models.some((m) => m.id === model && m.configured)) return;
-    const def = list.models.find((m) => m.configured) ?? list.models[0];
+    const def = list.models.find((m) => m.id === list.defaultModel) ?? list.models[0];
     if (def) onChangeRef.current(def.id, def.defaultEffort);
   }, [list, model]);
 

@@ -28,18 +28,21 @@ export function Settings({ onClose, onSaved }: { onClose(): void; onSaved?(): vo
     if (!cfg) return;
     setBaseURL(cfg.baseURL);
     setModel(cfg.model);
-    setVision(cfg.capabilities.vision);
+    setVision(cfg.visionOverride === true);
     setKey("");
   }, [id, state]);
 
   if (!state || !cfg || !preset) return <div className="placeholder">加载设置…</div>;
+  // Preset model id → capability table (read-only); any other id is custom and the user declares vision.
+  const modelId = model.trim() || preset.defaultModel;
+  const isPreset = preset.models.includes(modelId);
+  const presetVision = preset.visionModels.includes(modelId);
 
   const save = async () => {
     setBusy(true);
     try {
-      // Only store an explicit flag when it differs from what the preset says about this model.
-      const presetVision = preset.visionModels.includes(model.trim() || preset.defaultModel);
-      let s = await api.settings.update({ id, baseURL, model, vision: vision === presetVision ? null : vision, makeActive: true });
+      // Preset: no user flag (the table decides). Custom: store the declaration as given.
+      let s = await api.settings.update({ id, baseURL, model, vision: isPreset ? null : vision, makeActive: true });
       if (key) s = await api.settings.setKey(id, key);
       setState(s);
       setStatus({ text: "已保存", kind: "ok" });
@@ -91,7 +94,6 @@ export function Settings({ onClose, onSaved }: { onClose(): void; onSaved?(): vo
         模型
         <input type="text" spellCheck={false} list="model-list" value={model} onChange={(e) => {
             setModel(e.target.value);
-            if (cfg.visionOverride === undefined) setVision(preset.visionModels.includes(e.target.value.trim()));
           }} />
         <datalist id="model-list">
           {preset.models.map((m) => (
@@ -99,10 +101,19 @@ export function Settings({ onClose, onSaved }: { onClose(): void; onSaved?(): vo
           ))}
         </datalist>
       </label>
-      <label className="check">
-        <input type="checkbox" data-testid="vision-toggle" checked={vision} onChange={(e) => setVision(e.target.checked)} />
-        该模型支持看图（框选截图提问需要）
-      </label>
+      {isPreset ? (
+        <div className="field-readonly" data-testid="vision-readonly">
+          看图：{presetVision ? "支持" : "不支持"}
+        </div>
+      ) : (
+        <div className="check-field">
+          <label className="check">
+            <input type="checkbox" data-testid="vision-toggle" checked={vision} onChange={(e) => setVision(e.target.checked)} />
+            声明此模型支持看图
+          </label>
+          <span className="hint">由你自行声明，应用会按此判断</span>
+        </div>
+      )}
       <label className="field">
         API Key
         <input

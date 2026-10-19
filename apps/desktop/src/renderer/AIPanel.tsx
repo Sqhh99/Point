@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Mark, MarkAnchor, TaskKind } from "@point/core";
 // Pure tree helpers only: the core barrel also pulls in Node modules that cannot load in the renderer.
-import { branchTree, branchesFrom, breadcrumb, defaultLeaf, latestLeaf, pathTo, siblingsOf, sourceSpanOf, type BranchOrigin, type BranchTreeNode } from "@point/core/tree";
-import type { CaptureResult, MessageMeta, StoredMessage, TaskEvent, TaskRequest } from "../shared/ipc";
+import { branchTree, branchesFrom, breadcrumb, defaultLeaf, latestLeaf, pathTo, siblingsOf, type BranchOrigin, type BranchTreeNode } from "@point/core/tree";
+import type { ActiveModel, CaptureResult, MessageMeta, StoredMessage, TaskEvent, TaskRequest } from "../shared/ipc";
+import { sourceSpanOf } from "@point/core/rendered-map";
 import { IconBranch } from "./icons";
+import { NO_VISION_CUSTOM_MESSAGE, NO_VISION_MESSAGE } from "../shared/vision-text";
 import { ModelBar } from "./ModelBar";
 import { Markdown } from "./Markdown";
 import { NotesPanel, type NoteFlash } from "./NotesPanel";
@@ -30,8 +32,8 @@ interface Props {
   docId: string | null;
   docTitle: string | null;
   hasWorkspace: boolean;
-  /** Reports whether the model picked in ModelBar accepts images (Reader's region tool follows it). */
-  onVision?(vision: boolean): void;
+  /** Reports the model picked in ModelBar (name + vision from the same list main gates on); null when none. */
+  onPick?(model: ActiveModel | null): void;
   /** Latest region capture; a new seq attaches it to the composer. */
   capture: (CaptureResult & { seq: number }) | null;
   batch: BatchTrigger | null;
@@ -50,9 +52,33 @@ const REASONS: Record<string, string> = {
   not_configured: "未配置模型"
 };
 
-export const NO_VISION_TEXT = "当前模型不支持图片。请在「设置」里换一个支持看图的模型（例如 gpt-4o、glm-4v-flash），或勾选「该模型支持看图」。";
 
 const stripIpcPrefix = (m: string) => m.replace(/^Error invoking remote method '[^']+': (Error: )?/, "");
+
+/** Mermaid's toggle buttons and drawn SVG are UI, not answer text. */
+const NOT_TEXT = ".mermaid-toggle, .mermaid-figure, .mermaid-failed";
+
+/** Visible text of `md` before and inside `range`, char by char from the DOM (whitespace kept). */
+function visibleAround(md: HTMLElement, range: Range): { before: string; selected: string } {
+  let before = "";
+  let selected = "";
+  const walker = document.createTreeWalker(md, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => (n.parentElement?.closest(NOT_TEXT) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT)
+  });
+  for (let n = walker.nextNode() as Text | null; n; n = walker.nextNode() as Text | null) {
+    const t = n.data;
+    if (range.comparePoint(n, t.length) < 0) {
+      before += t;
+      continue;
+    }
+    if (range.comparePoint(n, 0) > 0) break;
+    for (let k = 0; k < t.length; k++) {
+      if (range.comparePoint(n, k) < 0) before += t[k];
+      else if (range.comparePoint(n, k + 1) === 0) selected += t[k];
+    }
+  }
+  return { before, selected };
+}
 
 export const captureUrl = (sha: string) => `point-capture://${sha}`;
 
@@ -156,7 +182,7 @@ function QuoteCard({ meta, onOpenImage }: { meta: MessageMeta; onOpenImage(sha: 
   );
 }
 
-export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onVision, capture, batch, onOpenSettings }: Props) {
+export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onPick, capture, batch, onOpenSettings }: Props) {
   const [batchMarks, setBatchMarks] = useState<Mark[] | null>(null);
   const [image, setImage] = useState<CaptureResult | null>(null);
   const [viewing, setViewing] = useState<string | null>(null);
@@ -169,12 +195,13 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onVision, capt
   const messages = useMemo(() => (leafId ? pathTo(tree.messages, leafId) : []), [tree, leafId]);
   /** Next send goes under this message (从这里分支); `null` = new first question. */
   const [fork, setFork] = useState<({ parentId: string } | { siblingOf: string }) & { label: string } | null>(null);
-  const [branchDraft, setBranchDraft] = useState<NonNullable<TaskRequest["branch"]> | null>(null);
+  /** `branch` is the source anchor (offsets + source slice, checked by spanMatches); `text` is what the user saw and what is shown and sent. */
+  const [branchDraft, setBranchDraft] = useState<{ branch: NonNullable<TaskRequest["branch"]>; text: string } | null>(null);
   /** First message re-mounted by a sibling switch, to fade it in. */
   const [switched, setSwitched] = useState<string | null>(null);
   const [treeOpen, setTreeOpen] = useState(false);
   const [chipOpen, setChipOpen] = useState<string | null>(null);
-  const [answerBar, setAnswerBar] = useState<{ top: number; left: number; branch: NonNullable<TaskRequest["branch"]> } | null>(null);
+  const [answerBar, setAnswerBar] = useState<{ top: number; left: number; draft: { branch: NonNullable<TaskRequest["branch"]>; text: string } } | null>(null);
 
   const refresh = useCallback(async (convId: string, leaf?: string | null) => {
     const t = await api.conversations.tree(convId);
@@ -205,14 +232,18 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onVision, capt
     };
   }, []);
   const configured = !!listed?.configured;
-  const vision = !!listed?.models.find((m) => m.id === pickModel)?.vision;
-  useEffect(() => onVision?.(vision), [vision, onVision]);
+  const picked = listed?.models.find((m) => m.id === pickModel);
+  const vision = !!picked?.vision;
+  const NO_VISION_TEXT = picked?.custom ? NO_VISION_CUSTOM_MESSAGE : NO_VISION_MESSAGE;
+  const pickedName = configured && picked ? picked.id : null;
+  const providerName = listed?.providerName ?? "";
+  useEffect(() => onPick?.(pickedName ? { providerName, model: pickedName, vision } : null), [pickedName, providerName, vision, onPick]);
   // Seed from models:list default; conversation memory overrides when we have an id.
   useEffect(() => {
     let live = true;
     void window.point.models.list().then((l) => {
       if (!live || pickModel) return;
-      const def = l.models.find((m) => m.configured) ?? l.models[0];
+      const def = l.models.find((m) => m.id === l.defaultModel) ?? l.models[0];
       if (def) {
         setPickModel(def.id);
         setPickEffort(def.defaultEffort);
@@ -406,21 +437,23 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onVision, capt
     const el = (range.commonAncestorContainer instanceof Element ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement)?.closest<HTMLElement>(".msg.assistant[data-id]");
     const src = el && messages.find((m) => m.id === el.dataset.id);
     const md = el?.querySelector<HTMLElement>(".markdown");
-    if (!src || !md || !md.contains(range.startContainer) || !md.contains(range.endContainer) || s.toString().trim().length < 2) return setAnswerBar(null);
-    // Range on the rendered plain text, mapped back to the stored markdown (which may carry `**` etc.).
-    const pre = document.createRange();
-    pre.selectNodeContents(md);
-    pre.setEnd(range.startContainer, range.startOffset);
-    const rStart = pre.toString().length;
-    const span = sourceSpanOf(src.content, md.textContent ?? "", rStart, rStart + range.toString().length);
+    if (!src || !md) return setAnswerBar(null);
+    // Clip to the answer's markdown (a triple-click may end just past it).
+    const sel = range.cloneRange();
+    if (!md.contains(sel.startContainer)) sel.setStart(md, 0);
+    if (!md.contains(sel.endContainer)) sel.setEnd(md, md.childNodes.length);
+    const text = sel.toString().trim();
+    if (text.length < 2) return setAnswerBar(null);
+    const { before, selected } = visibleAround(md, sel);
+    // The source span is only the anchor; what is shown and sent is the on-screen text.
+    const span = sourceSpanOf(src.content, before, selected);
     if (!span) return setAnswerBar(null);
-    const { start, quote } = span;
     const r = range.getBoundingClientRect();
     const box = log.getBoundingClientRect();
     setAnswerBar({
       top: Math.max(r.top - box.top + log.scrollTop - 8 - 32, log.scrollTop),
       left: Math.min(Math.max(r.left - box.left + r.width / 2, 60), box.width - 60),
-      branch: { sourceId: src.id, start, end: span.end, quote }
+      draft: { branch: { sourceId: src.id, start: span.start, end: span.end, quote: span.quote }, text }
     });
   };
 
@@ -460,13 +493,13 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onVision, capt
     if (branchDraft || fork) {
       const req: TaskRequest = {
         kind: "ask",
-        selection: branchDraft?.quote ?? "",
+        selection: branchDraft?.text ?? "",
         question: q,
         docId: docId ?? undefined,
         conversationId: conversationId ?? undefined,
         model: pickModel ?? undefined,
         effort: pickEffort ?? undefined,
-        ...(branchDraft ? { branch: branchDraft } : "siblingOf" in fork! ? { siblingOf: fork!.siblingOf } : { parentId: fork!.parentId })
+        ...(branchDraft ? { branch: branchDraft.branch } : "siblingOf" in fork! ? { siblingOf: fork!.siblingOf } : { parentId: fork!.parentId })
       };
       setQuestion("");
       setBranchDraft(null);
@@ -527,6 +560,8 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onVision, capt
   };
 
   const crumbs = leafId ? breadcrumb(tree.messages, tree.origins, leafId) : [];
+  /** A branch label shows the text the user selected (sent as the question's selection), not the source slice. */
+  const shownQuote = (childId: string, quote: string) => tree.messages.find((m) => m.id === childId)?.meta?.request.selection || quote;
   /** Main thread as shown by default: newest first question, newest answers, no span branches. */
   const mainThreadLeaf = () => defaultLeaf(tree.messages, tree.origins)?.id ?? null;
   const lastAssistantId = [...messages].reverse().find((m) => m.role === "assistant")?.id;
@@ -565,7 +600,7 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onVision, capt
                     className={i === crumbs.length - 1 ? "link active" : "link"}
                     onClick={() => (c.branchId ? switchTo(c.branchId) : setLeafId(mainThreadLeaf()))}
                   >
-                    {c.branchId ? `「${(c.quote ?? "").slice(0, 16)}」` : "主线"}
+                    {c.branchId ? `「${shownQuote(c.branchId, c.quote ?? "").slice(0, 16)}」` : "主线"}
                   </button>
                 </span>
               ))}
@@ -596,7 +631,7 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onVision, capt
               <div className="selection-toolbar answer-bar" role="toolbar" aria-label="回答选区操作" style={{ top: answerBar.top, left: answerBar.left }} onMouseDown={(e) => e.preventDefault()}>
                 <button
                   onClick={() => {
-                    setBranchDraft(answerBar.branch);
+                    setBranchDraft(answerBar.draft);
                     setFork(null);
                     setAnswerBar(null);
                     window.getSelection()?.removeAllRanges();
@@ -666,7 +701,7 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onVision, capt
                                   switchTo(g.origins.at(-1)!.childId);
                                 }}
                               >
-                                「{g.quote.slice(0, 40)}」
+                                「{shownQuote(g.origins.at(-1)!.childId, g.quote).slice(0, 40)}」
                               </button>
                             </li>
                           ))}
@@ -748,7 +783,7 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onVision, capt
             )}
             {branchDraft && (
               <div className="attached" data-testid="branch-draft">
-                <span title={branchDraft.quote}>追问分支：「{branchDraft.quote.slice(0, 40)}」</span>
+                <span title={branchDraft.text}>追问分支：「{branchDraft.text.slice(0, 40)}」</span>
                 <button className="link" onClick={() => setBranchDraft(null)} aria-label="取消分支">
                   ×
                 </button>

@@ -518,7 +518,8 @@ test("status bar shows workspace, doc and model; region capture attaches a scree
   const bar = win.getByTestId("statusbar");
   expect((await bar.boundingBox())?.height).toBe(24);
   await expect(bar).toContainText("熵的定义");
-  await expect(win.getByTestId("status-model")).toHaveText("fake");
+  // The status bar shows the model picked in ModelBar (here the DeepSeek default), not a fake label.
+  await expect(win.getByTestId("status-model")).toHaveText("deepseek-flash");
   await expect(win.getByTestId("status-vision")).toHaveText("支持看图");
 
   // Toolbar button enters capture mode, Esc leaves it.

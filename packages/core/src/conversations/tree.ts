@@ -142,36 +142,6 @@ export function spanMatches(text: string, start: number, end: number, quote: str
   return !splitsPair(text, start) && !splitsPair(text, end) && Number.isInteger(start) && Number.isInteger(end) && start >= 0 && end > start && end <= text.length && text.slice(start, end) === quote;
 }
 
-/**
- * Map a selection on an answer's *rendered* plain text back to its markdown source. Rendering only
- * drops syntax (`**`, `#`, backticks, list markers…) and reflows whitespace, so the rendered
- * non-space characters appear in order in the source: align them greedily, then take the source
- * slice from the first to the last selected one. Null when they do not align (e.g. a diagram).
- */
-export function sourceSpanOf(source: string, rendered: string, rStart: number, rEnd: number): { start: number; end: number; quote: string } | null {
-  let j = 0;
-  let start = -1;
-  let end = -1;
-  let picked = 0;
-  for (let i = 0; i < rEnd && i < rendered.length; i++) {
-    const c = rendered[i]!;
-    if (/\s/.test(c)) continue;
-    while (j < source.length && source[j] !== c) j++;
-    if (j >= source.length) return null;
-    if (i >= rStart) {
-      if (start < 0) start = j;
-      end = j + 1;
-      picked++;
-    }
-    j++;
-  }
-  if (start < 0 || end <= start) return null;
-  // A wild jump means the alignment latched onto unrelated text: refuse rather than quote it.
-  if (end - start > picked * 2 + 16) return null;
-  if (!spanMatches(source, start, end, source.slice(start, end))) return null;
-  return { start, end, quote: source.slice(start, end) };
-}
-
 /** Where the quoted span is now: the stored offsets if they still match, else the occurrence of `quote` nearest to them. */
 export function locateOrigin(text: string, o: Pick<BranchOrigin, "start" | "end" | "quote">): { start: number; end: number } | null {
   if (spanMatches(text, o.start, o.end, o.quote)) return { start: o.start, end: o.end };

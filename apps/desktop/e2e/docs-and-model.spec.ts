@@ -36,6 +36,16 @@ const stub = (app: ElectronApplication, paths: string[]) =>
     dialog.showOpenDialog = (async () => ({ canceled: false, filePaths })) as typeof dialog.showOpenDialog;
   }, paths);
 type Win = Awaited<ReturnType<ElectronApplication["firstWindow"]>>;
+/** Last branch: its source anchor (offsets + slice) and the selection text the branch question carries. */
+const lastBranch = (win: Win) =>
+  win.evaluate(async () => {
+    const [c] = await window.point.conversations.list();
+    const tree = await window.point.conversations.tree(c!.id);
+    const o = tree.origins.at(-1)!;
+    const src = tree.messages.find((m) => m.id === o.sourceId)!;
+    const child = tree.messages.find((m) => m.id === o.childId)!;
+    return { quote: o.quote, slice: src.content.slice(o.start, o.end), selection: child.meta?.request.selection ?? null };
+  });
 async function openWorkspace(app: ElectronApplication, win: Win): Promise<void> {
   await stub(app, [mkdtempSync(join(tmpdir(), "point-ws-"))]);
   await win.getByRole("button", { name: "选择工作区…" }).click();
@@ -98,7 +108,7 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
   test.describe.configure({ mode: "serial" });
   const userData = mkdtempSync(join(tmpdir(), "point-e2e-model-"));
   let app: ElectronApplication;
-  // POINT_FAKE_LLM would pin the status bar to "fake", so this app runs without it. Nothing here
+  // Runs without POINT_FAKE_LLM so the real settings path (keys, configured) is used. Nothing here
   // calls a model: only settings are saved and displayed.
   const start = async () => {
     app = await launch(launchEnv({ POINT_USER_DATA: userData }, ["POINT_FAKE_LLM", "POINT_FAKE_VISION"]));
@@ -261,6 +271,26 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
       await expect(win.getByRole("button", { name: "测试连接" })).toBeDisabled();
     }
   });
+  test("看图 row: preset models show a read-only line from the table; a custom model gets the declaration checkbox", async () => {
+    const win = await app.firstWindow();
+    const heading = win.getByRole("heading", { name: "模型设置" });
+    if (!(await heading.isVisible())) await win.getByRole("button", { name: "设置", exact: true }).click();
+    await win.getByLabel("模型服务").selectOption({ label: "DeepSeek" });
+    const modelInput = win.getByLabel("模型", { exact: true });
+    await modelInput.fill("deepseek-flash");
+    await expect(win.getByTestId("vision-readonly")).toHaveText("看图：支持");
+    await expect(win.getByTestId("vision-toggle")).toHaveCount(0);
+    await modelInput.fill("deepseek-v4-pro");
+    await expect(win.getByTestId("vision-readonly")).toHaveText("看图：不支持");
+    await expect(win.getByTestId("vision-toggle")).toHaveCount(0);
+    await win.screenshot({ path: join(results, "settings-vision-preset.png") });
+    await modelInput.fill("my-custom-vl");
+    await expect(win.getByTestId("vision-readonly")).toHaveCount(0);
+    await expect(win.getByLabel("声明此模型支持看图")).toBeVisible();
+    await expect(win.getByText("由你自行声明，应用会按此判断")).toBeVisible();
+    await win.screenshot({ path: join(results, "settings-vision-custom.png") });
+    await modelInput.fill("deepseek-flash");
+  });
 });
 
 
@@ -372,12 +402,18 @@ test.describe("per-conversation model and effort", () => {
     await expect(capture).toBeEnabled();
     await select.selectOption("deepseek-v4-pro");
     await expect(capture).toBeDisabled();
+    // Status bar follows the ModelBar pick (Settings still has flash).
+    await expect(win.getByTestId("status-model")).toHaveText("deepseek-v4-pro");
+    await expect(win.getByTestId("status-vision")).toHaveText("不支持看图");
+    await expect(win.locator(".statusbar")).not.toContainText(/(?<!不)支持看图/);
     await expect(capture).toHaveAttribute("title", "当前模型不支持图片");
     // Same source in the list main gates on.
     const listed = await win.evaluate(() => window.point.models.list());
     expect(listed.models.find((m) => m.id === "deepseek-v4-pro")?.vision).toBe(false);
     await select.selectOption("deepseek-flash");
     await expect(capture).toBeEnabled();
+    await expect(win.getByTestId("status-model")).toHaveText("deepseek-flash");
+    await expect(win.getByTestId("status-vision")).toHaveText("支持看图");
 
     // Repro: capture a region while flash is picked, then switch to v4-pro and send → refused, nothing sent.
     await capture.click();
@@ -437,19 +473,64 @@ test.describe("per-conversation model and effort", () => {
       el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
     });
     await win.getByRole("toolbar", { name: "回答选区操作" }).getByRole("button", { name: "追问分支" }).click();
-    await expect(win.getByTestId("branch-draft")).toContainText("模拟回答");
+    await expect(win.getByTestId("branch-draft")).toContainText("追问分支：「模拟回答：这是」");
     await win.getByPlaceholder(/问点什么/).fill("加粗这段是什么意思？");
     await win.getByRole("button", { name: "发送", exact: true }).click();
-    await expect(win.getByTestId("crumbs")).toContainText("「模拟回答");
-    const check = await win.evaluate(async () => {
-      const [c] = await window.point.conversations.list();
-      const tree = await window.point.conversations.tree(c!.id);
-      const o = tree.origins.at(-1)!;
-      const src = tree.messages.find((m) => m.id === o.sourceId)!;
-      return { quote: o.quote, slice: src.content.slice(o.start, o.end) };
+    await expect(win.getByTestId("crumbs")).toContainText("「模拟回答：这是」");
+    const b = await lastBranch(win);
+    expect(b.quote).toBe(b.slice); // anchor only
+    expect(b.selection).toBe("模拟回答：这是"); // what the user saw is what is sent
+  });
+
+  test("list item with bold, inline code and a link: triple-click the whole item, and a partial selection across the link", async () => {
+    const win = await app.firstWindow();
+    const input = win.getByPlaceholder(/问点什么/);
+    await input.fill("FORMAT-PROBE 给我一个带格式的列表");
+    await win.getByRole("button", { name: "发送", exact: true }).click();
+    const answer = win.locator(".msg.assistant").filter({ hasText: "格式探针" }).last();
+    await expect(answer.getByRole("button", { name: "插入笔记" })).toBeVisible({ timeout: 15_000 }); // streaming done
+    const li = answer.locator(".markdown li").filter({ hasText: "粗体要点" });
+    await expect(li.locator("strong")).toHaveText("粗体要点");
+    await expect(li.locator("code")).toHaveText("inline_code");
+    await expect(li.locator("a")).toHaveText("链接文字");
+    const visible = (await li.evaluate((el) => (el as HTMLElement).innerText)).trim();
+    expect(visible).toBe("粗体要点：带 inline_code 与 链接文字 的一项");
+    const bar = win.getByRole("toolbar", { name: "回答选区操作" });
+
+    // 1) Triple-click selects the whole formatted item.
+    await li.locator("strong").click({ clickCount: 3 });
+    await bar.getByRole("button", { name: "追问分支" }).click();
+    await expect(win.getByTestId("branch-draft")).toContainText(`追问分支：「${visible}」`);
+    await input.fill("这一项展开说说");
+    await win.getByRole("button", { name: "发送", exact: true }).click();
+    await expect(win.getByTestId("crumbs")).toContainText(`「${visible.slice(0, 16)}」`);
+    let b = await lastBranch(win);
+    expect(b.selection).toBe(visible);
+    expect(b.quote).toBe(b.slice);
+    expect(b.quote).toBe("粗体要点**：带 `inline_code` 与 [链接文字](https://example.com/docs/page) 的一项");
+    await win.getByTestId("crumbs").getByRole("button", { name: "主线" }).click();
+
+    // 2) Partial selection across the link: 「与 链接文字 的一」 (link text only, URL never part of the text).
+    await li.evaluate((el) => {
+      const a = el.querySelector("a")!;
+      const range = document.createRange();
+      range.setStart(a.previousSibling!, (a.previousSibling as Text).data.indexOf("与"));
+      range.setEnd(a.nextSibling!, 3);
+      const sel = window.getSelection()!;
+      sel.removeAllRanges();
+      sel.addRange(range);
+      el.closest(".msg.assistant")!.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
     });
-    expect(check.quote).toBe(check.slice);
-    expect(check.quote.startsWith("模拟回答")).toBe(true);
-    expect(check.quote).toContain("：这是");
+    const partial = (await win.evaluate(() => window.getSelection()!.toString())).trim();
+    expect(partial).toBe("与 链接文字 的一");
+    await bar.getByRole("button", { name: "追问分支" }).click();
+    await expect(win.getByTestId("branch-draft")).toContainText(`追问分支：「${partial}」`);
+    await input.fill("这个链接是什么？");
+    await win.getByRole("button", { name: "发送", exact: true }).click();
+    await expect(win.getByTestId("crumbs")).toContainText(`「${partial}」`);
+    b = await lastBranch(win);
+    expect(b.selection).toBe(partial);
+    expect(b.quote).toBe(b.slice);
+    expect(b.quote).toBe("与 [链接文字](https://example.com/docs/page) 的一");
   });
 });
