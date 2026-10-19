@@ -43,7 +43,7 @@
     --text: #e8e6e3;
     --muted: #9a9a9f;
     --text-disabled: rgb(255 255 255 / 0.35);
-    --accent-hover: color-mix(in srgb, var(--accent) 85%, black);
+    --accent-hover: color-mix(in srgb, var(--accent) 85%, white);
     --focus-ring: color-mix(in srgb, var(--accent) 40%, transparent);
     --text-secondary: color-mix(in srgb, var(--muted) 75%, var(--text));
     --accent: #5b8def;

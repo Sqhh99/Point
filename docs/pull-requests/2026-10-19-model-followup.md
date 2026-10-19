@@ -41,7 +41,7 @@
 发送按钮禁用，颜色用 `--text-disabled`，没有提示框。main 在写入之前的拒绝仍保留，作为兜底。
 ### 设计变量
 - `--accent` 保持蓝色 #2f6feb，不改。
-- `--accent-hover`：`color-mix(in srgb, var(--accent) 85%, black)`。
+- `--accent-hover`：浅色 `color-mix(in srgb, var(--accent) 85%, black)`，深色 `color-mix(in srgb, var(--accent) 85%, white)`（深色背景下 hover 变亮）。
 - `--focus-ring`：`color-mix(in srgb, var(--accent) 40%, transparent)`。
 - `--text-secondary`：浅色 #6B6860；深色从深色主题的 `--muted` 和 `--text` 混出来。
 - `--text-disabled`：浅色 #A8A49A，深色 `rgb(255 255 255 / 0.35)`。

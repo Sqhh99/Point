@@ -32,3 +32,4 @@
 - 预设路径上保存的 vision 标志仍会存下（不删，以免改动原有的 visionOverride 断言），但永远不会被读取。
 - UI：轻提示放在 ModelBar 下方，加「知道了」；已关闭的记录以「对话#settings 代次」为键；ModelBar 里重复的 notice 已去掉；新增 `--bg-muted`（`--surface-2` 的别名）。
 - 验证：test:main 746 项通过，e2e 33 项通过（本地 keyring，无跳过），typecheck 和 lint 干净。
+- 补充：深色主题的 `--accent-hover` 改为和 white 混合（浅色仍然和 black 混合）。
