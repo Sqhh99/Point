@@ -9,10 +9,24 @@
 - 设置页：
   - 预设模型整行隐藏勾选框，改为一行只读的「看图：支持 / 不支持」，取自 `ModelSpec.vision`。
   - 自定义模型显示勾选框「声明此模型支持看图」，副文案「由你自行声明，应用会按此判断」。勾选后前后端都会按它判断。
-- 不认识的 model id 现在作为自定义模型保留，不再被改回默认模型。对话里记住的旧模型名（既不在表里，也不是当前保存的自定义模型）仍然回退到默认模型，并提示一次。
+- 表外 model id 的处理（架构设计师裁定）：
+  - **自定义 OpenAI 兼容端点**（Base URL 改成了不是预设的地址）：保留表外或自由填写的 id，能力取用户的声明。
+  - **预设服务**（DeepSeek / OpenAI / 智谱，Base URL 是预设地址；末尾斜杠和大小写不算不同）：表外 id 不会当作自定义模型。已知旧名照旧映射（deepseek-chat / deepseek-reasoner → deepseek-flash）。其他 id 回退到该服务的 `defaultModel`，并给出和 #56 一样的提示「原模型已不可用，已改用 {defaultModel}」。预设路径上永远不读用户的看图声明。
+  - 覆盖到的地方：
+    - 设置的读取：`load` 不改写磁盘，读取时由 `modelOf` 回退。
+    - 设置的保存：`update` 遇到表外 id 存为 defaultModel。
+    - `models:list`：恢复 notice，不列出该 id。
+    - `resolveAsk`：请求体里的 id 和对话记住的 id 都会回退，并发出 `model-notice`；发给厂商的请求里永远是 defaultModel。
+    - `specOf` / `askSpec`：只有自定义端点才会造出自定义 spec。
+  - 设置页：预设服务里填了表外 id 时，不显示勾选框，改为一行只读「预设服务只能用列表中的模型，保存后将改用 {defaultModel}」，看图那一行按 defaultModel 显示。
 - 「不支持图片」提示：
   - 预设模型提示换一个支持看图的模型。
   - 只有自定义模型才提到「声明此模型支持看图」。
+### 回退提示的显示（UI设计员）
+- 在 ModelBar 下方显示一条轻提示，复用原来的 `.model-notice`，不是弹窗也不是 toast。背景用 `--bg-muted`（新增，两套主题里都只是 `--surface-2` 的别名，没有新颜色值），文字用 `--text-secondary`，右侧的「知道了」链接用 `--accent`（hover 和 focus 样式与「去设置」一致）。
+- 来源有两个：`models:list` 的 notice，和本次提问的 `model-notice`。ModelBar 里原来那个 span 已去掉，避免显示两次。
+- 每个对话只显示一次：点「知道了」后，在这个对话里不再出现；第一次提问新建出来的对话也会继承这次关闭。切换到新对话、或者重新配置（settings:changed）之后可以再次出现。
+- 提示文字保持 #56 的原样，改措辞要等 v0.3.0 的 zh-CN 字符串表。
 ### 2. 追问分支（中高）
 - 选区在屏幕上显示的文字，就是展示和发送的文字：草稿、引用卡、面包屑、分支菜单，以及发给模型的 selection，都用这段文字。
 - 源文本的 span（start、end、源切片）只作为定位锚点，保留给 `spanMatches` 和同 span 分组使用。
@@ -35,56 +49,74 @@
 ### e2e 系统加密检查
 5 处都改为：`process.env.CI` 为真时断言 `encryptionAvailable === true`，不满足就变红；只有本地运行允许跳过。本地 Linux 可以设 `POINT_E2E_KEYRING=1`，通过 `e2e/keystore-preload.cjs` 使用 gnome-keyring。
 
-## 截图（提交 `c252781`）
+## 截图（提交 `845841d`）
 未配置，浅色（发送按钮禁用，状态栏显示「未配置」）：
 
-![](https://raw.githubusercontent.com/Sqhh99/Point/c252781df970b69aa978769b0d8fcb7798ff5404/docs/assets/pr/2026-10-19-followup-unconfigured-modelbar-status.png)
+![](https://raw.githubusercontent.com/Sqhh99/Point/845841dcc56e1405130319c5ce2a390961bf7441/docs/assets/pr/2026-10-19-followup-unconfigured-modelbar-status.png)
 
 未配置，「去设置」获得焦点（浅色）：
 
-![](https://raw.githubusercontent.com/Sqhh99/Point/c252781df970b69aa978769b0d8fcb7798ff5404/docs/assets/pr/2026-10-19-followup-unconfigured-link-focus.png)
+![](https://raw.githubusercontent.com/Sqhh99/Point/845841dcc56e1405130319c5ce2a390961bf7441/docs/assets/pr/2026-10-19-followup-unconfigured-link-focus.png)
 
 未配置，深色：
 
-![](https://raw.githubusercontent.com/Sqhh99/Point/c252781df970b69aa978769b0d8fcb7798ff5404/docs/assets/pr/2026-10-19-followup-unconfigured-dark.png)
+![](https://raw.githubusercontent.com/Sqhh99/Point/845841dcc56e1405130319c5ce2a390961bf7441/docs/assets/pr/2026-10-19-followup-unconfigured-dark.png)
 
 未配置，深色，「去设置」获得焦点：
 
-![](https://raw.githubusercontent.com/Sqhh99/Point/c252781df970b69aa978769b0d8fcb7798ff5404/docs/assets/pr/2026-10-19-followup-unconfigured-dark-focus.png)
+![](https://raw.githubusercontent.com/Sqhh99/Point/845841dcc56e1405130319c5ce2a390961bf7441/docs/assets/pr/2026-10-19-followup-unconfigured-dark-focus.png)
 
 已配置，ModelBar 选 flash：
 
-![](https://raw.githubusercontent.com/Sqhh99/Point/c252781df970b69aa978769b0d8fcb7798ff5404/docs/assets/pr/2026-10-19-followup-configured-modelbar-status.png)
+![](https://raw.githubusercontent.com/Sqhh99/Point/845841dcc56e1405130319c5ce2a390961bf7441/docs/assets/pr/2026-10-19-followup-configured-modelbar-status.png)
 
 已配置，ModelBar 选 v4-pro（状态栏跟随，显示「不支持看图」）：
 
-![](https://raw.githubusercontent.com/Sqhh99/Point/c252781df970b69aa978769b0d8fcb7798ff5404/docs/assets/pr/2026-10-19-followup-configured-v4pro-status.png)
+![](https://raw.githubusercontent.com/Sqhh99/Point/845841dcc56e1405130319c5ce2a390961bf7441/docs/assets/pr/2026-10-19-followup-configured-v4pro-status.png)
 
 设置页，预设模型（只读的「看图：不支持」）：
 
-![](https://raw.githubusercontent.com/Sqhh99/Point/c252781df970b69aa978769b0d8fcb7798ff5404/docs/assets/pr/2026-10-19-followup-settings-vision-preset.png)
+![](https://raw.githubusercontent.com/Sqhh99/Point/845841dcc56e1405130319c5ce2a390961bf7441/docs/assets/pr/2026-10-19-followup-settings-vision-preset.png)
 
-设置页，自定义模型（勾选框「声明此模型支持看图」和副文案）：
+设置页，自定义端点上的自定义模型（勾选框「声明此模型支持看图」和副文案）：
 
-![](https://raw.githubusercontent.com/Sqhh99/Point/c252781df970b69aa978769b0d8fcb7798ff5404/docs/assets/pr/2026-10-19-followup-settings-vision-custom.png)
+![](https://raw.githubusercontent.com/Sqhh99/Point/845841dcc56e1405130319c5ce2a390961bf7441/docs/assets/pr/2026-10-19-followup-settings-vision-custom.png)
+
+设置页，预设服务里填了表外 id（不显示勾选框，提示保存后改用默认模型）：
+
+![](https://raw.githubusercontent.com/Sqhh99/Point/845841dcc56e1405130319c5ce2a390961bf7441/docs/assets/pr/2026-10-19-followup-settings-vision-preset-unknown.png)
+
+预设回退提示，浅色和深色：
+
+![](https://raw.githubusercontent.com/Sqhh99/Point/845841dcc56e1405130319c5ce2a390961bf7441/docs/assets/pr/2026-10-19-followup-model-fallback-notice.png)
+
+![](https://raw.githubusercontent.com/Sqhh99/Point/845841dcc56e1405130319c5ce2a390961bf7441/docs/assets/pr/2026-10-19-followup-model-fallback-notice-dark.png)
 
 Key 错误（截图里是一个故意填错的假 Key）：
 
-![](https://raw.githubusercontent.com/Sqhh99/Point/c252781df970b69aa978769b0d8fcb7798ff5404/docs/assets/pr/2026-10-19-followup-wrong-key-error.png)
+![](https://raw.githubusercontent.com/Sqhh99/Point/845841dcc56e1405130319c5ce2a390961bf7441/docs/assets/pr/2026-10-19-followup-wrong-key-error.png)
 
 ## 测试计划
 - [x] core vitest 197 项
   - `rendered-map.test.ts`：链接三种情况（「b 和 c」、「A b」、跨越超长链接）、加粗、行内代码、整条格式化列表项、同一段文字出现多次时取被选中的那一处、对不上时返回 null、转义和实体
   - 401 JSON 的错误信息里没有 `{`
-- [x] desktop test:main 738 项
+- [x] desktop test:main 746 项（14 项跳过，与 main 相同）
+  - `preset-fallback.test.ts`（新增）：
+    - deepseek 预设端点保存了表外 id：`listModels` 返回「原模型已不可用，已改用 deepseek-flash」；提问时 `ask.model` 为 deepseek-flash；用 stub 的 fetch 检查发给厂商的请求，model 为 deepseek-flash，请求里没有出现那个表外 id。
+    - 请求体里带表外 id、对话记住了已删除的模型：同样回退并提示。
+    - glm 表外 id 加上 vision:true：声明被忽略。
+    - 保存表外 id 时存为 defaultModel；Base URL 只有末尾斜杠或大小写不同，仍算预设端点。
+    - 旧名映射：没有提示。
+    - 自定义端点上的表外 id：保留，声明生效，发给厂商的就是这个 id。
   - 预设模型忽略用户勾选：flash 勾掉照样能发图，v4-pro 勾上照样拒绝，并且提示里没有「勾选」
   - 自定义端点加自定义模型并声明看图：图片提问成功，跑在 my-vl-1 上
   - 自定义模型没声明或取消勾选：拒绝，0 写入
   - 新工作区里绕过 UI，用 IPC 发 v4-pro 加图片：拒绝，0 会话、0 消息
-- [x] e2e 32 项全部通过（本地 xvfb，`POINT_E2E_KEYRING=1`，没有跳过）
+- [x] e2e 33 项全部通过（本地 xvfb，`POINT_E2E_KEYRING=1`，没有跳过）
   - 三击选中整条格式化列表项，以及跨链接的部分选区：分支的 selection 等于屏幕上显示的文字（innerText），锚点等于源切片
   - 加粗选区
-  - 设置页里看图那一行的两种情况
+  - 设置页里看图那一行：预设模型；预设服务里填表外 id（没有勾选框，显示回退提示）；自定义端点上的自定义模型
+  - 预设回退提示：显示在 ModelBar 下方，颜色来自变量，ModelBar 不列出表外 id；点「知道了」后隐藏，在本对话提问不再出现；新对话或 settings:changed 之后再次出现；对话记住的模型是 deepseek-flash
   - 设置页是 flash、ModelBar 选 v4-pro：状态栏显示 v4-pro 和「不支持看图」，框选按钮禁用；截图后发送被拒绝，0 写入
 - [x] 实机（真实 DeepSeek Key 只放在环境变量里）
   - 向 flash 提问，返回「收到」
