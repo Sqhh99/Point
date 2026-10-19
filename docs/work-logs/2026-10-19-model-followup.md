@@ -12,3 +12,10 @@
 
 ## 验证
 见 PR 记录。e2e 本地 30/30。实机用真实 Key 提问返回「收到」，错误 Key 只显示 401 加厂商 message，Key 没有出现在任何输出里。
+
+## 第二轮（测试员预验证 5488286 未通过 + 评审 hold）
+- **D1/D2**：去掉贪心对齐和长度上限，改为 mdast 可见字符偏移表（core/rendered-map.ts）。渲染端按 DOM 文本节点，逐字符收集选区前的可见文字和选中的可见文字（跳过 mermaid 的按钮和 SVG）。非空白字符必须和表逐个一致，否则返回 null。展示和发送都用 `selection.toString()`，源切片只作锚点。面包屑和分支菜单显示分支问题的 `meta.request.selection`。
+- **看图来源**：新增 `askSpec`。预设 id 查能力表；当前保存的自定义 id 用用户的声明；其他未知 id 返回 undefined，由调用方回退。`update()` 和 `load()` 不再把未知 id 改回默认模型。
+- **D4**：提示文案按「预设 / 自定义」分开，放在 `shared/vision-text.ts`，前后端共用。
+- **D5**：AIPanel 通过 `onPick` 把 ModelBar 的选择（名称和看图能力）提升到 App，状态栏和框选按钮都读它。ModelBar 默认选中 `models:list.defaultModel`（设置页保存的模型），所以原有的状态栏断言不用改；smoke 里原来写的 "fake" 改为实际选中的 deepseek-flash。
+- **颜色**：`--accent` 不改；hover 和 focus 用 color-mix 从 accent 派生；四个新变量深色也定义了。
