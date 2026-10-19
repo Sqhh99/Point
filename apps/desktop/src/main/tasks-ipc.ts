@@ -20,7 +20,7 @@ import {
   setConversationModel,
   threadOf
 } from "./conversations.js";
-import { view as settingsView } from "./settings.js";
+import { activeModelId, isConfigured, view as settingsView } from "./settings.js";
 import { fakeEnabled } from "./fake-llm.js";
 import { errInfo, providerFor } from "./ipc.js";
 import { docTitle, need } from "./workspace.js";
@@ -119,6 +119,8 @@ function placement(
   return { history: historyFor(conversationId) };
 }
 
+export const NOT_CONFIGURED = "尚未配置模型：请先在设置里填写 API Key";
+
 function resolveAsk(req: TaskRequest, conversationId: string | undefined): {
   model: string;
   effort: string | null;
@@ -130,7 +132,7 @@ function resolveAsk(req: TaskRequest, conversationId: string | undefined): {
   // Fake LLM still resolves model/effort (and notice) so first-ask memory and UI match production.
   const active = settingsView();
   const remembered = conversationId ? getConversationModel(conversationId) : { model: null, effort: null };
-  const wantModel = req.model ?? remembered.model ?? active.active.model;
+  const wantModel = req.model ?? remembered.model ?? activeModelId();
   const p = providerConfig(active.activeProvider)!;
   let spec = modelSpec(active.activeProvider, wantModel);
   let notice: string | undefined;
@@ -199,7 +201,7 @@ export function registerTasksIpc(): void {
     const ws = need();
     const req = validate(raw);
     // Gate before anything is stored: an image on a text-only model is a clear error, not a silent drop.
-    // Without an image the provider is resolved lazily so a missing key still streams back as an "auth" event.
+    // Without an image the provider is resolved lazily (a key rejected by the API streams back as an "auth" event).
     if (req.marks && (req.kind !== "ask" || req.image)) throw new Error("一起问只能和问题一起发送");
     const batch = req.marks ? loadBatch(req.marks, req.docId) : undefined;
     const needsVision = !!req.image || !!batch?.hasImage;
@@ -221,6 +223,8 @@ export function registerTasksIpc(): void {
     );
     // 「一起问」: the question turn becomes ONE user message whose parts follow the marks' selection order.
     if (batch) messages = [...messages.slice(0, -1), buildBatchMessage(req.question ?? "", batch.loaded, title)];
+    // No key for the active provider → no model is usable: a clear reason, not a failed request. Nothing stored yet.
+    if (!isConfigured()) throw new Error(NOT_CONFIGURED);
     if (!conversationId) {
       const sel = req.selection.trim().replace(/\s+/g, " ");
       conversationId = createConversation(`${TASK_LABELS[req.kind]}：${sel.slice(0, 30) || req.question?.slice(0, 30) || (image ? "截图" : "")}`, req.docId).id;

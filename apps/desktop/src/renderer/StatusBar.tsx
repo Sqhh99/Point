@@ -4,12 +4,14 @@ interface Props {
   workspace: string | null;
   docTitle: string | null;
   model: ActiveModel | null;
+  /** false → active provider has no key: show 未配置, never a model name. */
+  configured: boolean;
 }
 
 const baseName = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
 
 /** 24px status bar: where you are on the left, which model answers (and whether it reads images) on the right. */
-export function StatusBar({ workspace, docTitle, model }: Props) {
+export function StatusBar({ workspace, docTitle, model, configured }: Props) {
   return (
     <footer className="statusbar" data-testid="statusbar">
       <span className="statusbar-item" title={workspace ?? undefined}>
@@ -17,7 +19,14 @@ export function StatusBar({ workspace, docTitle, model }: Props) {
         {docTitle && <span className="statusbar-sep">/</span>}
         {docTitle}
       </span>
-      {model && (
+      {model && !configured && (
+        <span className="statusbar-right">
+          <span className="statusbar-item" data-testid="status-unconfigured">
+            未配置
+          </span>
+        </span>
+      )}
+      {model && configured && (
         <span className="statusbar-right">
           <span className="statusbar-item" data-testid="status-model" title={`${model.providerName} · ${model.model}`}>
             {model.model}

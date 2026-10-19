@@ -22,6 +22,7 @@ export function App() {
   const [docTitle, setDocTitle] = useState<string | null>(null);
   const [chatWidth, setChatWidth] = useState(() => clampChatWidth(localStorage.getItem("point.chatWidth")));
   const [model, setModel] = useState<ActiveModel | null>(null);
+  const [configured, setConfigured] = useState(false);
   const [capture, setCapture] = useState<(CaptureResult & { seq: number }) | null>(null);
   const [marks, setMarks] = useState<Mark[]>([]);
   const [checked, setChecked] = useState<string[]>([]);
@@ -95,7 +96,13 @@ export function App() {
   };
 
   const refreshModel = useCallback(() => {
-    api.settings.get().then((s) => setModel(s.active), () => setModel(null));
+    api.settings.get().then(
+      (s) => {
+        setModel(s.active);
+        setConfigured(s.configured);
+      },
+      () => setModel(null)
+    );
   }, []);
   // Re-read after leaving settings, and whenever main broadcasts settings:changed (save / setKey).
   useEffect(() => {
@@ -201,7 +208,7 @@ export function App() {
         onOpenSettings={() => setView("settings")}
       />
     </div>
-    <StatusBar workspace={workspace.path} docTitle={view === "settings" ? null : docTitle} model={model} />
+    <StatusBar workspace={workspace.path} docTitle={view === "settings" ? null : docTitle} model={model} configured={configured} />
     </div>
   );
 }

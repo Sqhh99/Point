@@ -46,7 +46,8 @@ const REASONS: Record<string, string> = {
   network: "网络连接失败",
   server: "模型服务暂时出错",
   bad_request: "请求被模型服务拒绝",
-  no_vision: "当前模型不支持图片"
+  no_vision: "当前模型不支持图片",
+  not_configured: "未配置模型"
 };
 
 export const NO_VISION_TEXT = "当前模型不支持图片。请在「设置」里换一个支持看图的模型（例如 gpt-4o、glm-4v-flash），或勾选「该模型支持看图」。";
@@ -187,6 +188,8 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
   const [pickModel, setPickModel] = useState<string | null>(null);
   const [pickEffort, setPickEffort] = useState<string | null>(null);
   const [modelNotice, setModelNotice] = useState<string | null>(null);
+  // A "not configured" refusal is stale once a key is saved.
+  useEffect(() => window.point.settings.onChanged(() => setFailure((f) => (f?.code === "not_configured" ? null : f))), []);
   // Seed from models:list default; conversation memory overrides when we have an id.
   useEffect(() => {
     let live = true;
@@ -296,7 +299,8 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
         for (const e of queued) handleRef.current(e);
       } catch (err) {
         const message = stripIpcPrefix((err as Error).message);
-        setFailure({ code: message.startsWith("当前模型不支持图片") ? "no_vision" : "invalid", message, request: req });
+        const code = message.startsWith("当前模型不支持图片") ? "no_vision" : message.startsWith("尚未配置模型") ? "not_configured" : "invalid";
+        setFailure({ code, message, request: req });
       }
     },
     [conversationId, refresh]
@@ -684,12 +688,12 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
                 <div className="error-reason">{REASONS[failure.code] ?? "出错了"}</div>
                 <div className="error-detail">{failure.message}</div>
                 <div className="error-actions">
-                  {(failure.code === "auth" || failure.code === "no_vision") && (
+                  {(failure.code === "auth" || failure.code === "no_vision" || failure.code === "not_configured") && (
                     <button className="link" onClick={onOpenSettings}>
                       去设置
                     </button>
                   )}
-                  {failure.code !== "invalid" && failure.code !== "no_vision" && (
+                  {failure.code !== "invalid" && failure.code !== "no_vision" && failure.code !== "not_configured" && (
                     <button
                       className="link"
                       onClick={() => void (failure.code === "invalid" || failure.code === "no_vision" ? start(failure.request) : regenerate(failure.request, lastUser()))}
@@ -710,6 +714,7 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
                 setPickModel(m);
                 setPickEffort(e);
               }}
+              onOpenSettings={onOpenSettings}
             />
             {modelNotice && (
               <div className="model-notice banner" data-testid="task-model-notice" role="status">

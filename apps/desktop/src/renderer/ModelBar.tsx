@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ModelSpec } from "@point/core";
 
 type Listed = ModelSpec & { configured: boolean };
-type List = { providerId: string; providerName: string; notice?: string; models: Listed[] };
+type List = { providerId: string; providerName: string; configured: boolean; notice?: string; models: Listed[] };
 
 /**
  * One row above the input: current-provider model dropdown (left) and thinking-level control (right).
@@ -13,12 +13,14 @@ export function ModelBar({
   conversationId,
   model,
   effort,
-  onChange
+  onChange,
+  onOpenSettings
 }: {
   conversationId: string | null;
   model: string | null;
   effort: string | null;
   onChange(model: string, effort: string | null): void;
+  onOpenSettings(): void;
 }) {
   const [list, setList] = useState<List | null>(null);
 
@@ -42,6 +44,19 @@ export function ModelBar({
   }, [list, model]);
 
   if (!list) return null;
+  // No key: main lists nothing. Read-only hint, no dropdown, no preset name.
+  if (!list.configured || list.models.length === 0) {
+    return (
+      <div className="model-bar" data-testid="model-bar" role="group" aria-label="模型和思考">
+        <span className="model-empty" data-testid="model-empty">
+          未配置模型
+        </span>
+        <button type="button" className="link" data-testid="model-open-settings" onClick={onOpenSettings}>
+          去设置
+        </button>
+      </div>
+    );
+  }
   const active = list.models.find((m) => m.id === model) ?? list.models.find((m) => m.id === list.models[0]?.id);
   const efforts = active?.efforts ?? [];
   const currentEffort = effort && efforts.some((e) => e.id === effort) ? effort : active?.defaultEffort ?? null;

@@ -372,4 +372,6 @@ button.link.active { color: var(--accent); }
 .effort-seg button.active, .effort-seg button[aria-pressed="true"] { background: var(--bg-elevated); color: var(--accent); font-weight: 600; box-shadow: 0 0 0 1px var(--border); }
 .effort-seg button:disabled { opacity: 0.45; cursor: default; }
 .model-notice { font-size: 12px; color: var(--muted); }
+.model-empty { font-size: 13px; color: var(--muted); }
+.model-pick select option:checked { background: var(--surface-2); color: var(--text); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
