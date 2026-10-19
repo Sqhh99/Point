@@ -38,6 +38,8 @@ export interface SettingsView {
   presets: ProviderPreset[];
   encryptionAvailable: boolean;
   active: ActiveModel;
+  /** Active provider has a key; false → no model is usable (status bar shows 未配置). */
+  configured: boolean;
 }
 
 export interface ProviderPatch {
@@ -207,6 +209,8 @@ export interface PointAPI {
     list(): Promise<{
       providerId: string;
       providerName: string;
+      /** false → no key for the active provider; `models` is empty. */
+      configured: boolean;
       notice?: string;
       models: (import("@point/core").ModelSpec & { configured: boolean })[];
     }>;

@@ -76,6 +76,38 @@ describe("settings rename + keys", () => {
   });
 });
 
+describe("no key configured", () => {
+  const writeSettings = (deepseek: Record<string, string>) =>
+    writeFileSync(join(app.getPath("userData"), "settings.json"), JSON.stringify({ activeProvider: "deepseek", providers: { deepseek: { baseURL: "https://api.deepseek.com/v1", ...deepseek } } }));
+
+  it("models:list lists no model (no DeepSeek preset) and says unconfigured", async () => {
+    writeSettings({ model: "deepseek-flash" });
+    const listed = (await invoke(IPC.modelsList, new FakeSender())) as { providerId: string; configured: boolean; models: unknown[]; notice?: string };
+    expect(listed.configured).toBe(false);
+    expect(listed.models).toEqual([]);
+    expect(listed.notice).toBeUndefined();
+    expect(settings.view().configured).toBe(false);
+  });
+
+  it("models:list lists the provider's models once a key is saved; view() never carries the key", async () => {
+    writeSettings({ model: "deepseek-flash", encKey: "YmFzZTY0LWtleQ==" });
+    const listed = (await invoke(IPC.modelsList, new FakeSender())) as { configured: boolean; models: { id: string; configured: boolean }[] };
+    expect(listed.configured).toBe(true);
+    expect(listed.models.some((m) => m.id === "deepseek-flash")).toBe(true);
+    expect(listed.models.every((m) => m.configured)).toBe(true);
+    const v = settings.view();
+    expect(v.configured).toBe(true);
+    expect(JSON.stringify(v)).not.toContain("YmFzZTY0LWtleQ==");
+  });
+
+  it("tasks:run is refused with a clear reason and stores nothing", async () => {
+    writeSettings({ model: "deepseek-flash" });
+    await expect(run({ kind: "ask", selection: "", question: "hi" })).rejects.toThrow(/尚未配置模型/);
+    expect((ws.need().db.prepare("SELECT count(*) AS n FROM conversations").get() as { n: number }).n).toBe(0);
+    expect((ws.need().db.prepare("SELECT count(*) AS n FROM messages").get() as { n: number }).n).toBe(0);
+  });
+});
+
 describe("tasks:run effort gate", () => {
   it("rejects unsupported effort before writing any message", async () => {
     const before = (ws.need().db.prepare("SELECT count(*) AS n FROM messages").get() as { n: number }).n;

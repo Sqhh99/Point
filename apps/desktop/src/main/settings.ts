@@ -61,11 +61,27 @@ function providerOf(s: StoredSettings, id: ProviderId): StoredProvider {
 
 const visionOf = (id: ProviderId, cur: StoredProvider) => modelCapabilities(id, cur.model, { vision: cur.vision }).vision;
 
+/** The active provider has a saved key (or the e2e fake LLM is on). Without it no model is usable. */
+function configuredOf(s: StoredSettings): boolean {
+  return fakeEnabled() || !!providerOf(s, s.activeProvider).encKey;
+}
+
+export function isConfigured(): boolean {
+  return configuredOf(load());
+}
+
+/** Saved model id of the active provider (main-process only; may be a legacy name). */
+export function activeModelId(): string {
+  const s = load();
+  return providerOf(s, s.activeProvider).model;
+}
+
 export function view(): SettingsView {
   const s = load();
   const act = providerOf(s, s.activeProvider);
   return {
     activeProvider: s.activeProvider,
+    configured: configuredOf(s),
     active: fakeEnabled()
       ? { providerName: "测试模型", model: "fake", vision: fakeVision() }
       : { providerName: getPreset(s.activeProvider)!.name, model: act.model, vision: visionOf(s.activeProvider, act) },
@@ -129,16 +145,19 @@ export function resolveProvider(id?: ProviderId): { id: ProviderId; baseURL: str
 
 
 /** Models of the *current* provider only, plus whether a key is configured. Keys never leave main. */
-export function listModels(): { providerId: ProviderId; providerName: string; models: (ModelSpec & { configured: boolean })[]; notice?: string } {
+export function listModels(): { providerId: ProviderId; providerName: string; configured: boolean; models: (ModelSpec & { configured: boolean })[]; notice?: string } {
   const s = load();
   const p = providerConfig(s.activeProvider)!;
   const cur = providerOf(s, s.activeProvider);
-  const configured = !!cur.encKey || fakeEnabled();
+  const configured = configuredOf(s);
+  // No key → no usable model: list nothing (presets included) so the UI cannot default-select one.
+  if (!configured) return { providerId: s.activeProvider, providerName: p.label, configured: false, models: [] };
   const notice = modelSpec(s.activeProvider, cur.model) ? undefined : `原模型已不可用，已改用 ${p.defaultModel}`;
   return {
     providerId: s.activeProvider,
     providerName: p.label,
+    configured: true,
     notice,
-    models: p.models.map((m) => ({ ...m, configured }))
+    models: p.models.map((m) => ({ ...m, configured: true }))
   };
 }

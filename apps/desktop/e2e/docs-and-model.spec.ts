@@ -97,9 +97,12 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
     await app?.close();
   });
 
+  // Each provider needs its own (dummy) key: without one nothing is configured and the status bar
+  // shows 未配置. No request is ever sent with it.
   const save = async (win: Win, provider: string, model: string) => {
     await win.getByLabel("模型服务").selectOption({ label: provider });
     await win.getByLabel("模型", { exact: true }).fill(model);
+    await win.getByLabel("API Key").fill("sk-e2e-dummy-000");
     await win.getByRole("button", { name: "保存" }).click();
     await expect(win.getByText("已保存", { exact: true })).toBeVisible();
   };
@@ -110,9 +113,59 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
     await expect(win.getByRole("heading", { name: "模型设置" })).toBeHidden();
   };
 
-  test("changing provider and model updates the status bar", async () => {
+  test("no key: no selectable model, no DeepSeek default, asking is blocked with a clear reason", async () => {
     const win = await start();
     await openWorkspace(app, win);
+    const list = await win.evaluate(() => window.point.models.list());
+    expect(list.configured).toBe(false);
+    expect(list.models).toEqual([]);
+    const bar = win.getByTestId("model-bar");
+    await expect(bar.getByTestId("model-empty")).toHaveText("未配置模型");
+    await expect(bar.getByTestId("model-select")).toHaveCount(0);
+    await expect(bar.getByTestId("effort-control")).toHaveCount(0);
+    await expect(bar).not.toContainText(/deepseek/i);
+    await expect(win.getByTestId("status-unconfigured")).toHaveText("未配置");
+    await expect(win.getByTestId("status-model")).toHaveCount(0);
+    await expect(win.getByTestId("status-vision")).toHaveCount(0);
+    await expect(win.locator(".statusbar")).not.toContainText(/deepseek/i);
+    await win.screenshot({ path: join(results, "unconfigured-modelbar.png") });
+
+    await win.getByPlaceholder(/问点什么/).fill("没有模型时提问");
+    await win.getByRole("button", { name: "发送" }).click();
+    await expect(win.getByText("尚未配置模型：请先在设置里填写 API Key")).toBeVisible();
+    // Refused before any request or write: nothing was stored.
+    expect(await win.evaluate(() => window.point.conversations.list())).toEqual([]);
+
+    await bar.getByTestId("model-open-settings").click();
+    await expect(win.getByRole("heading", { name: "模型设置" })).toBeVisible();
+    await expect(win.getByTestId("status-unconfigured")).toHaveText("未配置");
+    await win.screenshot({ path: join(results, "unconfigured-settings.png") });
+  });
+
+  test("saving a key shows that API's models immediately (settings:changed)", async () => {
+    const win = await app.firstWindow();
+    const encryption = await win.evaluate(async () => (await window.point.settings.get()).encryptionAvailable);
+    test.skip(!encryption, "safeStorage unavailable: a key cannot be saved on this machine");
+    await save(win, "DeepSeek", "deepseek-flash");
+    // Without leaving settings: the status bar follows the broadcast.
+    await expect(win.getByTestId("status-model")).toHaveText("deepseek-flash", { timeout: 2000 });
+    await expect(win.getByTestId("status-unconfigured")).toHaveCount(0);
+    await win.screenshot({ path: join(results, "configured-settings.png") });
+    await leaveAndReopen(win);
+    const select = win.getByTestId("model-bar").getByTestId("model-select");
+    await expect(select.locator('option[value="deepseek-flash"]')).toHaveCount(1);
+    await expect(win.getByTestId("model-empty")).toHaveCount(0);
+    await expect(win.getByText("尚未配置模型：请先在设置里填写 API Key")).toHaveCount(0);
+    const list = await win.evaluate(() => window.point.models.list());
+    expect(list.configured).toBe(true);
+    expect(list.models.map((m) => m.id)).toContain("deepseek-flash");
+    await win.screenshot({ path: join(results, "configured-modelbar.png") });
+  });
+
+  test("changing provider and model updates the status bar", async () => {
+    const win = await app.firstWindow();
+    const encryption = await win.evaluate(async () => (await window.point.settings.get()).encryptionAvailable);
+    test.skip(!encryption, "safeStorage unavailable: keys cannot be saved, so no provider is configured");
     await win.getByRole("button", { name: "设置" }).click();
     await expect(win.getByRole("heading", { name: "模型设置" })).toBeVisible();
     await expect(win.getByTestId("status-model")).toHaveText("deepseek-flash");
@@ -140,6 +193,7 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
   // Fixed in feat/multi-model: onSaved refreshes the status bar without leaving settings.
   test("status bar follows a save immediately, without leaving settings", async () => {
     const win = await app.firstWindow();
+    test.skip(!(await win.evaluate(async () => (await window.point.settings.get()).encryptionAvailable)), "safeStorage unavailable");
     await win.getByRole("button", { name: "设置" }).click();
     try {
       await save(win, "OpenAI GPT", "gpt-4.1");
@@ -152,6 +206,7 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
   test("the choice survives a restart, and the form shows it", async () => {
     await app.close();
     const win = await start();
+    test.skip(!(await win.evaluate(async () => (await window.point.settings.get()).encryptionAvailable)), "safeStorage unavailable");
     await expect(win.getByTestId("status-model")).toHaveText("deepseek-flash");
     await win.getByRole("button", { name: "设置" }).click();
     await expect(win.getByLabel("模型服务")).toHaveValue("deepseek");
@@ -165,6 +220,8 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
     const win = await app.firstWindow();
     const encryption = await win.evaluate(async () => (await window.point.settings.get()).encryptionAvailable);
     test.info().annotations.push({ type: "safeStorage", description: encryption ? "available: key saved and checked" : "UNAVAILABLE on this machine: asserting the refusal instead of saving a key" });
+    const heading = win.getByRole("heading", { name: "模型设置" });
+    if (!(await heading.isVisible())) await win.getByRole("button", { name: "设置", exact: true }).click();
     await win.getByLabel("模型服务").selectOption({ label: "DeepSeek" });
     await win.getByLabel("API Key").fill("sk-e2e-secret-123");
     await win.getByRole("button", { name: "保存" }).click();
