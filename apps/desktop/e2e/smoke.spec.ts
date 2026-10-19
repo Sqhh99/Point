@@ -23,6 +23,8 @@ test.beforeAll(async () => {
   );
   // Linux CI/containers often run as root, where Chromium's sandbox can't start.
   const extra = process.platform === "linux" ? ["--no-sandbox"] : [];
+  // Local Linux only: POINT_E2E_KEYRING=1 uses a caller-started gnome-keyring (keystore-preload.cjs).
+  if (process.platform === "linux" && process.env.POINT_E2E_KEYRING === "1") extra.unshift("-r", join(import.meta.dirname, "keystore-preload.cjs"));
   app = await electron.launch({
     args: [...extra, join(import.meta.dirname, "..", "out", "main", "index.js")],
     env: { ...env, POINT_USER_DATA: mkdtempSync(join(tmpdir(), "point-e2e-")), POINT_FAKE_LLM: "1" }
@@ -108,7 +110,9 @@ test("settings never return the plaintext API key", async () => {
     const afterGet = await api.settings.get();
     return { encryptionAvailable, afterSet: JSON.stringify(afterSet), afterGet: JSON.stringify(afterGet), hasKey: afterGet.providers.find((p) => p.id === "deepseek")?.hasKey };
   }, dummy);
-  test.skip(!result.encryptionAvailable, "safeStorage unavailable on this host");
+  // CI (win DPAPI / mac keychain) must have it: red, not skipped. Only a local run may skip.
+  if (process.env.CI) expect(result.encryptionAvailable, "safeStorage must be available on CI").toBe(true);
+  else test.skip(!result.encryptionAvailable, "local run without an OS keyring (set POINT_E2E_KEYRING=1 under gnome-keyring)");
   expect(result.hasKey).toBe(true);
   expect(result.afterSet).not.toContain(dummy);
   expect(result.afterGet).not.toContain(dummy);

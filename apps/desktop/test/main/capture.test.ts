@@ -173,6 +173,28 @@ describe("tasks with an image (POINT_FAKE_LLM=1)", () => {
     expect(((await invoke(IPC.convList, new FakeSender())) as unknown[]).length).toBe(before);
   });
 
+  it("vision follows the model picked for this run, not the Settings default (flash → v4-pro)", async () => {
+    // Settings default deepseek-flash has vision; ModelBar picked deepseek-v4-pro (ModelSpec.vision=false).
+    const before = ((await invoke(IPC.convList, new FakeSender())) as unknown[]).length;
+    const msgs = (ws.need().db.prepare("SELECT count(*) AS n FROM messages").get() as { n: number }).n;
+    await expect(invoke(IPC.tasksRun, new FakeSender(), { kind: "ask", selection: "", question: "q", image: sha, model: "deepseek-v4-pro" })).rejects.toThrow(/当前模型不支持图片/);
+    await expect(invoke(IPC.tasksRun, new FakeSender(), { kind: "explain", selection: "", image: sha, model: "deepseek-v4-pro" })).rejects.toThrow(/当前模型不支持图片/);
+    expect(((await invoke(IPC.convList, new FakeSender())) as unknown[]).length).toBe(before);
+    expect((ws.need().db.prepare("SELECT count(*) AS n FROM messages").get() as { n: number }).n).toBe(msgs);
+    const listed = (await invoke(IPC.modelsList, new FakeSender())) as { models: { id: string; vision: boolean }[] };
+    expect(listed.models.find((m) => m.id === "deepseek-flash")?.vision).toBe(true);
+    expect(listed.models.find((m) => m.id === "deepseek-v4-pro")?.vision).toBe(false);
+    // And the other way round: a vision model picked for the run is allowed.
+    await expect(invoke(IPC.tasksRun, new FakeSender(), { kind: "ask", selection: "", question: "q", image: sha, model: "deepseek-flash" })).resolves.toBeTruthy();
+  });
+
+  it("a conversation remembered on a text-only model refuses an image even if Settings has vision", async () => {
+    const s = new FakeSender();
+    const r = (await invoke(IPC.tasksRun, s, { kind: "ask", selection: "", question: "q", model: "deepseek-v4-pro" })) as Started;
+    await until(() => s.events.some((e) => (e.payload as { type: string }).type === "done"));
+    await expect(invoke(IPC.tasksRun, new FakeSender(), { kind: "ask", selection: "", question: "q2", image: sha, conversationId: r.conversationId })).rejects.toThrow(/当前模型不支持图片/);
+  });
+
   it("text-only model still answers questions without an image", async () => {
     process.env.POINT_FAKE_VISION = "0";
     await expect(invoke(IPC.tasksRun, new FakeSender(), { kind: "ask", selection: "", question: "q" })).resolves.toBeTruthy();

@@ -17,8 +17,20 @@ const launchEnv = (extra: Record<string, string>, drop: string[] = []) => ({
   ...(Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined && e[0] !== "ELECTRON_RENDERER_URL" && !drop.includes(e[0]))) as Record<string, string>),
   ...extra
 });
+// Local Linux only: POINT_E2E_KEYRING=1 routes safeStorage to a gnome-keyring the caller started
+// (see keystore-preload.cjs). CI (win/mac) never sets it.
+const keyring = process.platform === "linux" && process.env.POINT_E2E_KEYRING === "1" ? ["-r", join(import.meta.dirname, "keystore-preload.cjs")] : [];
 const launch = (env: Record<string, string>) =>
-  electron.launch({ args: [...(process.platform === "linux" ? ["--no-sandbox"] : []), join(import.meta.dirname, "..", "out", "main", "index.js")], env });
+  electron.launch({ args: [...keyring, ...(process.platform === "linux" ? ["--no-sandbox"] : []), join(import.meta.dirname, "..", "out", "main", "index.js")], env });
+/**
+ * Key-save cases need OS encryption. On CI (win DPAPI, mac keychain) it must be there, so a missing
+ * store turns the test red; only a local run without a keyring may skip.
+ */
+async function requireEncryption(win: Win): Promise<void> {
+  const encryption = await win.evaluate(async () => (await window.point.settings.get()).encryptionAvailable);
+  if (process.env.CI) expect(encryption, "safeStorage must be available on CI").toBe(true);
+  else test.skip(!encryption, "local run without an OS keyring (set POINT_E2E_KEYRING=1 under gnome-keyring)");
+}
 const stub = (app: ElectronApplication, paths: string[]) =>
   app.evaluate(({ dialog }, filePaths) => {
     dialog.showOpenDialog = (async () => ({ canceled: false, filePaths })) as typeof dialog.showOpenDialog;
@@ -130,11 +142,20 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
     await expect(win.locator(".statusbar")).not.toContainText(/deepseek/i);
     await win.screenshot({ path: join(results, "unconfigured-modelbar.png") });
 
+    // Send is disabled up front; main still refuses before any write (called over IPC directly).
     await win.getByPlaceholder(/问点什么/).fill("没有模型时提问");
-    await win.getByRole("button", { name: "发送" }).click();
-    await expect(win.getByText("尚未配置模型：请先在设置里填写 API Key")).toBeVisible();
-    // Refused before any request or write: nothing was stored.
-    expect(await win.evaluate(() => window.point.conversations.list())).toEqual([]);
+    await expect(win.getByRole("button", { name: "发送", exact: true })).toBeDisabled();
+    const refused = await win.evaluate(async () => {
+      const n0 = (await window.point.conversations.list()).length;
+      const e = await window.point.tasks.run({ kind: "ask", selection: "", question: "x" }).then(
+        () => null,
+        (x: Error) => String(x.message)
+      );
+      return { e, n0, n1: (await window.point.conversations.list()).length };
+    });
+    expect(refused.e).toMatch(/尚未配置模型/);
+    expect(refused.n0).toBe(0);
+    expect(refused.n1).toBe(0);
 
     await bar.getByTestId("model-open-settings").click();
     await expect(win.getByRole("heading", { name: "模型设置" })).toBeVisible();
@@ -144,8 +165,7 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
 
   test("saving a key shows that API's models immediately (settings:changed)", async () => {
     const win = await app.firstWindow();
-    const encryption = await win.evaluate(async () => (await window.point.settings.get()).encryptionAvailable);
-    test.skip(!encryption, "safeStorage unavailable: a key cannot be saved on this machine");
+    await requireEncryption(win);
     await save(win, "DeepSeek", "deepseek-flash");
     // Without leaving settings: the status bar follows the broadcast.
     await expect(win.getByTestId("status-model")).toHaveText("deepseek-flash", { timeout: 2000 });
@@ -159,13 +179,16 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
     const list = await win.evaluate(() => window.point.models.list());
     expect(list.configured).toBe(true);
     expect(list.models.map((m) => m.id)).toContain("deepseek-flash");
+    await expect(select).toHaveValue(list.models[0]!.id);
+    // The draft typed while unconfigured is still there; send is now enabled.
+    await expect(win.getByPlaceholder(/问点什么/)).toHaveValue("没有模型时提问");
+    await expect(win.getByRole("button", { name: "发送", exact: true })).toBeEnabled();
     await win.screenshot({ path: join(results, "configured-modelbar.png") });
   });
 
   test("changing provider and model updates the status bar", async () => {
     const win = await app.firstWindow();
-    const encryption = await win.evaluate(async () => (await window.point.settings.get()).encryptionAvailable);
-    test.skip(!encryption, "safeStorage unavailable: keys cannot be saved, so no provider is configured");
+    await requireEncryption(win);
     await win.getByRole("button", { name: "设置" }).click();
     await expect(win.getByRole("heading", { name: "模型设置" })).toBeVisible();
     await expect(win.getByTestId("status-model")).toHaveText("deepseek-flash");
@@ -193,7 +216,7 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
   // Fixed in feat/multi-model: onSaved refreshes the status bar without leaving settings.
   test("status bar follows a save immediately, without leaving settings", async () => {
     const win = await app.firstWindow();
-    test.skip(!(await win.evaluate(async () => (await window.point.settings.get()).encryptionAvailable)), "safeStorage unavailable");
+    await requireEncryption(win);
     await win.getByRole("button", { name: "设置" }).click();
     try {
       await save(win, "OpenAI GPT", "gpt-4.1");
@@ -206,7 +229,7 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
   test("the choice survives a restart, and the form shows it", async () => {
     await app.close();
     const win = await start();
-    test.skip(!(await win.evaluate(async () => (await window.point.settings.get()).encryptionAvailable)), "safeStorage unavailable");
+    await requireEncryption(win);
     await expect(win.getByTestId("status-model")).toHaveText("deepseek-flash");
     await win.getByRole("button", { name: "设置" }).click();
     await expect(win.getByLabel("模型服务")).toHaveValue("deepseek");
@@ -333,5 +356,100 @@ test.describe("per-conversation model and effort", () => {
       });
     });
     expect(notice).toMatch(/原模型已不可用/);
+  });
+
+  test("region capture follows the ModelBar pick: v4-pro (no vision) disables it even though Settings has flash", async () => {
+    const win = await app.firstWindow();
+    const src = mkdtempSync(join(tmpdir(), "point-src-"));
+    const docx = join(src, "vision.docx");
+    writeFileSync(docx, await makeDocx([{ style: "Heading1", text: "看图测试" }, { text: "正文。" }]));
+    await stub(app, [docx]);
+    await win.getByRole("button", { name: "导入文档" }).click();
+    await expect(win.getByTestId("reader").getByText("看图测试", { exact: true })).toBeVisible();
+    const select = win.getByTestId("model-bar").getByTestId("model-select");
+    const capture = win.getByTestId("capture-button");
+    await select.selectOption("deepseek-flash");
+    await expect(capture).toBeEnabled();
+    await select.selectOption("deepseek-v4-pro");
+    await expect(capture).toBeDisabled();
+    await expect(capture).toHaveAttribute("title", "当前模型不支持图片");
+    // Same source in the list main gates on.
+    const listed = await win.evaluate(() => window.point.models.list());
+    expect(listed.models.find((m) => m.id === "deepseek-v4-pro")?.vision).toBe(false);
+    await select.selectOption("deepseek-flash");
+    await expect(capture).toBeEnabled();
+
+    // Repro: capture a region while flash is picked, then switch to v4-pro and send → refused, nothing sent.
+    await capture.click();
+    const box = (await win.getByTestId("reader").boundingBox())!;
+    await win.mouse.move(box.x + 20, box.y + 60);
+    await win.mouse.down();
+    await win.mouse.move(box.x + 200, box.y + 140, { steps: 5 });
+    await win.mouse.up();
+    const regionBar = win.locator('[aria-label="选区操作"][data-kind="region"]');
+    await regionBar.getByRole("button", { name: "问 AI" }).click();
+    const thumb = win.getByTestId("attached-image").locator("img");
+    await expect(thumb).toBeVisible();
+    const sha = (await thumb.getAttribute("src"))!.replace("point-capture://", "");
+    await select.selectOption("deepseek-v4-pro");
+    const before = await win.evaluate(async () => {
+      const list = await window.point.conversations.list();
+      let n = 0;
+      for (const c of list) n += (await window.point.conversations.tree(c.id)).messages.length;
+      return { convs: list.length, msgs: n };
+    });
+    await win.getByPlaceholder(/问点什么/).fill("图里是什么？");
+    await win.getByRole("button", { name: "发送", exact: true }).click();
+    await expect(win.getByTestId("chat-error")).toContainText("当前模型不支持图片");
+    await expect(thumb).toBeVisible(); // kept so the user can switch back
+    // Main gates on the same resolved model (IPC directly, bypassing the UI check).
+    const ipc = await win.evaluate(
+      (sha) => window.point.tasks.run({ kind: "ask", selection: "", question: "q", image: sha, model: "deepseek-v4-pro" }).then(() => "sent", (e: Error) => e.message),
+      sha
+    );
+    expect(ipc).toMatch(/当前模型不支持图片/);
+    const after = await win.evaluate(async () => {
+      const list = await window.point.conversations.list();
+      let n = 0;
+      for (const c of list) n += (await window.point.conversations.tree(c.id)).messages.length;
+      return { convs: list.length, msgs: n };
+    });
+    expect(after).toEqual(before);
+    await win.getByRole("button", { name: "移除截图" }).click();
+    await select.selectOption("deepseek-flash");
+  });
+
+  test("selecting formatted (bold) text in an answer offers 追问分支 and stores a span that matches the source", async () => {
+    const win = await app.firstWindow();
+    const answer = win.locator(".msg.assistant").filter({ hasText: "模拟回答" }).first();
+    await expect(answer.locator("strong", { hasText: "模拟回答" })).toBeVisible();
+    // Select across the <strong> boundary: rendered 「模拟回答：这是」, source 「模拟回答**：这是」.
+    await answer.evaluate((el) => {
+      const p = [...el.querySelectorAll(".markdown p")].find((e) => e.querySelector("strong"))!;
+      const strong = p.querySelector("strong")!;
+      const tail = strong.nextSibling!;
+      const range = document.createRange();
+      range.setStart(strong.firstChild!, 0);
+      range.setEnd(tail, 3);
+      const sel = window.getSelection()!;
+      sel.removeAllRanges();
+      sel.addRange(range);
+      el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    });
+    await win.getByRole("toolbar", { name: "回答选区操作" }).getByRole("button", { name: "追问分支" }).click();
+    await expect(win.getByTestId("branch-draft")).toContainText("模拟回答");
+    await win.getByPlaceholder(/问点什么/).fill("加粗这段是什么意思？");
+    await win.getByRole("button", { name: "发送", exact: true }).click();
+    await expect(win.getByTestId("crumbs")).toContainText("「模拟回答");
+    const check = await win.evaluate(async () => {
+      const [c] = await window.point.conversations.list();
+      const tree = await window.point.conversations.tree(c!.id);
+      const o = tree.origins.at(-1)!;
+      const src = tree.messages.find((m) => m.id === o.sourceId)!;
+      return { quote: o.quote, slice: src.content.slice(o.start, o.end) };
+    });
+    expect(check.quote).toBe(check.slice);
+    expect(check.quote.startsWith("模拟回答")).toBe(true);
+    expect(check.quote).toContain("：这是");
   });
 });

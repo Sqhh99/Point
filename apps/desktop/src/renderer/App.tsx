@@ -23,6 +23,8 @@ export function App() {
   const [chatWidth, setChatWidth] = useState(() => clampChatWidth(localStorage.getItem("point.chatWidth")));
   const [model, setModel] = useState<ActiveModel | null>(null);
   const [configured, setConfigured] = useState(false);
+  // Vision of the model picked in ModelBar (ModelSpec.vision), not the Settings default.
+  const [askVision, setAskVision] = useState(false);
   const [capture, setCapture] = useState<(CaptureResult & { seq: number }) | null>(null);
   const [marks, setMarks] = useState<Mark[]>([]);
   const [checked, setChecked] = useState<string[]>([]);
@@ -186,7 +188,7 @@ export function App() {
             onOpenRecent={openRecent}
             onDocLoaded={(d) => setDocTitle(d?.title ?? null)}
             onAction={(kind, sel) => setTrigger((t) => ({ seq: (t?.seq ?? 0) + 1, kind, sel }))}
-            vision={!!model?.vision}
+            vision={askVision}
             onCapture={(r) => setCapture((c) => ({ ...r, seq: (c?.seq ?? 0) + 1 }))}
             onCaptureError={setError}
             onMark={addMark}
@@ -202,7 +204,7 @@ export function App() {
         docId={activeId}
         docTitle={docTitle}
         hasWorkspace={!!workspace.path}
-        vision={!!model?.vision}
+        onVision={setAskVision}
         capture={capture}
         batch={batch}
         onOpenSettings={() => setView("settings")}

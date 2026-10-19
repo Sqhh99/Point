@@ -158,6 +158,7 @@ export function listModels(): { providerId: ProviderId; providerName: string; co
     providerName: p.label,
     configured: true,
     notice,
-    models: p.models.map((m) => ({ ...m, configured: true }))
+    // vision is ModelSpec.vision, the same field tasks:run gates on (fake text-only seam narrows it).
+    models: p.models.map((m) => ({ ...m, vision: m.vision && (!fakeEnabled() || fakeVision()), configured: true }))
   };
 }

@@ -131,6 +131,17 @@ describe("OpenAICompatibleProvider edge cases", () => {
     expect(err).toMatchObject({ code: "rate_limit", status: 429 });
   });
 
+  it("shows only the status and the vendor's error.message, never the raw JSON body", () => {
+    const body = JSON.stringify({ error: { message: "Authentication Fails, Your api key: ****abcd is invalid", type: "authentication_error", param: null, code: "invalid_request_error" } });
+    const e = errorFromStatus(401, body);
+    expect(e.code).toBe("auth");
+    expect(e.message).toBe("鉴权失败 (401): Authentication Fails, Your api key: ****abcd is invalid");
+    expect(e.message).not.toContain("{");
+    expect(e.message).not.toContain("authentication_error");
+    expect(errorFromStatus(502, "<html>bad gateway</html>").message).toBe("服务端错误 (502)");
+    expect(errorFromStatus(400, JSON.stringify({ message: "bad model" })).message).toBe("请求错误 (400): bad model");
+  });
+
   it("createProvider rejects unknown ids and honours a custom baseURL", async () => {
     expect(() => createProvider({ id: "nope" as "glm", apiKey: "k" })).toThrow(/未知/);
     let url = "";

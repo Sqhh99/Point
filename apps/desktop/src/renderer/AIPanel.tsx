@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Mark, MarkAnchor, TaskKind } from "@point/core";
 // Pure tree helpers only: the core barrel also pulls in Node modules that cannot load in the renderer.
-import { branchTree, branchesFrom, breadcrumb, defaultLeaf, latestLeaf, pathTo, siblingsOf, type BranchOrigin, type BranchTreeNode } from "@point/core/tree";
+import { branchTree, branchesFrom, breadcrumb, defaultLeaf, latestLeaf, pathTo, siblingsOf, sourceSpanOf, type BranchOrigin, type BranchTreeNode } from "@point/core/tree";
 import type { CaptureResult, MessageMeta, StoredMessage, TaskEvent, TaskRequest } from "../shared/ipc";
 import { IconBranch } from "./icons";
 import { ModelBar } from "./ModelBar";
@@ -30,8 +30,8 @@ interface Props {
   docId: string | null;
   docTitle: string | null;
   hasWorkspace: boolean;
-  /** Current model accepts images. */
-  vision: boolean;
+  /** Reports whether the model picked in ModelBar accepts images (Reader's region tool follows it). */
+  onVision?(vision: boolean): void;
   /** Latest region capture; a new seq attaches it to the composer. */
   capture: (CaptureResult & { seq: number }) | null;
   batch: BatchTrigger | null;
@@ -156,7 +156,7 @@ function QuoteCard({ meta, onOpenImage }: { meta: MessageMeta; onOpenImage(sha: 
   );
 }
 
-export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, capture, batch, onOpenSettings }: Props) {
+export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onVision, capture, batch, onOpenSettings }: Props) {
   const [batchMarks, setBatchMarks] = useState<Mark[] | null>(null);
   const [image, setImage] = useState<CaptureResult | null>(null);
   const [viewing, setViewing] = useState<string | null>(null);
@@ -188,8 +188,25 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
   const [pickModel, setPickModel] = useState<string | null>(null);
   const [pickEffort, setPickEffort] = useState<string | null>(null);
   const [modelNotice, setModelNotice] = useState<string | null>(null);
-  // A "not configured" refusal is stale once a key is saved.
-  useEffect(() => window.point.settings.onChanged(() => setFailure((f) => (f?.code === "not_configured" ? null : f))), []);
+  // models:list is the one source for "configured" and per-model vision (ModelSpec.vision), same as main.
+  const [listed, setListed] = useState<Awaited<ReturnType<typeof window.point.models.list>> | null>(null);
+  useEffect(() => {
+    let live = true;
+    const load = () => void window.point.models.list().then((l) => live && setListed(l), () => undefined);
+    load();
+    const off = window.point.settings.onChanged(() => {
+      load();
+      // A "not configured" refusal is stale once a key is saved.
+      setFailure((f) => (f?.code === "not_configured" ? null : f));
+    });
+    return () => {
+      live = false;
+      off();
+    };
+  }, []);
+  const configured = !!listed?.configured;
+  const vision = !!listed?.models.find((m) => m.id === pickModel)?.vision;
+  useEffect(() => onVision?.(vision), [vision, onVision]);
   // Seed from models:list default; conversation memory overrides when we have an id.
   useEffect(() => {
     let live = true;
@@ -387,18 +404,23 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
     if (!s || s.isCollapsed || !log || draft) return setAnswerBar(null);
     const range = s.getRangeAt(0);
     const el = (range.commonAncestorContainer instanceof Element ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement)?.closest<HTMLElement>(".msg.assistant[data-id]");
-    const quote = s.toString().trim();
     const src = el && messages.find((m) => m.id === el.dataset.id);
-    if (!src || quote.length < 2) return setAnswerBar(null);
-    // Offsets are in the stored markdown: take the occurrence of the quote (rendered text may differ from source).
-    const start = src.content.indexOf(quote);
-    if (start < 0) return setAnswerBar(null);
+    const md = el?.querySelector<HTMLElement>(".markdown");
+    if (!src || !md || !md.contains(range.startContainer) || !md.contains(range.endContainer) || s.toString().trim().length < 2) return setAnswerBar(null);
+    // Range on the rendered plain text, mapped back to the stored markdown (which may carry `**` etc.).
+    const pre = document.createRange();
+    pre.selectNodeContents(md);
+    pre.setEnd(range.startContainer, range.startOffset);
+    const rStart = pre.toString().length;
+    const span = sourceSpanOf(src.content, md.textContent ?? "", rStart, rStart + range.toString().length);
+    if (!span) return setAnswerBar(null);
+    const { start, quote } = span;
     const r = range.getBoundingClientRect();
     const box = log.getBoundingClientRect();
     setAnswerBar({
       top: Math.max(r.top - box.top + log.scrollTop - 8 - 32, log.scrollTop),
       left: Math.min(Math.max(r.left - box.left + r.width / 2, 60), box.width - 60),
-      branch: { sourceId: src.id, start, end: start + quote.length, quote }
+      branch: { sourceId: src.id, start, end: span.end, quote }
     });
   };
 
@@ -782,7 +804,7 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
               {draft ? (
                 <button onClick={stop}>停止</button>
               ) : (
-                <button className="primary" onClick={send} disabled={!question.trim() || !hasWorkspace}>
+                <button className="primary" onClick={send} disabled={!question.trim() || !hasWorkspace || !configured} data-unconfigured={configured ? undefined : ""}>
                   发送
                 </button>
               )}

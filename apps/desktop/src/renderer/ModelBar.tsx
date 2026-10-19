@@ -51,7 +51,7 @@ export function ModelBar({
         <span className="model-empty" data-testid="model-empty">
           未配置模型
         </span>
-        <button type="button" className="link" data-testid="model-open-settings" onClick={onOpenSettings}>
+        <button type="button" className="link settings-link" data-testid="model-open-settings" onClick={onOpenSettings}>
           去设置
         </button>
       </div>
