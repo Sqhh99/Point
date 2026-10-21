@@ -104,3 +104,30 @@
 ### 验证（本地 Linux xvfb）
 - lint 和 tsc 通过；单独跑本用例，预期失败。
 - 测量值：minWidth 900，侧栏 240，分隔条 4，需要 924 → 失败；阅读区 256 → 失败；对话区 400；scrollWidth 900（没有溢出）；setSize(850) 后宽度仍是 900 → 通过。
+
+## 9. 追加（第五轮，2026-10-21）：分隔条的拖动范围、缩窗后的重新限制、持久化的宽度
+
+### 请求
+> minWidth = sidebar 240 + reader 360 + splitter 4 + chat 320 = 924 from shared constants … splitter drag range clamped by the same constants, re-clamped when the window resizes … 2. drag at 1024 / maximized … 3. re-clamp on resize, both directions … 4. persisted split relaunch with a stored extreme value, else record a note.
+
+### 改动（只改 `apps/desktop/e2e/titlebar-narrow.spec.ts`）
+- 新增几个辅助函数：
+  - `panes`：阅读区是分隔条的前一个兄弟元素，对话区是「AI 面板」；
+  - `dragSplitter`：用 page.mouse 真实拖动；
+  - `resizeTo`：最大化，失败时铺满工作区；
+  - `launch`：可以复用同一个 userData 目录重启应用。
+- 第 2、3、4 项的软断言、截图和 `splitter-<平台>.json`。没有写死 924。
+- 持久化：在 localStorage 里找值等于当前对话区宽度的 key（实测 `point.chatWidth`），写入 5000 和 0，等 3 秒让它写到磁盘，再重启应用。重启后会核对值还在不在；不在的话改用重新加载页面并记录。第一次没等这 3 秒，值没保存下来，所以加了等待。
+
+### 验证（本地 Linux xvfb，minWidth 900）
+- lint 和 tsc 通过。e2e 全量 36 项通过、1 项失败（本用例，预期失败），0 跳过。
+- 拖动：
+  - 1024：向左拖后阅读区 140、对话区 640 → 失败；向右拖后阅读区 460、对话区 320 → 通过。
+  - 工作区（1279）：向左拖后阅读区 395、对话区 640；向右拖后阅读区 715、对话区 320。
+- 缩窗后重新限制：
+  - 对话区先拖到最宽：缩到 900 后阅读区 16、对话区 640 → 失败；
+  - 对话区先拖到最窄：缩到 900 后阅读区 336、对话区 320 → 阅读区失败。
+  - 两种情况都没有横向溢出。
+- 持久化（重启后值还在）：
+  - 5000：阅读区 16、对话区 640 → 失败；
+  - 0：阅读区 336、对话区 320 → 阅读区失败。
