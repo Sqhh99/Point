@@ -56,7 +56,8 @@ const REASONS: Record<string, string> = {
 const stripIpcPrefix = (m: string) => m.replace(/^Error invoking remote method '[^']+': (Error: )?/, "");
 
 /** Mermaid's toggle buttons and drawn SVG are UI, not answer text. */
-const NOT_TEXT = ".mermaid-toggle, .mermaid-figure, .mermaid-failed";
+// KaTeX glyphs are not source characters: the map (rendered-map) skips math the same way.
+const NOT_TEXT = ".mermaid-toggle, .mermaid-figure, .mermaid-failed, .katex";
 
 /** Visible text of `md` before and inside `range`, char by char from the DOM (whitespace kept). */
 function visibleAround(md: HTMLElement, range: Range): { before: string; selected: string } {

@@ -543,6 +543,97 @@ test.describe("per-conversation model and effort", () => {
     expect(b.quote).toBe(b.slice);
     expect(b.quote).toBe("与 [链接文字](https://example.com/docs/page) 的一");
   });
+
+  test("formulas render with local KaTeX ($…$, \\(…\\), \\[…\\], $$…$$); branch selection skips math or returns no anchor", async () => {
+    const win = await app.firstWindow();
+    const input = win.getByPlaceholder(/问点什么/);
+    await input.fill("MATH-PROBE 解释一下这个公式");
+    await win.getByRole("button", { name: "发送", exact: true }).click();
+    const answer = win.locator(".msg.assistant").filter({ hasText: "结论" }).last();
+    await expect(answer.getByRole("button", { name: "插入笔记" })).toBeVisible({ timeout: 15_000 });
+    const md = answer.locator(".markdown");
+    await expect(md.locator(".katex")).toHaveCount(5);
+    await expect(md.locator(".katex-display")).toHaveCount(2);
+    await expect(md.locator("h2 .katex")).toHaveCount(1);
+    // No raw TeX or delimiters left in what the user sees (MathML annotations are not visible text).
+    const shown = await md.evaluate((el) => {
+      const c = el.cloneNode(true) as HTMLElement;
+      c.querySelectorAll(".katex-mathml").forEach((n) => n.remove());
+      return c.textContent ?? "";
+    });
+    for (const raw of ["$", "\\dfrac", "\\sqrt", "\\(", "\\[", "\\frac"]) expect(shown).not.toContain(raw);
+    // KaTeX fonts come from the app bundle (CSP unchanged: default-src 'self'), not a CDN.
+    const fonts = await win.evaluate(async () => {
+      await document.fonts.ready;
+      const loaded = [...document.fonts].filter((f) => f.family.replace(/"/g, "").startsWith("KaTeX") && f.status === "loaded");
+      const csp = document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute("content") ?? "";
+      const remote = performance.getEntriesByType("resource").filter((r) => /^https?:/.test(r.name)).map((r) => r.name);
+      return { loaded: loaded.length, csp, remote };
+    });
+    expect(fonts.loaded).toBeGreaterThan(0);
+    expect(fonts.csp).toBe("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' point-capture:");
+    expect(fonts.remote).toEqual([]);
+    await answer.screenshot({ path: join(results, "math-answer.png") });
+    await win.emulateMedia({ colorScheme: "dark" });
+    await answer.screenshot({ path: join(results, "math-answer-dark.png") });
+    await win.emulateMedia({ colorScheme: "light" });
+
+    const bar = win.getByRole("toolbar", { name: "回答选区操作" });
+    const select = (from: string, to: string | null) =>
+      md.evaluate(
+        (el, [a, b]) => {
+          const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+          const find = (needle: string) => {
+            for (let n = walker.nextNode() as Text | null; n; n = walker.nextNode() as Text | null) {
+              if (n.parentElement?.closest(".katex")) continue;
+              const i = n.data.indexOf(needle);
+              if (i >= 0) return { n, i };
+            }
+            throw new Error("not found: " + needle);
+          };
+          const s = find(a!);
+          walker.currentNode = el;
+          const e = b ? find(b) : { n: s.n, i: s.i + a!.length };
+          const range = document.createRange();
+          range.setStart(s.n, s.i);
+          range.setEnd(e.n, b ? e.i + b.length : e.i);
+          const sel = window.getSelection()!;
+          sel.removeAllRanges();
+          sel.addRange(range);
+          el.closest(".msg.assistant")!.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+          return sel.toString();
+        },
+        [from, to] as const
+      );
+    // Plain text after several formulas still aligns: 追问分支 opens, anchor = source slice.
+    expect(await select("来自正弦均方根", null)).toBe("来自正弦均方根");
+    await bar.getByRole("button", { name: "追问分支" }).click();
+    await expect(win.getByTestId("branch-draft")).toContainText("追问分支：「来自正弦均方根」");
+    await input.fill("为什么是均方根？");
+    await win.getByRole("button", { name: "发送", exact: true }).click();
+    await expect(win.getByTestId("crumbs")).toContainText("「来自正弦均方根」");
+    const b = await lastBranch(win);
+    expect(b.selection).toBe("来自正弦均方根");
+    expect(b.quote).toBe(b.slice);
+    expect(b.quote).toBe("来自正弦均方根");
+    await win.getByTestId("crumbs").getByRole("button", { name: "主线" }).click();
+    // A selection spanning a formula has no safe source anchor: no 追问分支 bar.
+    const ans = win.locator(".msg.assistant").filter({ hasText: "结论" }).first().locator(".markdown");
+    await expect(ans.locator(".katex")).toHaveCount(5);
+    const across = await ans.evaluate((el) => {
+      const p = [...el.querySelectorAll("p")].find((x) => x.textContent!.includes("是峰值幅度"))!;
+      const range = document.createRange();
+      range.setStart(p.firstChild!, 0);
+      range.setEnd(p.lastChild!, Math.min(4, (p.lastChild as Text).data?.length ?? 0));
+      const sel = window.getSelection()!;
+      sel.removeAllRanges();
+      sel.addRange(range);
+      el.closest(".msg.assistant")!.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+      return !!p.querySelector(".katex") && sel.toString().length > 0;
+    });
+    expect(across).toBe(true);
+    await expect(bar).toHaveCount(0);
+  });
 });
 
 test.describe("preset fallback notice", () => {
