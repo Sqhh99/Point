@@ -64,6 +64,14 @@ jobs:
           path: apps/desktop/test-results
           retention-days: 14
           if-no-files-found: ignore
+      - name: Upload e2e screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots-${{ matrix.os }}
+          path: apps/desktop/test-results/screenshots
+          retention-days: 14
+          if-no-files-found: ignore
 
   package:
     name: package (${{ matrix.os }})
