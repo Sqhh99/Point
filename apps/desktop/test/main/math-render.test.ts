@@ -52,3 +52,26 @@ describe("chat math rendering", () => {
     expect((html.match(/class="katex"/g) ?? []).length).toBe(1);
   });
 });
+
+describe("inline-only \\dfrac → \\frac (render time)", () => {
+  const strip = (h: string) => h.replace(/<annotation[\s\S]*?<\/annotation>/g, "");
+  it("inline \\dfrac renders exactly like inline \\frac; the TeX annotation keeps \\dfrac", () => {
+    const d = render("a $\\dfrac{P}{\\sqrt{2}}$ b").html;
+    const f = render("a $\\frac{P}{\\sqrt{2}}$ b").html;
+    expect(strip(d)).toBe(strip(f));
+    expect(d).toContain("\\dfrac{P}{\\sqrt{2}}</annotation>");
+  });
+  it("display \\dfrac is untouched (still display style)", () => {
+    const d = render("$$\n\\dfrac{P}{2}\n$$").html;
+    expect(d).toContain("katex-display");
+    expect(d).toContain("\\dfrac{P}{2}</annotation>");
+    // Display \\dfrac and inline \\frac differ (the macro is not applied to display math).
+    expect(strip(d)).not.toBe(strip(render("$\\frac{P}{2}$").html));
+  });
+  it("prices are not math: '价格 $5 和 $10 都行。' keeps both $ as text", () => {
+    const { src, spans, html } = render("价格 $5 和 $10 都行。");
+    expect(spans).toEqual([]);
+    expect(src).toBe("价格 $5 和 $10 都行。");
+    expect(html).not.toContain("katex");
+  });
+});

@@ -6,5 +6,5 @@
     "jsx": "react-jsx",
     "paths": { "@point/core": ["../../packages/core/src/index.ts"], "@point/core/relocate": ["../../packages/core/src/docs/relocate.ts"], "@point/core/tree": ["../../packages/core/src/conversations/tree.ts"], "@point/core/rendered-map": ["../../packages/core/src/conversations/rendered-map.ts"] }
   },
-  "include": ["src", "e2e", "test", "vitest.config.ts", "../../packages/core/src/**/*.d.ts", "electron.vite.config.ts", "playwright.config.ts"]
+  "include": ["src", "e2e", "test", "vitest.config.ts", "../../packages/core/src/**/*.d.ts", "electron.vite.config.ts", "vite-assets.ts", "playwright.config.ts"]
 }

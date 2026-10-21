@@ -20,6 +20,10 @@ export const FAKE_XSS_ANSWER =
 export const FAKE_MATH_ANSWER =
   "## 有效声压：$p_e = \\dfrac{P}{\\sqrt{2}}$\n\n其中 $P$ 是峰值幅度，\\(\\sqrt{2}\\) 来自正弦均方根。\n\n\\[\nL = 20\\lg\\frac{p}{p_0}\n\\]\n\n$$\nI = \\frac{p^2}{\\rho c}\n$$\n\n结论：声压级按对数计算。\n";
 
+/** Returned when the prompt contains TYPO-PROBE: headings with math, prices, inline/display \dfrac, \bigg, an error. */
+export const FAKE_TYPO_ANSWER =
+  "# 标题里的公式 $\\dfrac{a}{b}$\n\n## 二级标题\n\n价格 $5 和 $10 都行。\n\n普通一行文字，作为行高基准。\n\n行内分式 $\\dfrac{P}{\\sqrt{2}}$ 在这一行。\n\n括号 $\\bigg( x \\bigg)$ 用到 Size 字体。\n\n$$\n\\dfrac{P}{\\sqrt{2}}\n$$\n\n$$\nS = \\sum_{i=1}^{n} \\left( a_i b_i + c_i d_i + e_i f_i + g_i h_i + p_i q_i + r_i s_i + t_i u_i + v_i w_i + x_i y_i \\right)\n$$\n\n错误公式 $\\frac{1}{$ 在这里。\n";
+
 /** Returned when the prompt contains FORMAT-PROBE: list items mixing bold, inline code and a link. */
 export const FAKE_FORMAT_ANSWER =
   "格式探针：\n\n" +
@@ -43,7 +47,7 @@ export class FakeProvider implements LLMProvider {
     const marksAnswer = parts
       ? `**模拟回答**：已收到 ${parts.filter((p) => p.type === "text" && p.text.startsWith("标记 ")).length} 个标记（图片 ${parts.filter((p) => p.type === "image").length} 张）。`
       : null;
-    const answer = marksAnswer ?? (prompt.includes("XSS-PROBE") ? FAKE_XSS_ANSWER : prompt.includes("FORMAT-PROBE") ? FAKE_FORMAT_ANSWER : prompt.includes("MATH-PROBE") ? FAKE_MATH_ANSWER : last?.images?.length ? FAKE_IMAGE_ANSWER : FAKE_ANSWER);
+    const answer = marksAnswer ?? (prompt.includes("XSS-PROBE") ? FAKE_XSS_ANSWER : prompt.includes("FORMAT-PROBE") ? FAKE_FORMAT_ANSWER : prompt.includes("MATH-PROBE") ? FAKE_MATH_ANSWER : prompt.includes("TYPO-PROBE") ? FAKE_TYPO_ANSWER : last?.images?.length ? FAKE_IMAGE_ANSWER : FAKE_ANSWER);
     const chunks = answer.match(/[\s\S]{1,12}/g) ?? [];
     for (const text of chunks) {
       if (opts.signal?.aborted) {

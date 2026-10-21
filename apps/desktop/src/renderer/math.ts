@@ -6,6 +6,8 @@ import { mathSpans, type MathSpan } from "@point/core/rendered-map";
 const OPEN = "\uE000";
 const CLOSE = "\uE001";
 const TOKEN = /\uE000(\d+)\uE001/g;
+/** Render-time macros for inline (displayMode: false) math only. */
+export const INLINE_MACROS: Readonly<Record<string, string>> = { "\\dfrac": "\\frac" };
 
 /**
  * Replace every formula of the answer with a token before markdown parsing. The formulas come from
@@ -30,6 +32,9 @@ export function fillMath(html: string, spans: MathSpan[]): string {
     if (!s) return "";
     return katex.renderToString(s.tex, {
       displayMode: s.display,
+      // Inline only: \dfrac would make the line tall; render it as \frac. Display math keeps \dfrac. The
+      // TeX source (message text, MathML annotation, branch anchors) is unchanged.
+      macros: s.display ? {} : { ...INLINE_MACROS },
       throwOnError: false,
       trust: false,
       strict: "ignore",
