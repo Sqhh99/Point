@@ -214,8 +214,13 @@ test("title bar at narrow widths: no wrapping, 打开 ▾ collapses to icon + �
   expect(gMin.readerWidth, "reader ≥ 360 at the minimum window").toBeGreaterThanOrEqual(360);
   if (gMin.chatWidth !== null) expect(gMin.chatWidth, "chat ≥ 320 at the minimum window").toBeGreaterThanOrEqual(320);
   await shoot("min");
-  // The ⋯ menu holds what no longer fits, 适合宽度 first.
-  if (gMin.toolbar.level >= 3) {
+  // The ⋯ menu holds what no longer fits, 适合宽度 first. The reader never gets narrower than 360px, so
+  // squeeze the toolbar itself (as a longer sheet name or wider system font would) to reach that stage.
+  await win.getByTestId("reader-bar").evaluate((el) => (el.style.maxWidth = "300px"));
+  await expect.poll(() => win.getByTestId("reader-bar").getAttribute("data-collapse")).toMatch(/^[34]$/);
+  const gSqueezed = await geometry();
+  expect(gSqueezed.toolbar.scrollWidth, "squeezed toolbar: no overflow").toBeLessThanOrEqual(gSqueezed.toolbar.clientWidth);
+  {
     await win.getByTestId("reader-more").click();
     const items = await win.getByTestId("reader-bar").getByRole("menuitem").allTextContents();
     expect(items[0]).toBe("适合宽度");
@@ -223,6 +228,8 @@ test("title bar at narrow widths: no wrapping, 打开 ▾ collapses to icon + �
     await win.getByTestId("reader-bar").getByRole("menuitem", { name: "适合宽度" }).click();
     await expect(win.getByTestId("reader-bar").getByRole("menu")).toHaveCount(0);
   }
+  await win.getByTestId("reader-bar").evaluate((el) => (el.style.maxWidth = ""));
+  await expect.poll(() => win.getByTestId("reader-bar").getAttribute("data-collapse")).toBe(String(gMin.toolbar.level));
   // Narrower than the app allows (simulates large Windows text scaling): collapses, nothing else gives way.
   await resize([mac ? 600 : 440, 600]);
   check(await geometry(), "forced narrow", true);
