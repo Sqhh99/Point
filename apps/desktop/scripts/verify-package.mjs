@@ -2,7 +2,8 @@
 // Verifies packaged builds in release/: for every unpacked app (and, on macOS, every dmg;
 // on Windows, the native-arch Inno Setup installer, installed then uninstalled) check that better_sqlite3.node exists,
 // is unpacked from the asar, matches the target arch, and that the loader deps are in the
-// asar. Then launch every native-arch build with POINT_SMOKE_OUT to open a real DB.
+// asar; likewise that the only @napi-rs/canvas skia binary matches the target arch.
+// Then launch every native-arch build with POINT_SMOKE_OUT to open a real DB.
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, closeSync, statSync } from "node:fs";
 import { Buffer } from "node:buffer";
@@ -60,7 +61,7 @@ function findFiles(dir, name, acc = []) {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     const p = join(dir, e.name);
     if (e.isDirectory() && !e.isSymbolicLink()) findFiles(p, name, acc);
-    else if (e.name === name) acc.push(p);
+    else if (name === null || e.name === name) acc.push(p);
   }
   return acc;
 }
@@ -70,6 +71,14 @@ function checkApp(label, resources, exe, arch) {
   const nodes = findFiles(join(resources, "app.asar.unpacked"), "better_sqlite3.node");
   if (nodes.length === 0) return fail(`${label}: better_sqlite3.node not found in app.asar.unpacked`);
   for (const n of nodes) {
+    const got = binaryArch(n);
+    if (got === arch) ok(`${label}: ${n.slice(resources.length + 1)} is ${got}`);
+    else fail(`${label}: ${n} is ${got}, expected ${arch}`);
+  }
+  // pdfjs-dist's optional @napi-rs/canvas: exactly one skia binary, of the target arch.
+  const skia = findFiles(join(resources, "app.asar.unpacked"), null).filter((f) => /[\\/]skia\.[^\\/]+\.node$/.test(f));
+  if (skia.length !== 1) fail(`${label}: expected 1 @napi-rs/canvas skia binary, found ${skia.length}: ${skia.map((f) => f.slice(resources.length + 1)).join(", ")}`);
+  for (const n of skia) {
     const got = binaryArch(n);
     if (got === arch) ok(`${label}: ${n.slice(resources.length + 1)} is ${got}`);
     else fail(`${label}: ${n} is ${got}, expected ${arch}`);
