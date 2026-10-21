@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { CHAT_MIN, LIBRARY_COLLAPSED_WIDTH, LIBRARY_WIDTH, READER_MIN, SPLITTER_WIDTH, WINDOW_MIN_WIDTH } from "../../src/shared/layout-sizes.js";
-import { CHAT_MIN as LAYOUT_CHAT_MIN, deskVars } from "../../src/renderer/layout.js";
+import { CHAT_MIN as LAYOUT_CHAT_MIN, clampChatWidth, deskVars } from "../../src/renderer/layout.js";
 import { COLLAPSE_LEVELS, collapseState } from "../../src/renderer/viewers/ReaderBar.js";
 
 describe("desk layout sizes", () => {
@@ -35,5 +35,30 @@ describe("reader toolbar collapse order", () => {
       { actionsIcon: true, fitIcon: true, fitInMenu: true, actionsInMenu: false },
       { actionsIcon: true, fitIcon: true, fitInMenu: true, actionsInMenu: true }
     ]);
+  });
+});
+
+describe("splitter clamp (reader ≥ READER_MIN, chat ≥ CHAT_MIN)", () => {
+  const open = (width: number) => ({ width, libraryOpen: true });
+  it("dragging the chat wider stops where the reader would drop below 360", () => {
+    expect(clampChatWidth(9999, open(1280))).toBe(Math.min(640, 1280 - LIBRARY_WIDTH - SPLITTER_WIDTH - READER_MIN));
+    expect(clampChatWidth(9999, open(WINDOW_MIN_WIDTH))).toBe(CHAT_MIN);
+    expect(clampChatWidth(9999, open(2000))).toBe(640); // CHAT_MAX still applies
+  });
+  it("dragging the chat narrower stops at 320", () => {
+    expect(clampChatWidth(0, open(1280))).toBe(CHAT_MIN);
+  });
+  it("a shrinking window re-clamps the chat first; at the minimum both minimums hold exactly", () => {
+    const chat = clampChatWidth(640, open(WINDOW_MIN_WIDTH));
+    expect(chat).toBe(CHAT_MIN);
+    expect(WINDOW_MIN_WIDTH - LIBRARY_WIDTH - SPLITTER_WIDTH - chat).toBe(READER_MIN);
+    for (let w = WINDOW_MIN_WIDTH; w <= 1600; w += 37) {
+      const c = clampChatWidth(640, open(w));
+      expect(c).toBeGreaterThanOrEqual(CHAT_MIN);
+      expect(w - LIBRARY_WIDTH - SPLITTER_WIDTH - c).toBeGreaterThanOrEqual(READER_MIN);
+    }
+  });
+  it("collapsed library frees its width for the chat", () => {
+    expect(clampChatWidth(9999, { width: WINDOW_MIN_WIDTH, libraryOpen: false })).toBe(WINDOW_MIN_WIDTH - LIBRARY_COLLAPSED_WIDTH - SPLITTER_WIDTH - READER_MIN);
   });
 });

@@ -28,7 +28,8 @@ export function TitleBar(p: Props) {
             <svg className="titlebar-open-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
               <path d="M1.5 3.5h4l1.5 1.5h7.5v8h-13z" />
             </svg>
-            <span className="titlebar-open-label">打开</span>
+            {/* One text node for the full label (a separate ▾ node in a fallback font sits on another baseline). */}
+            <span className="titlebar-open-label">打开 ▾</span>
             <span className="titlebar-open-caret" aria-hidden="true">▾</span>
           </button>
           {menu && (

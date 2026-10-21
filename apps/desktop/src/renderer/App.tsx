@@ -49,13 +49,21 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // The window (or the library) changed: the chat gives way first so the reader keeps READER_MIN.
+  useEffect(() => {
+    const fit = () => setChatWidth((w) => clampChatWidth(w, { width: window.innerWidth, libraryOpen }));
+    fit();
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, [libraryOpen]);
+
   const startResize = (e: React.PointerEvent) => {
     drag.current = { x: e.clientX, w: chatWidth };
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
   };
   const onResize = (e: React.PointerEvent) => {
     if (!drag.current) return;
-    setChatWidth(clampChatWidth(drag.current.w + drag.current.x - e.clientX));
+    setChatWidth(clampChatWidth(drag.current.w + drag.current.x - e.clientX, { width: window.innerWidth, libraryOpen }));
   };
   const endResize = () => {
     drag.current = null;

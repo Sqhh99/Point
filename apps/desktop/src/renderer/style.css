@@ -70,7 +70,7 @@ button.link.active { color: var(--accent); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 .shell { display: grid; grid-template-rows: 36px minmax(0, 1fr) 24px; grid-template-columns: minmax(0, 1fr); height: 100%; }
-.titlebar { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; height: 36px; background: var(--panel); border-bottom: 1px solid var(--line); font-size: 13px; -webkit-app-region: drag; user-select: none; }
+.titlebar { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(min-content, 1fr); align-items: center; height: 36px; background: var(--panel); border-bottom: 1px solid var(--line); font-size: 13px; -webkit-app-region: drag; user-select: none; }
 .titlebar.mac .titlebar-left { padding-left: 78px; }
 /* Left: never squeezes the open button (it collapses to icon + ▾ instead); the workspace name ellipsizes. */
 .titlebar-left { display: flex; align-items: center; align-self: stretch; gap: 8px; padding-left: 12px; padding-right: 12px; min-width: 0; container: titlebar-left / inline-size; }
@@ -82,13 +82,14 @@ button.link.active { color: var(--accent); }
 .titlebar-menu { position: relative; }
 .titlebar button { white-space: nowrap; }
 .titlebar button svg { flex-shrink: 0; }
-.titlebar-open { height: 24px; padding: 0 8px; border-radius: 6px; display: inline-flex; align-items: center; align-self: center; gap: 4px; flex-shrink: 0; white-space: nowrap; line-height: 1; }
-.titlebar-open-caret { font-size: 11px; }
+.titlebar-open { height: 24px; padding: 0 8px; border-radius: 6px; display: inline-flex; align-items: center; align-self: center; gap: 4px; flex-shrink: 0; white-space: nowrap; }
+.titlebar-open-caret { display: none; }
 /* Collapsed: icon + ▾ only, hit area ≥ 32×32 (the bar is 36px tall). The left cell's content box excludes
    the 12px (78px on mac, traffic lights) inset and the 12px gap before the document title, so one
    threshold fits every platform: below it the workspace name could not keep 2em next to the full button. */
 @container titlebar-left (max-width: 130px) {
   .titlebar-open-label { display: none; }
+  .titlebar-open-caret { display: inline; }
   .titlebar-open { min-width: 32px; height: 32px; padding: 0 6px; justify-content: center; }
 }
 .menu { position: absolute; top: 28px; left: 0; z-index: 20; min-width: 140px; padding: 4px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; display: flex; flex-direction: column; }

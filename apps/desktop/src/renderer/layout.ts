@@ -17,11 +17,17 @@ export const deskVars = (chatWidth: number) =>
 /** Plain decimal only: hex, binary and octal literals ("0x200") are treated as invalid. */
 const DECIMAL = /^\s*[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?\s*$/i;
 
-/** Clamp a chat panel width into [CHAT_MIN, CHAT_MAX]; anything non-numeric falls back to the default. */
-export function clampChatWidth(v: unknown): number {
+/**
+ * Clamp a chat panel width into [CHAT_MIN, CHAT_MAX]; anything non-numeric falls back to the default.
+ * With the desk width (and whether the library is open), the upper bound also leaves the reader
+ * READER_MIN: the splitter can't squeeze the reader, and a window resize re-clamps the chat first.
+ * CHAT_MIN wins if both can't hold (only below the window minimum, which main forbids).
+ */
+export function clampChatWidth(v: unknown, desk?: { width: number; libraryOpen: boolean }): number {
   const n = typeof v === "string" && DECIMAL.test(v) ? Number(v) : typeof v === "number" ? v : NaN;
-  if (!Number.isFinite(n)) return CHAT_DEFAULT;
-  return Math.round(Math.min(CHAT_MAX, Math.max(CHAT_MIN, n)));
+  const base = Number.isFinite(n) ? n : CHAT_DEFAULT;
+  const room = desk ? desk.width - (desk.libraryOpen ? LIBRARY_WIDTH : LIBRARY_COLLAPSED_WIDTH) - SPLITTER_WIDTH - READER_MIN : Infinity;
+  return Math.round(Math.max(CHAT_MIN, Math.min(CHAT_MAX, room, base)));
 }
 
 /** True only for ⌘\ on macOS or Ctrl+\ elsewhere; the other platform's modifier and key auto-repeat never toggle. */

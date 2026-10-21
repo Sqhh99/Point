@@ -73,7 +73,7 @@ export function ReaderBar({ title, switcher, zoom, onZoom, onFitWidth, loading, 
     if (el && level < COLLAPSE_LEVELS && el.scrollWidth > el.clientWidth + 0.5) setLevel(level + 1);
   });
   const c = collapseState(level);
-  const fit = onFitWidth ? { id: "fit-width", label: "适合宽度", icon: <IconFitWidth />, onClick: onFitWidth, disabled: loading, testId: "fit-width" } : null;
+  const fit: BarAction | null = onFitWidth ? { id: "fit-width", label: "适合宽度", icon: <IconFitWidth />, onClick: onFitWidth, disabled: loading, testId: "fit-width" } : null;
   const menuItems = [...(fit && c.fitInMenu ? [fit] : []), ...(c.actionsInMenu ? actions : [])];
   const button = (a: BarAction, iconOnly: boolean) => (
     // Disabled buttons swallow hover, so the tooltip lives on the wrapper too.

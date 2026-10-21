@@ -95,7 +95,7 @@ test("title bar at narrow widths: no wrapping, 打开 ▾ collapses to icon + �
       const w = BrowserWindow.getAllWindows()[0]!;
       if (s === "maximized") return w.maximize();
       if (w.isMaximized()) w.unmaximize();
-      w.setMinimumSize(Math.min(s[0], 900), Math.min(s[1], 600));
+      w.setMinimumSize(Math.min(s[0], w.getMinimumSize()[0]!), Math.min(s[1], 600));
       w.setSize(s[0], s[1]);
     }, size);
     if (size !== "maximized") await expect.poll(() => win.evaluate(() => innerWidth)).toBe(size[0]);
@@ -124,14 +124,33 @@ test("title bar at narrow widths: no wrapping, 打开 ▾ collapses to icon + �
         range.selectNodeContents(n);
         for (const rect of range.getClientRects()) if (rect.width > 0) tops.add(Math.round(rect.top));
       }
-      const controls = [...document.querySelectorAll<HTMLElement>(".window-controls button")].map((b) => b.getBoundingClientRect());
+      const controlEls = [...document.querySelectorAll<HTMLElement>(".window-controls button")];
+      const controls = controlEls.map((b) => b.getBoundingClientRect());
+      const tb = q('[data-testid="reader-bar"]');
+      const tbButtons = [...tb.querySelectorAll<HTMLButtonElement>("button")].filter((b) => b.getClientRects().length).map((b) => {
+        const br = b.getBoundingClientRect();
+        const texts = new Set<number>();
+        const tw = document.createTreeWalker(b, NodeFilter.SHOW_TEXT);
+        for (let n = tw.nextNode(); n; n = tw.nextNode()) {
+          const range = document.createRange();
+          range.selectNodeContents(n);
+          for (const rect of range.getClientRects()) if (rect.width > 0) texts.add(Math.round(rect.top));
+        }
+        return { label: b.getAttribute("aria-label") ?? b.textContent!.trim(), text: b.textContent!.trim(), title: b.title, iconOnly: b.classList.contains("icon-only"), left: br.left, right: br.right, width: br.width, height: br.height, lines: texts.size };
+      });
+      const tbr = tb.getBoundingClientRect();
+      const reader = q("main.center").getBoundingClientRect();
+      const chat = document.querySelector(".chat, .ai-panel, aside.chat-panel")?.getBoundingClientRect() ?? null;
       return {
         vw: innerWidth,
         open: { ...r(".titlebar-open").toJSON(), lines: tops.size, aria: open.getAttribute("aria-label"), title: open.title, labelShown: label.getClientRects().length > 0, caretShown: q(".titlebar-open-caret").getClientRects().length > 0 },
         left: r(".titlebar-left").toJSON(),
         leftPad: parseFloat(getComputedStyle(q(".titlebar-left")).paddingLeft),
         title: r(".titlebar-title").toJSON(),
-        controls: controls.map((c) => ({ left: c.left, right: c.right, width: c.width })),
+        controls: controls.map((c, i) => ({ left: c.left, right: c.right, width: c.width, title: controlEls[i]!.title, aria: controlEls[i]!.getAttribute("aria-label") })),
+        toolbar: { left: tbr.left, right: tbr.right, scrollWidth: tb.scrollWidth, clientWidth: tb.clientWidth, level: Number(tb.dataset.collapse), buttons: tbButtons },
+        readerWidth: reader.width,
+        chatWidth: chat?.width ?? null,
         bar: r('[data-testid="titlebar"]').toJSON()
       };
     });
@@ -141,40 +160,79 @@ test("title bar at narrow widths: no wrapping, 打开 ▾ collapses to icon + �
     expect(g.open.right, `${why}: 打开 ▾ inside the left cell`).toBeLessThanOrEqual(g.left.right + 0.5);
     expect(g.open.aria, why).toBe("打开");
     expect(g.open.title, why).toBe("打开");
-    expect(g.open.caretShown, `${why}: ▾ always shown`).toBe(true);
+    expect(g.open.caretShown || g.open.labelShown, `${why}: ▾ always shown`).toBe(true);
     expect(g.open.labelShown, `${why}: label ${collapsed ? "collapsed" : "shown"}`).toBe(!collapsed);
     if (collapsed) {
       expect(g.open.width, why).toBeGreaterThanOrEqual(32);
       expect(g.open.height, why).toBeGreaterThanOrEqual(32);
     }
+    // ≥ 12px from 打开 ▾ to the document title.
+    expect(g.title.left - g.open.right, `${why}: gap 打开 ▾ → title`).toBeGreaterThanOrEqual(12);
     // Drag area: the centre cell keeps ≥ 48px.
     expect(g.title.width, `${why}: drag area`).toBeGreaterThanOrEqual(48);
     if (mac) expect(g.leftPad, `${why}: traffic lights`).toBeGreaterThanOrEqual(72);
     else {
       expect(g.controls, why).toHaveLength(3);
-      for (const c of g.controls) expect(c.width, `${why}: caption button width`).toBe(46);
+      for (const c of g.controls) {
+        expect(c.width, `${why}: caption button width`).toBe(46);
+        expect(c.title, `${why}: caption button tooltip`).toBe(c.aria);
+      }
+      expect(g.controls.map((c) => c.title)).toEqual(["最小化", expect.stringMatching(/^(最大化|还原)$/), "关闭"]);
       expect(g.controls[2]!.right, `${why}: caption buttons flush right`).toBeCloseTo(g.vw, 0);
       expect(g.controls[0]!.left, `${why}: caption buttons clear of the title`).toBeGreaterThanOrEqual(g.title.right - 0.5);
     }
   };
+  // Reader toolbar: nothing wraps, nothing overflows; page switcher and zoom % always visible; icon-only
+  // buttons ≥ 32×32 with tooltip = aria-label.
+  const checkToolbar = (g: Awaited<ReturnType<typeof geometry>>, why: string) => {
+    expect(g.toolbar.scrollWidth, `${why}: toolbar overflow (level ${g.toolbar.level})`).toBeLessThanOrEqual(g.toolbar.clientWidth);
+    for (const b of g.toolbar.buttons) {
+      expect(b.lines, `${why}: toolbar “${b.label}” wraps`).toBeLessThanOrEqual(1);
+      expect(b.right, `${why}: toolbar “${b.label}” inside`).toBeLessThanOrEqual(g.toolbar.right + 0.5);
+      if (b.iconOnly) {
+        expect(b.width, `${why}: “${b.label}” width`).toBeGreaterThanOrEqual(32);
+        expect(b.height, `${why}: “${b.label}” height`).toBeGreaterThanOrEqual(32);
+        expect(b.title, `${why}: “${b.label}” tooltip`).toBeTruthy();
+      }
+    }
+    const labels = g.toolbar.buttons.map((b) => b.label);
+    for (const keep of ["上一页", "下一页", "恢复 100%"]) expect(labels, `${why}: ${keep} visible`).toContain(keep);
+  };
   const [minW, minH] = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.getMinimumSize());
   const shoot = async (name: string) => {
-    await win.screenshot({ path: join(shots, `titlebar-${name}-${process.platform}.png`), clip: { x: 0, y: 0, width: await win.evaluate(() => innerWidth), height: 80 } });
+    await win.screenshot({ path: join(shots, `tbfix-${name}-${process.platform}.png`), clip: { x: 0, y: 0, width: await win.evaluate(() => innerWidth), height: 80 } });
     await win.emulateMedia({ colorScheme: "dark" });
-    await win.screenshot({ path: join(shots, `titlebar-${name}-${process.platform}-dark.png`), clip: { x: 0, y: 0, width: await win.evaluate(() => innerWidth), height: 80 } });
+    await win.screenshot({ path: join(shots, `tbfix-${name}-${process.platform}-dark.png`), clip: { x: 0, y: 0, width: await win.evaluate(() => innerWidth), height: 80 } });
     await win.emulateMedia({ colorScheme: "light" });
   };
   // The narrowest real window: full label, one line.
   await resize([minW, Math.max(minH, 600)]);
-  check(await geometry(), `min ${minW}px`, false);
+  const gMin = await geometry();
+  check(gMin, `min ${minW}px`, false);
+  checkToolbar(gMin, `min ${minW}px`);
+  // At the minimum the reader and chat panes are at (at least) their design minimums.
+  expect(gMin.readerWidth, "reader ≥ 360 at the minimum window").toBeGreaterThanOrEqual(360);
+  if (gMin.chatWidth !== null) expect(gMin.chatWidth, "chat ≥ 320 at the minimum window").toBeGreaterThanOrEqual(320);
   await shoot("min");
+  // The ⋯ menu holds what no longer fits, 适合宽度 first.
+  if (gMin.toolbar.level >= 3) {
+    await win.getByTestId("reader-more").click();
+    const items = await win.getByTestId("reader-bar").getByRole("menuitem").allTextContents();
+    expect(items[0]).toBe("适合宽度");
+    await win.screenshot({ path: join(shots, `toolbar-menu-min-${process.platform}.png`), clip: { x: 0, y: 0, width: minW, height: 200 } });
+    await win.getByTestId("reader-bar").getByRole("menuitem", { name: "适合宽度" }).click();
+    await expect(win.getByTestId("reader-bar").getByRole("menu")).toHaveCount(0);
+  }
   // Narrower than the app allows (simulates large Windows text scaling): collapses, nothing else gives way.
-  await resize([mac ? 600 : 520, 600]);
+  await resize([mac ? 600 : 440, 600]);
   check(await geometry(), "forced narrow", true);
   await shoot("narrowest");
   await win.getByTestId("titlebar").getByRole("button", { name: "打开" }).hover();
   await resize("maximized");
-  check(await geometry(), "maximized", false);
+  const gMax = await geometry();
+  check(gMax, "maximized", false);
+  checkToolbar(gMax, "maximized");
+  expect(gMax.toolbar.level, "maximized: toolbar fully labelled").toBe(0);
   await shoot("maximized");
   await app.evaluate(({ BrowserWindow }, [w, h]) => {
     const bw = BrowserWindow.getAllWindows()[0]!;
