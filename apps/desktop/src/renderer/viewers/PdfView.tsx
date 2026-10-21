@@ -327,10 +327,13 @@ function closeLineGaps(layer: HTMLElement) {
       }
     }
     if (!(pitch > h && pitch < h * 1.8)) continue;
-    const lh = pitch / b.size;
+    // 1px more than the pitch: adjacent lines overlap by a pixel instead of leaving a rounding seam. The
+    // selection is solid inside the layer (opacity is on the layer), so the overlap is not darker.
+    const box = pitch + 1;
+    const lh = box / b.size;
     b.s.style.lineHeight = String(lh);
     b.s.style.marginTop = `${-(lh - h / b.size) / 2}em`;
-    bands.push({ b, top: b.top - (pitch - h) / 2, bottom: b.bottom + (pitch - h) / 2 });
+    bands.push({ b, top: b.top - (box - h) / 2, bottom: b.bottom + (box - h) / 2 });
   }
   // Smaller spans inside a line (superscripts, footnote marks) take the band of the nearest full-size span
   // of that line, so the selection has no hole around them. Their glyphs are transparent, so moving the
