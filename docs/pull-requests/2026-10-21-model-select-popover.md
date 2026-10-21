@@ -13,18 +13,18 @@ v0.2.2 批次，问题 (f)。不改版本号。
 - **「去设置」**：列表底部分隔线下方的独立按钮，高度 ≥ 32、全宽；点击关面板并打开设置。未配置空态同样改为该按钮（不再用文字链）。
 - **顺手**：标题栏 / 阅读工具栏的 `.menu` 改为 `--bg-elevated` + 1px `--border` + 圆角 8 + 阴影（与 elevated 菜单一致）。
 
-## 截图（提交 `PLACEHOLDER`）
+## 截图（提交 `1cba81f9e4fdece130a9654f9806f177779e4677`）
 打开面板（浅色）：
 
-![](https://raw.githubusercontent.com/Sqhh99/Point/PLACEHOLDER/docs/assets/pr/2026-10-21-model-select-popover.png)
+![](https://raw.githubusercontent.com/Sqhh99/Point/1cba81f9e4fdece130a9654f9806f177779e4677/docs/assets/pr/2026-10-21-model-select-popover.png)
 
 打开面板（暗色）：
 
-![](https://raw.githubusercontent.com/Sqhh99/Point/PLACEHOLDER/docs/assets/pr/2026-10-21-model-select-popover-dark.png)
+![](https://raw.githubusercontent.com/Sqhh99/Point/1cba81f9e4fdece130a9654f9806f177779e4677/docs/assets/pr/2026-10-21-model-select-popover-dark.png)
 
 选中项打勾 + 触发器：
 
-![](https://raw.githubusercontent.com/Sqhh99/Point/PLACEHOLDER/docs/assets/pr/2026-10-21-model-select-trigger.png)
+![](https://raw.githubusercontent.com/Sqhh99/Point/1cba81f9e4fdece130a9654f9806f177779e4677/docs/assets/pr/2026-10-21-model-select-trigger.png)
 
 ## 测试计划
 - [x] e2e `docs-and-model.spec.ts` 全部改为 listbox API（`pickModelBar` / `modelOptionCount`）；20 项通过
