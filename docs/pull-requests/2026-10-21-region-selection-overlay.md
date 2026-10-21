@@ -28,24 +28,24 @@ v0.2.2 批次，问题 (e)。不改版本号。
 ### 框选按钮
 `aria-pressed`；按下时浅强调色背景；高度 ≥ 32px。
 
-## 截图（提交 `PLACEHOLDER`）
+## 截图（提交 `a8aef8b961e013bd0d61d5d5c7c52ea9e394c316`）
 松手后虚线仍在（浅 / 暗）：
 
-![](https://raw.githubusercontent.com/Sqhh99/Point/PLACEHOLDER/docs/assets/pr/2026-10-21-region-pending.png)
+![](https://raw.githubusercontent.com/Sqhh99/Point/a8aef8b961e013bd0d61d5d5c7c52ea9e394c316/docs/assets/pr/2026-10-21-region-pending.png)
 
-![](https://raw.githubusercontent.com/Sqhh99/Point/PLACEHOLDER/docs/assets/pr/2026-10-21-region-pending-dark.png)
+![](https://raw.githubusercontent.com/Sqhh99/Point/a8aef8b961e013bd0d61d5d5c7c52ea9e394c316/docs/assets/pr/2026-10-21-region-pending-dark.png)
 
 点击区域标记落到原框（浅 / 暗）：
 
-![](https://raw.githubusercontent.com/Sqhh99/Point/PLACEHOLDER/docs/assets/pr/2026-10-21-region-confirm.png)
+![](https://raw.githubusercontent.com/Sqhh99/Point/a8aef8b961e013bd0d61d5d5c7c52ea9e394c316/docs/assets/pr/2026-10-21-region-confirm.png)
 
-![](https://raw.githubusercontent.com/Sqhh99/Point/PLACEHOLDER/docs/assets/pr/2026-10-21-region-confirm-dark.png)
+![](https://raw.githubusercontent.com/Sqhh99/Point/a8aef8b961e013bd0d61d5d5c7c52ea9e394c316/docs/assets/pr/2026-10-21-region-confirm-dark.png)
 
 点击文字标记高亮（浅 / 暗）：
 
-![](https://raw.githubusercontent.com/Sqhh99/Point/PLACEHOLDER/docs/assets/pr/2026-10-21-text-confirm.png)
+![](https://raw.githubusercontent.com/Sqhh99/Point/a8aef8b961e013bd0d61d5d5c7c52ea9e394c316/docs/assets/pr/2026-10-21-text-confirm.png)
 
-![](https://raw.githubusercontent.com/Sqhh99/Point/PLACEHOLDER/docs/assets/pr/2026-10-21-text-confirm-dark.png)
+![](https://raw.githubusercontent.com/Sqhh99/Point/a8aef8b961e013bd0d61d5d5c7c52ea9e394c316/docs/assets/pr/2026-10-21-text-confirm-dark.png)
 
 ## 测试计划
 - [x] core：`RegionAnchor` 带 rects 往返；旧区域锚点无 rects 仍解析；非法 rects 拒绝
