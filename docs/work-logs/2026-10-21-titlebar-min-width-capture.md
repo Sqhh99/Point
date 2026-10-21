@@ -42,3 +42,28 @@
 ## 5. 遗留事项
 - CI 的 e2e 只在失败时上传 `apps/desktop/test-results`（`if: failure()`），绿灯时截图不会成为产物。本 PR 不改 workflow；需要 运维发布 把 `.github/workflows/ci.yml` 里「Upload e2e trace and screenshots on failure」一步的 `if: failure()` 改成 `if: always()`（path 已是 `apps/desktop/test-results`）。在那之前只能从 CI 日志的 `TITLEBAR-MEASURE` 行读数值。
 - 阅读工具栏在 900px 和 1024px 下溢出、按钮换行，是 main 上的现状，只记录未断言；修复后可以改为硬断言。
+
+## 6. 追加（2026-10-21）：合并 main 2da2ede、截图目录、设计规则断言
+
+### 请求
+> merge main 2da2ede into the #68 branch (merge commit, no force-push), make sure all screenshots (narrowest width AND maximized, both OS) are written under apps/desktop/test-results/screenshots, push once.
+
+> encode UI designer's narrow-titlebar rules as assertions at minimum width on both OS … It is expected these fail on main until the product fix lands; do not skip.
+
+团队判定：第一次 CI 在 Windows 和 macOS 上 `titlebar-narrow.spec.ts:172` 失败（最小宽度下「打开 ▾」换行），这是产品缺陷。该断言保持原样，不放宽、不跳过、不修改。
+
+### 改动
+- 用 merge commit 合入 main `2da2ede`（#67：CI 每次都把 `apps/desktop/test-results/screenshots` 上传为 `e2e-screenshots-<os>`），没有 force-push。
+- 截图和测量 JSON 改为写到 `apps/desktop/test-results/screenshots/`，覆盖最小宽度、1024px、最大化三种状态，文件名带平台。
+- 新增 UI 设计的窄标题栏规则，只在最小宽度下检查，Windows 和 macOS 都跑。用 `expect.soft`，每条规则都会报出自己的测量值。选择器用 role、可访问名和计算样式，不依赖 class 名。
+  - (a) 标题栏按钮的文字不换行：只有一行，文字高度不超过行高 + 1px。
+  - (b) 收起顺序：「打开」变成纯图标之前，其他次要按钮要先变成纯图标；「打开」变成纯图标时，▾ 仍然可见。
+  - (c) 纯图标按钮的点击区域 ≥ 32×32，并且有 aria-label；「打开」的 aria-label 去掉 ▾ 后等于「打开」。title 只记录。
+  - (d) 最宽的一段可拖动区域 ≥ 48px（按计算出的 `-webkit-app-region` 扫描标题栏中线）。Windows：除窗口按钮外，没有控件压在标题栏按钮区上；有 Window Controls Overlay 时用它的几何，否则用应用内窗口按钮的范围。macOS：没有控件进入左侧 72px 的红绿灯区域。
+- 原有的硬断言（第 172 行附近）原样保留，只改了上方的注释，说明在 Windows/macOS 上它会按预期失败。
+
+### 验证（本地 Linux xvfb）
+- `pnpm lint`、`apps/desktop` 的 `tsc --noEmit`：通过。
+- 新用例单独跑通过（Linux 上「打开 ▾」不换行，(a)–(d) 都成立）。e2e 全量（throwaway keyring）37 项通过，0 跳过。
+- Linux 最小宽度的测量值：最宽拖动区 494px；窗口按钮区 762–900px，没有其他控件压在上面；「打开 ▾」是一行，高 24px，不是纯图标。
+- 预期 Windows 和 macOS CI 继续失败，等 功能实现 的修复合入后转绿。

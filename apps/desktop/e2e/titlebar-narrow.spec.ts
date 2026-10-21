@@ -1,20 +1,24 @@
 import { test, expect, _electron as electron, type ElectronApplication, type TestInfo } from "@playwright/test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makePdf } from "../../../packages/core/test/fixtures/make";
 
 // Requires `pnpm build` first. Captures the title bar (and the reader toolbar under it) at the
 // window's minimum size, at 1024px wide and maximized, for design review of the title bar (#65).
-// Screenshots + measurements go to testInfo.outputPath() (apps/desktop/test-results/…) and are
-// attached to the report; the measurements are also printed as one `TITLEBAR-MEASURE` line so they
-// can be read from the CI log.
+// Screenshots + measurements go to apps/desktop/test-results/screenshots/ (CI uploads that folder as
+// e2e-screenshots-<os> on every run, #67) and are attached to the report; the measurements are also
+// printed as one `TITLEBAR-MEASURE` line so they can be read from the CI log.
 //
 // Hard assertions here hold on main today. Measured-only values (no hard assertion yet) are listed
 // in docs/pull-requests/2026-10-21-titlebar-min-width-capture.md and become assertions once #65 merges.
 
 type Win = Awaited<ReturnType<ElectronApplication["firstWindow"]>>;
 let app: ElectronApplication;
+const shots = join(import.meta.dirname, "..", "test-results", "screenshots");
+const WINDOW_CONTROLS = ["最小化", "最大化", "还原", "关闭"];
+/** macOS traffic lights occupy the left of the title bar (designer rule: 72px). */
+const MAC_TRAFFIC_LIGHTS = 72;
 
 const stub = (paths: string[]) =>
   app.evaluate(({ dialog }, filePaths) => {
@@ -89,6 +93,105 @@ const measure = (win: Win) =>
     };
   });
 
+/**
+ * UI designer's narrow-title-bar rules, measured with selectors that don't depend on class names:
+ * buttons by role, the open menu by its accessible name, drag regions by computed -webkit-app-region.
+ */
+const designRules = (win: Win) =>
+  win.evaluate(
+    ({ controls, trafficLights }) => {
+      const tb = document.querySelector<HTMLElement>('[data-testid="titlebar"]') ?? document.querySelector<HTMLElement>("header");
+      if (!tb) return null;
+      const tr = tb.getBoundingClientRect();
+      const shown = (el: Element) => {
+        const cs = getComputedStyle(el);
+        const r = el.getBoundingClientRect();
+        return cs.visibility !== "hidden" && cs.display !== "none" && Number(cs.opacity) > 0 && r.width > 0.5 && r.height > 0.5;
+      };
+      // Text that is actually painted (visually-hidden text, e.g. a 1px clipped label, does not count).
+      const paintedText = (el: Element) => {
+        let text = "";
+        const rects: DOMRect[] = [];
+        const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        for (let n = w.nextNode(); n; n = w.nextNode()) {
+          const parent = n.parentElement!;
+          if (!n.textContent!.trim() || !shown(parent)) continue;
+          const r = document.createRange();
+          r.selectNodeContents(n);
+          const rs = [...r.getClientRects()].filter((x) => x.width > 1 && x.height > 1);
+          if (!rs.length) continue;
+          text += n.textContent;
+          rects.push(...rs);
+        }
+        return { text: text.trim(), rects };
+      };
+      const box = (r: DOMRect) => ({ left: +r.left.toFixed(1), top: +r.top.toFixed(1), right: +r.right.toFixed(1), bottom: +r.bottom.toFixed(1), width: +r.width.toFixed(1), height: +r.height.toFixed(1) });
+      const buttons = [...tb.querySelectorAll<HTMLElement>('button, [role="button"], a[href], select, input')].filter(shown).map((b) => {
+        const r = b.getBoundingClientRect();
+        const { text, rects } = paintedText(b);
+        const aria = (b.getAttribute("aria-label") ?? "").trim();
+        const name = aria || (b.textContent ?? "").trim();
+        const lineTops = new Set(rects.map((x) => Math.round(x.top)));
+        const lineHeight = parseFloat(getComputedStyle(b).lineHeight) || parseFloat(getComputedStyle(b).fontSize) * 1.2;
+        const textHeight = rects.length ? Math.max(...rects.map((x) => x.bottom)) - Math.min(...rects.map((x) => x.top)) : 0;
+        const caretSvg = [...b.querySelectorAll("svg")].some((svg) => /caret|chevron|arrow|down/i.test(`${svg.getAttribute("class") ?? ""} ${svg.getAttribute("data-icon") ?? ""} ${svg.getAttribute("aria-label") ?? ""}`) && shown(svg));
+        return {
+          name,
+          ariaLabel: aria || null,
+          title: b.getAttribute("title"),
+          paintedText: text,
+          iconOnly: text.replace(/[▾▼⌄\s]/g, "") === "",
+          caretVisible: text.includes("▾") || text.includes("▼") || caretSvg,
+          textLines: lineTops.size,
+          textHeight: +textHeight.toFixed(1),
+          lineHeight: +lineHeight.toFixed(1),
+          singleLine: lineTops.size <= 1 && textHeight <= lineHeight + 1,
+          windowControl: controls.includes(name),
+          ...box(r)
+        };
+      });
+      const open = buttons.find((b) => /^打开/.test(b.name)) ?? null;
+      const secondary = buttons.filter((b) => !b.windowControl && b !== open);
+      // Drag region: scan the bar's middle row; a point drags if its hit chain (up to the bar) has a
+      // drag region and no no-drag region / interactive element.
+      const region = (el: Element) => getComputedStyle(el).getPropertyValue("-webkit-app-region").trim() || (getComputedStyle(el) as unknown as Record<string, string>)["webkitAppRegion"] || "";
+      const y = tr.top + tr.height / 2;
+      const runs: { left: number; right: number }[] = [];
+      let start = -1;
+      for (let x = Math.ceil(tr.left); x <= Math.floor(tr.right); x++) {
+        let el = document.elementFromPoint(Math.min(x, innerWidth - 1), y);
+        let drag = false;
+        let blocked = false;
+        while (el && el !== document.documentElement) {
+          const r = region(el);
+          if (r === "no-drag" || el.matches('button, [role="button"], a[href], select, input')) blocked = true;
+          if (r === "drag") drag = true;
+          if (el === tb) break;
+          el = el.parentElement;
+        }
+        const ok = drag && !blocked;
+        if (ok && start < 0) start = x;
+        if ((!ok || x === Math.floor(tr.right)) && start >= 0) { runs.push({ left: start, right: ok ? x + 1 : x }); start = -1; }
+      }
+      const widest = runs.reduce((m, r) => Math.max(m, r.right - r.left), 0);
+      // Caption-button area: Window Controls Overlay geometry when the app uses it; otherwise the
+      // in-app window controls' own box (frameless Windows/Linux); on macOS the traffic-light strip.
+      const wco = (navigator as unknown as { windowControlsOverlay?: { visible: boolean; getTitlebarAreaRect(): DOMRect } }).windowControlsOverlay;
+      const wcoRect = wco?.visible ? box(wco.getTitlebarAreaRect()) : null;
+      const ctrl = buttons.filter((b) => b.windowControl);
+      const captionArea = wcoRect
+        ? { source: "windowControlsOverlay", left: wcoRect.right, right: innerWidth }
+        : ctrl.length
+          ? { source: "in-app window controls", left: Math.min(...ctrl.map((b) => b.left)), right: Math.max(...ctrl.map((b) => b.right)) }
+          : null;
+      const others = buttons.filter((b) => !b.windowControl);
+      const overlapsCaption = captionArea ? others.filter((b) => b.right > captionArea.left + 0.5 && b.left < captionArea.right - 0.5).map((b) => b.name) : [];
+      const overlapsTrafficLights = others.filter((b) => b.left < trafficLights - 0.5 && b.top < tr.bottom).map((b) => b.name);
+      return { buttons, open, secondaryNames: secondary.map((b) => b.name), dragRuns: runs, widestDragRun: widest, wcoVisible: !!wco?.visible, wcoRect, captionArea, overlapsCaption, overlapsTrafficLights, trafficLightsWidth: trafficLights };
+    },
+    { controls: WINDOW_CONTROLS, trafficLights: MAC_TRAFFIC_LIGHTS }
+  );
+
 async function capture(win: Win, testInfo: TestInfo, label: string, size: [number, number] | "maximized") {
   if (size === "maximized") {
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.maximize());
@@ -115,18 +218,19 @@ async function capture(win: Win, testInfo: TestInfo, label: string, size: [numbe
     screenLeft: +(cb.x + b.left).toFixed(1), screenTop: +(cb.y + b.top).toFixed(1), screenRight: +(cb.x + b.right).toFixed(1),
     toWorkAreaRight: +(wa.x + wa.width - (cb.x + b.right)).toFixed(1), toWorkAreaTop: +(cb.y + b.top - wa.y).toFixed(1)
   }));
-  const m = { label, platform: process.platform, requested: size, ...bounds, ...measured, windowControls: controls };
+  const m = { label, platform: process.platform, requested: size, ...bounds, ...measured, windowControls: controls, design: await designRules(win) };
 
   const tb = win.getByTestId("titlebar");
+  mkdirSync(shots, { recursive: true });
   const files = {
-    titlebar: testInfo.outputPath(`titlebar-${label}-${process.platform}.png`),
-    window: testInfo.outputPath(`window-${label}-${process.platform}.png`)
+    titlebar: join(shots, `titlebar-${label}-${process.platform}.png`),
+    window: join(shots, `window-${label}-${process.platform}.png`)
   };
   await tb.screenshot({ path: files.titlebar });
   await win.screenshot({ path: files.window });
   await testInfo.attach(`titlebar-${label}-${process.platform}.png`, { path: files.titlebar, contentType: "image/png" });
   await testInfo.attach(`window-${label}-${process.platform}.png`, { path: files.window, contentType: "image/png" });
-  const json = testInfo.outputPath(`titlebar-${label}-${process.platform}.json`);
+  const json = join(shots, `titlebar-${label}-${process.platform}.json`);
   writeFileSync(json, JSON.stringify(m, null, 2));
   await testInfo.attach(`titlebar-${label}-${process.platform}.json`, { path: json, contentType: "application/json" });
   console.log(`TITLEBAR-MEASURE ${JSON.stringify(m)}`);
@@ -159,14 +263,42 @@ test("title bar at the minimum window size, at 1024px and maximized: screenshots
     await capture(win, testInfo, "maximized", "maximized")
   ];
 
+  // UI designer's narrow-title-bar rules, at the minimum width on every platform. Expected to fail on
+  // main until the product fix lands; soft so each rule reports its own measured value.
+  const d = results[0]!.design!;
+  expect.soft(d, "min: title bar found").not.toBeNull();
+  for (const b of d.buttons) {
+    // (a) no button text wraps: one painted line, text height within one line box.
+    expect.soft(b.textLines, `(a) min: “${b.name}” text lines`).toBeLessThanOrEqual(1);
+    expect.soft(b.textHeight, `(a) min: “${b.name}” text height vs line height ${b.lineHeight}px`).toBeLessThanOrEqual(b.lineHeight + 1);
+  }
+  // (b) collapse order: secondary buttons go icon-only before 打开; an icon-only 打开 keeps its ▾ caret.
+  expect.soft(d.open, "(b) min: the 打开 menu button exists").not.toBeNull();
+  if (d.open?.iconOnly) {
+    for (const b of d.buttons.filter((x) => !x.windowControl && x.name !== d.open!.name)) expect.soft(b.iconOnly, `(b) min: “${b.name}” is icon-only before 打开`).toBe(true);
+    expect.soft(d.open.caretVisible, "(b) min: icon-only 打开 still shows its ▾ caret").toBe(true);
+  }
+  // (c) icon-only buttons: hit box >= 32x32 and an aria-label equal to the original text.
+  for (const b of d.buttons.filter((x) => x.iconOnly)) {
+    expect.soft(b.width, `(c) min: icon-only “${b.name}” hit-box width`).toBeGreaterThanOrEqual(32);
+    expect.soft(b.height, `(c) min: icon-only “${b.name}” hit-box height`).toBeGreaterThanOrEqual(32);
+    expect.soft(b.ariaLabel, `(c) min: icon-only “${b.name}” has an aria-label`).toBeTruthy();
+    if (b === d.open || /^打开/.test(b.name)) expect.soft((b.ariaLabel ?? "").replace(/[▾▼\s]/g, ""), "(c) min: icon-only 打开 aria-label = its text").toBe("打开");
+  }
+  // (d) a drag region >= 48px wide, and no title-bar control over the caption buttons (Windows) or
+  // the traffic lights (macOS).
+  expect.soft(d.widestDragRun, "(d) min: widest drag region (px)").toBeGreaterThanOrEqual(48);
+  if (process.platform === "darwin") expect.soft(d.overlapsTrafficLights, `(d) min: controls inside the ${MAC_TRAFFIC_LIGHTS}px traffic-light area`).toEqual([]);
+  else expect.soft(d.overlapsCaption, "(d) min: controls over the caption-button area").toEqual([]);
+
   for (const m of results) {
     // Hold on main and after #65: the bar is visible and wholly inside the viewport.
     await expect(win.getByTestId("titlebar")).toBeVisible();
     expect(m.titlebar, `${m.label}: title bar exists`).not.toBeNull();
     expect(m.titlebar!.top, `${m.label}: title bar top`).toBeGreaterThanOrEqual(0);
     expect(m.titlebar!.bottom, `${m.label}: title bar bottom`).toBeLessThanOrEqual(m.viewport.height);
-    // Measured on main (Linux xvfb) before adding: height 36, every title bar button one line and
-    // inside the bar and the viewport.
+    // Height 36, every title bar button one line and inside the bar and the viewport. Holds on Linux
+    // xvfb; on Windows and macOS CI “打开 ▾” wraps at the minimum width — a product bug, kept red on purpose.
     expect(m.titlebar!.height, `${m.label}: title bar height`).toBe(36);
     for (const b of m.titlebarButtons) {
       expect(b.textLines, `${m.label}: “${b.label}” wraps`).toBeLessThanOrEqual(1);
