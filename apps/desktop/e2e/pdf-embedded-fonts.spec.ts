@@ -129,7 +129,8 @@ test("embedded-font justified PDF: layer glyphs vs canvas glyphs, and selection 
   // positioned glyphs, so words drift inside a line (target: ≥ 90 % within 1px). Measured and published
   // above; here only a coarse bound against regressions (fallback fonts differ per OS, hence the slack).
   for (const [z, d] of Object.entries(drift)) {
-    expect(d.words, `${z}%: words measured`).toBeGreaterThan(100);
+    // Only words on screen are measured: on a small screen (macOS runner, 1024 wide) 200% shows about half.
+    expect(d.words, `${z}%: words measured`).toBeGreaterThan(60);
     expect(d.p95Dx, `${z}%: 95th percentile horizontal drift (px), worst ${JSON.stringify(d.worst)}`).toBeLessThanOrEqual(Math.ceil(0.12 * Number(z)));
   }
 
