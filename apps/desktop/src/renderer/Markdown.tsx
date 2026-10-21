@@ -1,6 +1,8 @@
 import DOMPurify from "dompurify";
 import { Marked } from "marked";
 import { useEffect, useMemo, useRef } from "react";
+import "katex/dist/katex.min.css";
+import { fillMath, withMathTokens } from "./math";
 
 let mermaidReady: Promise<typeof import("mermaid").default> | null = null;
 function loadMermaid() {
@@ -71,10 +73,14 @@ const md = new Marked({
   }
 });
 
-/** Renders untrusted markdown: marked → DOMPurify; mermaid fences become SVG once `streaming` is false. */
+/** Renders untrusted markdown: marked → DOMPurify (→ KaTeX for formulas); mermaid fences become SVG once `streaming` is false. */
 export function Markdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
-  const html = useMemo(() => DOMPurify.sanitize(md.parse(text) as string, { FORBID_TAGS: ["img", "style", "iframe", "form"], FORBID_ATTR: ["style"] }), [text]);
+  // Math ($…$, $$…$$, \(…\), \[…\]) becomes tokens before marked and KaTeX HTML after DOMPurify.
+  const html = useMemo(() => {
+    const { src, spans } = withMathTokens(text);
+    return fillMath(DOMPurify.sanitize(md.parse(src) as string, { FORBID_TAGS: ["img", "style", "iframe", "form"], FORBID_ATTR: ["style"] }), spans);
+  }, [text]);
 
   useEffect(() => {
     const root = ref.current;

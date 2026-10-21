@@ -57,16 +57,37 @@ const stripIpcPrefix = (m: string) => m.replace(/^Error invoking remote method '
 
 /** Mermaid's toggle buttons and drawn SVG are UI, not answer text. */
 const NOT_TEXT = ".mermaid-toggle, .mermaid-figure, .mermaid-failed";
+const texOf = (k: Element) => k.querySelector('annotation[encoding="application/x-tex"]')?.textContent ?? "";
 
-/** Visible text of `md` before and inside `range`, char by char from the DOM (whitespace kept). */
-function visibleAround(md: HTMLElement, range: Range): { before: string; selected: string } {
+/**
+ * Visible text of `md` before and inside `range`, char by char from the DOM (whitespace kept). A KaTeX
+ * formula is one unit read back as its TeX (rendered-map maps math values 1:1); touching it selects it
+ * whole. `math` is true when the selection contains a formula; `text` is then the selection with each
+ * formula written as `$tex$` / `$$tex$$` (what is shown and sent), since the KaTeX DOM text is not readable.
+ */
+function visibleAround(md: HTMLElement, range: Range): { before: string; selected: string; text: string; math: boolean } {
   let before = "";
   let selected = "";
-  const walker = document.createTreeWalker(md, NodeFilter.SHOW_TEXT, {
-    acceptNode: (n) => (n.parentElement?.closest(NOT_TEXT) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT)
+  let text = "";
+  let math = false;
+  const walker = document.createTreeWalker(md, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, {
+    acceptNode: (n) => {
+      if (n instanceof Element) return n.classList.contains("katex") ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+      return n.parentElement?.closest(`${NOT_TEXT}, .katex`) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+    }
   });
-  for (let n = walker.nextNode() as Text | null; n; n = walker.nextNode() as Text | null) {
-    const t = n.data;
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (n instanceof Element) {
+      const tex = texOf(n);
+      if (range.intersectsNode(n)) {
+        math = true;
+        selected += tex;
+        text += n.closest(".katex-display") ? `$$${tex}$$` : `$${tex}$`;
+      } else if (range.comparePoint(n, 0) < 0) before += tex;
+      else break;
+      continue;
+    }
+    const t = (n as Text).data;
     if (range.comparePoint(n, t.length) < 0) {
       before += t;
       continue;
@@ -74,10 +95,13 @@ function visibleAround(md: HTMLElement, range: Range): { before: string; selecte
     if (range.comparePoint(n, 0) > 0) break;
     for (let k = 0; k < t.length; k++) {
       if (range.comparePoint(n, k) < 0) before += t[k];
-      else if (range.comparePoint(n, k + 1) === 0) selected += t[k];
+      else if (range.comparePoint(n, k + 1) === 0) {
+        selected += t[k];
+        text += t[k];
+      }
     }
   }
-  return { before, selected };
+  return { before, selected, text, math };
 }
 
 export const captureUrl = (sha: string) => `point-capture://${sha}`;
@@ -460,9 +484,11 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onPick, captur
     const sel = range.cloneRange();
     if (!md.contains(sel.startContainer)) sel.setStart(md, 0);
     if (!md.contains(sel.endContainer)) sel.setEnd(md, md.childNodes.length);
-    const text = sel.toString().trim();
+    const around = visibleAround(md, sel);
+    const { before, selected } = around;
+    // On-screen text; a formula in the selection is written as its LaTeX ($…$), same as the anchor.
+    const text = (around.math ? around.text : sel.toString()).trim();
     if (text.length < 2) return setAnswerBar(null);
-    const { before, selected } = visibleAround(md, sel);
     // The source span is only the anchor; what is shown and sent is the on-screen text.
     const span = sourceSpanOf(src.content, before, selected);
     if (!span) return setAnswerBar(null);
