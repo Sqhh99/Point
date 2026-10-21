@@ -104,3 +104,46 @@
 ### 验证（本地 Linux xvfb）
 - lint 和 tsc 通过；单独跑本用例，预期失败。
 - 测量值：minWidth 900，侧栏 240，分隔条 4，需要 924 → 失败；阅读区 256 → 失败；对话区 400；scrollWidth 900（没有溢出）；setSize(850) 后宽度仍是 900 → 通过。
+
+## 9. 追加（第五轮，2026-10-21）：分隔条的拖动范围、缩窗后的重新限制、持久化的宽度
+
+### 请求
+> minWidth = sidebar 240 + reader 360 + splitter 4 + chat 320 = 924 from shared constants … splitter drag range clamped by the same constants, re-clamped when the window resizes … 2. drag at 1024 / maximized … 3. re-clamp on resize, both directions … 4. persisted split relaunch with a stored extreme value, else record a note.
+
+### 改动（只改 `apps/desktop/e2e/titlebar-narrow.spec.ts`）
+- 新增几个辅助函数：
+  - `panes`：阅读区是分隔条的前一个兄弟元素，对话区是「AI 面板」；
+  - `dragSplitter`：用 page.mouse 真实拖动；
+  - `resizeTo`：最大化，失败时铺满工作区；
+  - `launch`：可以复用同一个 userData 目录重启应用。
+- 第 2、3、4 项的软断言、截图和 `splitter-<平台>.json`。没有写死 924。
+- 持久化：在 localStorage 里找值等于当前对话区宽度的 key（实测 `point.chatWidth`），写入 5000 和 0，等 3 秒让它写到磁盘，再重启应用。重启后会核对值还在不在；不在的话改用重新加载页面并记录。第一次没等这 3 秒，值没保存下来，所以加了等待。
+
+### 验证（本地 Linux xvfb，minWidth 900）
+- lint 和 tsc 通过。e2e 全量 36 项通过、1 项失败（本用例，预期失败），0 跳过。
+- 拖动：
+  - 1024：向左拖后阅读区 140、对话区 640 → 失败；向右拖后阅读区 460、对话区 320 → 通过。
+  - 工作区（1279）：向左拖后阅读区 395、对话区 640；向右拖后阅读区 715、对话区 320。
+- 缩窗后重新限制：
+  - 对话区先拖到最宽：缩到 900 后阅读区 16、对话区 640 → 失败；
+  - 对话区先拖到最窄：缩到 900 后阅读区 336、对话区 320 → 阅读区失败。
+  - 两种情况都没有横向溢出。
+- 持久化（重启后值还在）：
+  - 5000：阅读区 16、对话区 640 → 失败；
+  - 0：阅读区 336、对话区 320 → 阅读区失败。
+
+## 10. 追加（第六轮，2026-10-21）：修正换行判断和 PR 记录
+
+### 请求
+> Wrap check: drop the 'text height <= line-height + 1px' rule; judge wrapping by line count only … Keep the strict 'line count <= 1' assertions red for 适合宽度 and 框选 … PR record round 5: correct 'toolbar 里 role=separator'.
+
+### 原因
+第五轮 CI（run 39615679484）在 Windows 和 macOS 上，把只有一行的 ‹ › − + 和「恢复 100%」报成了「text height vs line height」失败。这些按钮的行数都是 1；问题是系统字体的字形框比计算出的行高高（line-height 16 或 15.6），这是测试自己的误报，不是产品问题。
+
+### 改动
+- `titlebar-narrow.spec.ts`：删掉两处「文字高度 ≤ 行高 + 1px」的断言（标题栏规则 (a) 和阅读工具栏）。换行只按行数判断，即文字 client rects 去重后的 top 值个数 ≤ 1。`singleLine` 字段也只看行数。文字高度仍然记进 JSON，但不断言。行数断言没有改，分隔条相关的断言也没有改。
+- PR 记录：改正第五轮里分隔条位置的写法（分隔条在阅读区和对话区之间，不在阅读工具栏里），并补上这一轮的说明。
+
+### 验证（本地 Linux xvfb）
+- lint 和 tsc 通过。e2e 全量（throwaway keyring）：36 项通过，1 项失败（本用例，预期失败），0 跳过。
+- 跟换行有关的失败只剩「适合宽度」和「框选」的行数，三种状态都有；文字高度相关的报错已经没有了。

@@ -27,12 +27,18 @@ const stub = (paths: string[]) =>
 
 test.describe.configure({ mode: "serial" });
 
-test.beforeAll(async () => {
+let userData = "";
+const launch = () => {
   const env = Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined && e[0] !== "ELECTRON_RENDERER_URL"));
-  app = await electron.launch({
+  return electron.launch({
     args: [...(process.platform === "linux" ? ["--no-sandbox"] : []), join(import.meta.dirname, "..", "out", "main", "index.js")],
-    env: { ...env, POINT_USER_DATA: mkdtempSync(join(tmpdir(), "point-e2e-tbnarrow-")), POINT_FAKE_LLM: "1" }
+    env: { ...env, POINT_USER_DATA: userData, POINT_FAKE_LLM: "1" }
   });
+};
+
+test.beforeAll(async () => {
+  userData = mkdtempSync(join(tmpdir(), "point-e2e-tbnarrow-"));
+  app = await launch();
 });
 test.afterAll(async () => {
   await app?.close();
@@ -145,7 +151,10 @@ const designRules = (win: Win) =>
           textLines: lineTops.size,
           textHeight: +textHeight.toFixed(1),
           lineHeight: +lineHeight.toFixed(1),
-          singleLine: lineTops.size <= 1 && textHeight <= lineHeight + 1,
+          // Wrapping is judged by line count only (distinct tops of the painted text rects); text height is
+          // recorded for reference but not asserted: system-font glyph boxes (‹ › − +, digits) are taller
+          // than the computed line-height on Windows/macOS even on a single line.
+          singleLine: lineTops.size <= 1,
           windowControl: controls.includes(name),
           ...box(r)
         };
@@ -340,6 +349,51 @@ async function overflowItems(win: Win, index: number | undefined) {
 
 type Layout = Awaited<ReturnType<typeof layoutRules>> & { captionTooltips: { name: string; tooltip: { source: string; text: string } | null }[]; iconTooltips: { name: string; tooltip: { source: string; text: string } | null }[]; overflowMenu: string[] | null };
 
+/** Reader / chat pane geometry around the splitter (role=separator “调整对话面板宽度”): the reader pane is the separator's previous sibling, the chat pane its next sibling. */
+const panes = (win: Win) =>
+  win.evaluate(() => {
+    const sep = document.querySelector('[role="separator"][aria-label="调整对话面板宽度"]') ?? document.querySelector('[role="separator"]');
+    const r = (el: Element | null | undefined) => {
+      if (!el) return null;
+      const b = el.getBoundingClientRect();
+      return { left: +b.left.toFixed(1), right: +b.right.toFixed(1), width: +b.width.toFixed(1) };
+    };
+    const reader = r(sep?.previousElementSibling), chat = r(document.querySelector('aside[aria-label="AI 面板"]') ?? sep?.nextElementSibling), splitter = r(sep);
+    return { viewport: innerWidth, reader, chat, splitter, sidebar: reader ? reader.left : null, docScrollWidth: document.scrollingElement!.scrollWidth, overflowX: document.scrollingElement!.scrollWidth > innerWidth || (chat ? chat.right > innerWidth + 0.5 : false) };
+  });
+
+/** A real pointer drag on the splitter by dx px (target clamped into the window). */
+async function dragSplitter(win: Win, dx: number) {
+  const sep = win.getByRole("separator", { name: "调整对话面板宽度" });
+  const b = (await sep.boundingBox())!;
+  const vw = await win.evaluate(() => innerWidth);
+  const x = b.x + b.width / 2, y = b.y + b.height / 2;
+  const to = Math.max(1, Math.min(vw - 2, x + dx));
+  await win.mouse.move(x, y);
+  await win.mouse.down();
+  await win.mouse.move(to, y, { steps: 12 });
+  await win.mouse.up();
+  await win.waitForTimeout(200);
+  return { from: +x.toFixed(1), to: +to.toFixed(1) };
+}
+
+/** Resize to [w, h], or maximize (falling back to the work area when the WM can't maximize, e.g. xvfb). */
+async function resizeTo(win: Win, size: [number, number] | "maximized") {
+  if (size === "maximized") {
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.maximize());
+    await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.isMaximized()), { timeout: 5_000 }).toBe(true).catch(() => undefined);
+    await app.evaluate(({ BrowserWindow, screen }) => {
+      const w = BrowserWindow.getAllWindows()[0]!;
+      if (!w.isMaximized()) w.setBounds(screen.getDisplayMatching(w.getBounds()).workArea);
+    });
+  } else {
+    await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]!; if (w.isMaximized()) w.unmaximize(); });
+    await app.evaluate(({ BrowserWindow }, [w, h]) => BrowserWindow.getAllWindows()[0]!.setSize(w!, h!), size);
+  }
+  await win.waitForTimeout(400);
+  return app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]!; return { isMaximized: w.isMaximized(), size: w.getSize() }; });
+}
+
 async function capture(win: Win, testInfo: TestInfo, label: string, size: [number, number] | "maximized", docName: string) {
   if (size === "maximized") {
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.maximize());
@@ -398,7 +452,7 @@ async function capture(win: Win, testInfo: TestInfo, label: string, size: [numbe
 // Playwright requires the fixtures argument to be destructured.
 // eslint-disable-next-line no-empty-pattern
 test("title bar at the minimum window size, at 1024px and maximized: screenshots + measurements", async ({}, testInfo) => {
-  const win = await app.firstWindow();
+  let win = await app.firstWindow();
   await win.waitForLoadState("domcontentloaded");
   // A workspace and an open PDF with a long name, so the title bar carries workspace + file title
   // and the reader toolbar (page switcher, zoom, 适合宽度) is on screen.
@@ -452,9 +506,8 @@ test("title bar at the minimum window size, at 1024px and maximized: screenshots
   const d = results[0]!.design!;
   expect.soft(d, "min: title bar found").not.toBeNull();
   for (const b of d.buttons) {
-    // (a) no button text wraps: one painted line, text height within one line box.
+    // (a) no button text wraps: one painted line (distinct tops of the text's client rects <= 1).
     expect.soft(b.textLines, `(a) min: “${b.name}” text lines`).toBeLessThanOrEqual(1);
-    expect.soft(b.textHeight, `(a) min: “${b.name}” text height vs line height ${b.lineHeight}px`).toBeLessThanOrEqual(b.lineHeight + 1);
   }
   // (b) collapse order: secondary buttons go icon-only before 打开; an icon-only 打开 keeps its ▾ caret.
   expect.soft(d.open, "(b) min: the 打开 menu button exists").not.toBeNull();
@@ -498,7 +551,6 @@ test("title bar at the minimum window size, at 1024px and maximized: screenshots
     for (const b of L.toolbarButtons.filter((x) => x.shown)) {
       expect.soft(b.insideToolbar, `${s}: toolbar button “${b.name}” inside the toolbar`).toBe(true);
       expect.soft(b.textLines, `${s}: toolbar button “${b.name}” text lines`).toBeLessThanOrEqual(1);
-      expect.soft(b.textHeight, `${s}: toolbar button “${b.name}” text height vs line height ${b.lineHeight}`).toBeLessThanOrEqual(b.lineHeight + 1);
     }
     expect.soft(L.pageNav.prevShown && L.pageNav.nextShown, `${s}: page nav ‹ › visible (${L.pageNav.prevText} ${L.pageNav.nextText})`).toBe(true);
     expect.soft(L.pageNav.labelInside ? L.pageNav.label : "", `${s}: page label n / N visible`).toMatch(/\d+\s*\/\s*\d+/);
@@ -529,6 +581,79 @@ test("title bar at the minimum window size, at 1024px and maximized: screenshots
     expect.soft(L.panes.reader, `${s}: reader pane width (space for reader+chat ${L.panes.spaceForReaderAndChat}px, 360+320 fits: ${L.panes.fits360plus320})`).toBeGreaterThanOrEqual(360);
     expect.soft(L.panes.chat, `${s}: chat pane width`).toBeGreaterThanOrEqual(320);
   }
+
+
+  // ---- Splitter clamp (#68 round 5). Constants are read from the app, never hardcoded: minWidth from
+  // getMinimumSize(), sidebar / splitter from the measured layout; reader >= 360 and chat >= 320 are the rule.
+  const split: Record<string, unknown> = {};
+  const shot = (name: string) => win.screenshot({ path: join(shots, `split-${name}-${process.platform}.png`) });
+  // 2. Drag far left / far right at 1024 and maximized.
+  for (const [state, size] of [["1024", [1024, Math.max(minH, 700)]], ["maximized", "maximized"]] as const) {
+    const winState = await resizeTo(win, size as [number, number] | "maximized");
+    const dl = await dragSplitter(win, -600);
+    const left = await panes(win);
+    await shot(`${state}-drag-left`);
+    const dr = await dragSplitter(win, +600);
+    const right = await panes(win);
+    await shot(`${state}-drag-right`);
+    split[`drag-${state}`] = { window: winState, dragLeft: dl, afterLeft: left, dragRight: dr, afterRight: right };
+    expect.soft(left.reader?.width, `${state}: drag splitter -600px → reader width (chat ${left.chat?.width})`).toBeGreaterThanOrEqual(360);
+    expect.soft(left.overflowX, `${state}: drag left → no horizontal overflow`).toBe(false);
+    expect.soft(right.chat?.width, `${state}: drag splitter +600px → chat width (reader ${right.reader?.width})`).toBeGreaterThanOrEqual(320);
+    expect.soft(right.overflowX, `${state}: drag right → no horizontal overflow`).toBe(false);
+  }
+  // 3. Re-clamp on resize: widest window, push the splitter to one extreme, shrink to minWidth.
+  for (const [dir, dx] of [["chat-widest", -2000], ["chat-narrowest", +2000]] as const) {
+    const big = await resizeTo(win, "maximized");
+    await dragSplitter(win, dx);
+    const before = await panes(win);
+    const small = await resizeTo(win, [minW, minH]);
+    const after = await panes(win);
+    await shot(`reclamp-${dir}-min`);
+    split[`reclamp-${dir}`] = { widest: big, before, min: small, after };
+    expect.soft(after.reader?.width, `re-clamp ${dir} → min ${small.size[0]}: reader width (was ${before.reader?.width})`).toBeGreaterThanOrEqual(360);
+    expect.soft(after.chat?.width, `re-clamp ${dir} → min ${small.size[0]}: chat width (was ${before.chat?.width})`).toBeGreaterThanOrEqual(320);
+    expect.soft(after.overflowX, `re-clamp ${dir} → min: no horizontal overflow (scrollWidth ${after.docScrollWidth} / ${after.viewport})`).toBe(false);
+  }
+  // 4. Persisted split: find the storage key that holds the current chat width; if there is one,
+  // relaunch with an extreme stored value (both ends) and check the clamp at the minimum width.
+  const chatNow = (await panes(win)).chat?.width ?? -1;
+  const keys = await win.evaluate((w) => Object.keys(localStorage).filter((k) => Number(localStorage.getItem(k)) === Math.round(w)), chatNow);
+  if (!keys.length) {
+    split.persisted = { note: `no localStorage key holds the chat width (${chatNow}); persisted-split sub-check not run` };
+  } else {
+    const runs: Record<string, unknown>[] = [];
+    for (const stored of ["5000", "0"]) {
+      const put = () => win.evaluate(([ks, v]) => { for (const k of ks as string[]) localStorage.setItem(k, v as string); }, [keys, stored] as const);
+      await put();
+      // Chromium commits localStorage to disk lazily; give it time before quitting.
+      await win.waitForTimeout(3_000);
+      await app.close();
+      app = await launch();
+      win = await app.firstWindow();
+      await win.waitForLoadState("domcontentloaded");
+      await expect(win.getByRole("separator", { name: "调整对话面板宽度" })).toBeVisible();
+      const seen = await win.evaluate((k) => localStorage.getItem(k), keys[0]!);
+      let via = "relaunch";
+      if (seen !== stored) {
+        // The value did not survive the quit: store it again and reload the renderer instead (same startup read path).
+        await put();
+        await win.reload();
+        await expect(win.getByRole("separator", { name: "调整对话面板宽度" })).toBeVisible();
+        via = `reload (after relaunch the key read ${JSON.stringify(seen)})`;
+      }
+      const sz = await resizeTo(win, [minW, minH]);
+      const p = await panes(win);
+      await shot(`persisted-${stored}-min`);
+      runs.push({ stored, keys, via, storedNow: await win.evaluate((k) => localStorage.getItem(k), keys[0]!), window: sz, panes: p });
+      expect.soft(p.reader?.width, `persisted ${keys.join(",")}=${stored}, relaunch at min: reader width`).toBeGreaterThanOrEqual(360);
+      expect.soft(p.chat?.width, `persisted ${keys.join(",")}=${stored}, relaunch at min: chat width`).toBeGreaterThanOrEqual(320);
+      expect.soft(p.overflowX, `persisted ${stored}, relaunch at min: no horizontal overflow`).toBe(false);
+    }
+    split.persisted = runs;
+  }
+  writeFileSync(join(shots, `splitter-${process.platform}.json`), JSON.stringify(split, null, 2));
+  console.log(`TITLEBAR-SPLITTER ${JSON.stringify(split)}`);
 
   for (const m of results) {
     // Hold on main and after #65: the bar is visible and wholly inside the viewport.
