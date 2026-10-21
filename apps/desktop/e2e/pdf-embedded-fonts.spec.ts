@@ -38,14 +38,14 @@ async function setZoom(win: Win, z: number) {
   await win.waitForTimeout(150);
 }
 
-/** Every word box of the layer (fully visible ones) vs the canvas ink: best (dx, dy) by pixel overlap. */
-async function wordDrift(win: Win) {
-  const vis = (await win.locator("main.center").boundingBox())!;
-  const words = await page1(win).evaluate((el, vis) => {
-    const res: { w: string; l: number; r: number; t: number; b: number; h: number }[] = [];
-    for (const s of el.querySelectorAll<HTMLElement>(".pdf-text span")) {
+type Box = { id: string; w: string; l: number; r: number; t: number; b: number; h: number };
+/** Every word of page 1's text layer, with its client box (for the current scroll position). */
+const layerWords = (win: Win) =>
+  page1(win).evaluate((el) => {
+    const res: Box[] = [];
+    el.querySelectorAll<HTMLElement>(".pdf-text span").forEach((s, si) => {
       const t = s.firstChild as Text | null;
-      if (!t || t.nodeType !== 3) continue;
+      if (!t || t.nodeType !== 3) return;
       const re = /\S+/g;
       let m: RegExpExecArray | null;
       while ((m = re.exec(t.data))) {
@@ -53,13 +53,60 @@ async function wordDrift(win: Win) {
         r.setStart(t, m.index);
         r.setEnd(t, m.index + m[0].length);
         const b = r.getBoundingClientRect();
-        if (b.width < 2 || b.top < vis.y + 2 || b.bottom > vis.y + vis.height - 2 || b.left < vis.x || b.right > vis.x + vis.width - 16) continue;
-        res.push({ w: m[0], l: b.left, r: b.right, t: b.top, b: b.bottom, h: b.height });
+        res.push({ id: `${si}:${m.index}`, w: m[0], l: b.left, r: b.right, t: b.top, b: b.bottom, h: b.height });
       }
-    }
+    });
     return res;
-  }, vis);
-  const clip = { x: vis.x, y: vis.y, width: vis.width - 16, height: vis.height - 16 };
+  });
+
+/**
+ * Every word of page 1's text layer vs the canvas ink: best (dx, dy) by pixel overlap. The viewport can be
+ * smaller than the page (macOS runner: 1024×677, so 200 % shows only part of it), so the view is scrolled
+ * until every word has been seen whole once. The returned `total` is the layer's word count, the denominator.
+ */
+async function wordDrift(win: Win) {
+  const center = win.locator("main.center");
+  const vis = (await center.boundingBox())!;
+  // The sticky reader toolbar sits inside main.center: the visible page starts below it.
+  const bar = (await win.getByTestId("reader-bar").boundingBox())!;
+  const top = bar.y + bar.height;
+  const clip = { x: vis.x, y: top, width: vis.width - 16, height: vis.y + vis.height - 16 - top };
+  const all = await layerWords(win);
+  const rows: { w: string; dx: number; dy: number }[] = [];
+  const seen = new Set<string>();
+  const inView = (b: Box) => b.r - b.l >= 1 && b.t >= clip.y + 2 && b.b <= clip.y + clip.height - 2 && b.l >= clip.x + 1 && b.r <= clip.x + clip.width - 1;
+  // Scroll the first word not yet measured to the top-left of the view, then measure every unmeasured word
+  // that is wholly visible. Ends when all are measured or a word cannot be brought fully into view.
+  for (let guard = 0; guard <= all.length; guard++) {
+    const now = await layerWords(win);
+    const next = now.find((b) => !seen.has(b.id));
+    if (!next) break;
+    if (!inView(next)) {
+      await center.evaluate((e, [dx, dy]) => ((e.scrollLeft += dx!), (e.scrollTop += dy!)), [Math.floor(next.l - clip.x - 24), Math.floor(next.t - clip.y - 24)]);
+      await win.waitForTimeout(80);
+    }
+    const words = (await layerWords(win)).filter((b) => !seen.has(b.id) && inView(b));
+    if (!words.some((b) => b.id === next.id)) break;
+    rows.push(...(await measureTile(win, clip, words)));
+    for (const w of words) seen.add(w.id);
+  }
+  await center.evaluate((e) => ((e.scrollLeft = 0), (e.scrollTop = 0)));
+  const missed = all.filter((b) => !seen.has(b.id)).map((b) => b.w);
+  if (missed.length) console.log(`PDF-EMBEDDED-MISSED ${JSON.stringify(missed)}`);
+  const within = rows.filter((r) => Math.abs(r.dx) <= 1 && Math.abs(r.dy) <= 1).length / Math.max(1, rows.length);
+  const ax = rows.map((r) => Math.abs(r.dx)).sort((a, b) => a - b);
+  return {
+    total: all.length,
+    reached: seen.size,
+    words: rows.length,
+    within1px: +within.toFixed(3),
+    maxDx: ax.at(-1) ?? 0,
+    p95Dx: ax[Math.floor(ax.length * 0.95)] ?? 0,
+    worst: [...rows].sort((a, b) => Math.abs(b.dx) - Math.abs(a.dx)).slice(0, 5)
+  };
+}
+
+async function measureTile(win: Win, clip: { x: number; y: number; width: number; height: number }, words: Box[]) {
   const A = decodePng(await win.screenshot({ clip }));
   // Layer glyphs only: hide the canvas, paint the spans black at full opacity.
   await page1(win).evaluate((el) => {
@@ -80,25 +127,21 @@ async function wordDrift(win: Win) {
     const i = (y * W + x) * 4;
     return img.data[i]! * 0.3 + img.data[i + 1]! * 0.59 + img.data[i + 2]! * 0.11 < 150 ? 1 : 0;
   };
-  const rows = words
-    .map((wd) => {
-      const S = Math.max(4, Math.ceil(0.35 * wd.h));
-      const bm: [number, number][] = [];
-      for (let y = Math.floor(wd.t - clip.y); y < Math.ceil(wd.b - clip.y); y++) for (let x = Math.floor(wd.l - clip.x); x < Math.ceil(wd.r - clip.x); x++) if (dark(B, x, y)) bm.push([x, y]);
-      if (bm.length < 8) return null;
-      let best = { dx: 0, dy: 0, score: -1 };
-      for (let dy = -S; dy <= S; dy++)
-        for (let dx = -S; dx <= S; dx++) {
-          let sc = 0;
-          for (const [x, y] of bm) sc += dark(A, x + dx, y + dy);
-          if (sc > best.score || (sc === best.score && Math.abs(dx) + Math.abs(dy) < Math.abs(best.dx) + Math.abs(best.dy))) best = { dx, dy, score: sc };
-        }
-      return { w: wd.w, dx: -best.dx, dy: -best.dy };
-    })
-    .filter((r): r is { w: string; dx: number; dy: number } => !!r);
-  const within = rows.filter((r) => Math.abs(r.dx) <= 1 && Math.abs(r.dy) <= 1).length / Math.max(1, rows.length);
-  const ax = rows.map((r) => Math.abs(r.dx)).sort((a, b) => a - b);
-  return { words: rows.length, within1px: +within.toFixed(3), maxDx: ax.at(-1) ?? 0, p95Dx: ax[Math.floor(ax.length * 0.95)] ?? 0, worst: [...rows].sort((a, b) => Math.abs(b.dx) - Math.abs(a.dx)).slice(0, 5) };
+  // A word with no layer ink (e.g. a glyph the fallback font lacks) still counts, as maximally off.
+  return words.map((wd) => {
+    const S = Math.max(4, Math.ceil(0.35 * wd.h));
+    const bm: [number, number][] = [];
+    for (let y = Math.floor(wd.t - clip.y); y < Math.ceil(wd.b - clip.y); y++) for (let x = Math.floor(wd.l - clip.x); x < Math.ceil(wd.r - clip.x); x++) if (dark(B, x, y)) bm.push([x, y]);
+    if (bm.length < 8) return { w: wd.w, dx: S + 1, dy: S + 1 };
+    let best = { dx: 0, dy: 0, score: -1 };
+    for (let dy = -S; dy <= S; dy++)
+      for (let dx = -S; dx <= S; dx++) {
+        let sc = 0;
+        for (const [x, y] of bm) sc += dark(A, x + dx, y + dy);
+        if (sc > best.score || (sc === best.score && Math.abs(dx) + Math.abs(dy) < Math.abs(best.dx) + Math.abs(best.dy))) best = { dx, dy, score: sc };
+      }
+    return { w: wd.w, dx: -best.dx, dy: -best.dy };
+  });
 }
 
 test("embedded-font justified PDF: layer glyphs vs canvas glyphs, and selection without ghosting, stripes or line gaps", async () => {
@@ -124,14 +167,12 @@ test("embedded-font justified PDF: layer glyphs vs canvas glyphs, and selection 
     drift[z] = await wordDrift(win);
   }
   writeFileSync(join(shots, `pdf-embedded-drift-${process.platform}.json`), JSON.stringify({ fonts, drift }, null, 2));
-  console.log(`PDF-EMBEDDED-DRIFT ${JSON.stringify({ fonts, drift: Object.fromEntries(Object.entries(drift).map(([z, d]) => [z, { words: d.words, within1px: d.within1px, maxDx: d.maxDx }])) })}`);
-  // Known issue (v0.2.3): with embedded, kerned fonts the layer's glyph advances are not the PDF's
-  // positioned glyphs, so words drift inside a line (target: ≥ 90 % within 1px). Measured and published
-  // above; here only a coarse bound against regressions (fallback fonts differ per OS, hence the slack).
+  console.log(`PDF-EMBEDDED-DRIFT ${JSON.stringify({ fonts, drift: Object.fromEntries(Object.entries(drift).map(([z, d]) => [z, { words: d.words, total: d.total, within1px: d.within1px, p95Dx: d.p95Dx, maxDx: d.maxDx }])) })}`);
   for (const [z, d] of Object.entries(drift)) {
-    // Only words on screen are measured: on a small screen (macOS runner, 1024 wide) 200% shows about half.
-    expect(d.words, `${z}%: words measured`).toBeGreaterThan(60);
-    expect(d.p95Dx, `${z}%: 95th percentile horizontal drift (px), worst ${JSON.stringify(d.worst)}`).toBeLessThanOrEqual(Math.ceil(0.12 * Number(z)));
+    // Denominator: every word of the page's text layer, wherever it is on the page (tiled scan above).
+    expect(d.total, `${z}%: text layer has words (a missing layer must not pass as 0/0)`).toBeGreaterThanOrEqual(30);
+    expect(d.words, `${z}%: every word of the page's text layer was measured`).toBe(d.total);
+    expect.soft(d.within1px, `${z}%: share of the page's ${d.total} words within 1px of the canvas glyphs (worst ${JSON.stringify(d.worst)})`).toBeGreaterThanOrEqual(0.9);
   }
 
   // --- Selection at 125%: drag across the first two paragraphs.
