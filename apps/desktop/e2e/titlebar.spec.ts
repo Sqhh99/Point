@@ -84,6 +84,12 @@ test("title bar at narrow widths: no wrapping, 打开 ▾ collapses to icon + �
     dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [paths[Math.min(n++, 1)]!] })) as typeof dialog.showOpenDialog;
   }, [ws, pdf]);
   await win.getByTestId("titlebar").getByRole("button", { name: "打开" }).click();
+  // The 打开 menu paints above the reader toolbar (it hangs over it on narrow windows).
+  const onTop = await win.getByRole("menuitem", { name: "工作区…", exact: true }).evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return el.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height - 2));
+  });
+  expect(onTop, "打开 menu is not covered by the reader toolbar").toBe(true);
   await win.getByRole("menuitem", { name: "工作区…", exact: true }).click();
   await win.getByRole("button", { name: "导入文档" }).click();
   await win.getByTestId("doc-list").getByRole("button", { name: /一份文件名很长/ }).click();
@@ -239,7 +245,10 @@ test("title bar at narrow widths: no wrapping, 打开 ▾ collapses to icon + �
   const gMax = await geometry();
   check(gMax, "maximized", false);
   checkToolbar(gMax, "maximized");
-  expect(gMax.toolbar.level, "maximized: toolbar fully labelled").toBe(0);
+  // CI screens can be small (macOS runner 1024 wide): "maximized" is then barely above the minimum.
+  const maxWidth = await win.evaluate(() => innerWidth);
+  if (maxWidth >= 1280) expect(gMax.toolbar.level, "maximized: toolbar fully labelled").toBe(0);
+  else expect(gMax.toolbar.level, `maximized at ${maxWidth}px: no more collapsed than at the minimum`).toBeLessThanOrEqual(gMin.toolbar.level);
   await shoot("maximized");
   await app.evaluate(({ BrowserWindow }, [w, h]) => {
     const bw = BrowserWindow.getAllWindows()[0]!;
@@ -269,7 +278,15 @@ test("splitter: chat width 600 at full size survives shrinking to the minimum an
       overflow: document.querySelector(".desk")!.scrollWidth - document.querySelector(".desk")!.clientWidth
     }));
   await full();
-  // Real mouse drag on the splitter until the chat is 600px wide.
+  // 600 when the screen allows it; on a small CI screen (1024 wide) the widest chat that still leaves the
+  // reader 360 is less, so the same round trip runs with the widest preference that fits (still far above
+  // what the minimum window can show).
+  const fullWidth = await win.evaluate(() => innerWidth);
+  const target = Math.min(600, fullWidth - 240 - 4 - 360 - 20);
+  expect(target, "screen wide enough to exercise the clamp").toBeGreaterThan(340);
+  const T = String(target);
+  console.log(`SPLITTER-TARGET ${JSON.stringify({ fullWidth, target })}`);
+  // Real mouse drag on the splitter until the chat is `target` px wide (600 on a normal screen).
   const sep = win.getByRole("separator", { name: "调整对话面板宽度" });
   const box = (await sep.boundingBox())!;
   const before = await panes();
@@ -277,10 +294,10 @@ test("splitter: chat width 600 at full size survives shrinking to the minimum an
   const y = box.y + box.height / 2;
   await win.mouse.move(x0, y);
   await win.mouse.down();
-  await win.mouse.move(x0 - (600 - before.chat), y, { steps: 8 });
+  await win.mouse.move(x0 - (target - before.chat), y, { steps: 8 });
   await win.mouse.up();
-  await expect.poll(async () => (await panes()).chat).toBe(600);
-  expect((await panes()).stored).toBe("600");
+  await expect.poll(async () => (await panes()).chat).toBe(target);
+  expect((await panes()).stored).toBe(T);
   // Shrink to the minimum: both minimums hold, nothing overflows, storage untouched.
   const [minW, minH] = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.getMinimumSize());
   await app.evaluate(({ BrowserWindow }, [w, h]) => {
@@ -293,13 +310,14 @@ test("splitter: chat width 600 at full size survives shrinking to the minimum an
   expect(small.reader).toBeGreaterThanOrEqual(360);
   expect(small.chat).toBeGreaterThanOrEqual(320);
   expect(small.overflow).toBeLessThanOrEqual(0);
-  expect(small.stored).toBe("600");
+  expect(small.chat).toBeLessThan(target);
+  expect(small.stored).toBe(T);
   // Asking for less than the minimum is refused by the window.
   await app.evaluate(({ BrowserWindow }, [w, h]) => BrowserWindow.getAllWindows()[0]!.setSize(w! - 50, h!), [minW, minH]);
   await win.waitForTimeout(200);
   expect(await win.evaluate(() => innerWidth)).toBe(minW);
-  // Re-enlarge: the preferred 600 comes back.
+  // Re-enlarge: the preference comes back.
   await full();
-  await expect.poll(async () => (await panes()).chat).toBe(600);
-  expect((await panes()).stored).toBe("600");
+  await expect.poll(async () => (await panes()).chat).toBe(target);
+  expect((await panes()).stored).toBe(T);
 });
