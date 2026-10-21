@@ -131,3 +131,19 @@
 - 持久化（重启后值还在）：
   - 5000：阅读区 16、对话区 640 → 失败；
   - 0：阅读区 336、对话区 320 → 阅读区失败。
+
+## 10. 追加（第六轮，2026-10-21）：修正换行判断和 PR 记录
+
+### 请求
+> Wrap check: drop the 'text height <= line-height + 1px' rule; judge wrapping by line count only … Keep the strict 'line count <= 1' assertions red for 适合宽度 and 框选 … PR record round 5: correct 'toolbar 里 role=separator'.
+
+### 原因
+第五轮 CI（run 39615679484）在 Windows 和 macOS 上，把只有一行的 ‹ › − + 和「恢复 100%」报成了「text height vs line height」失败。这些按钮的行数都是 1；问题是系统字体的字形框比计算出的行高高（line-height 16 或 15.6），这是测试自己的误报，不是产品问题。
+
+### 改动
+- `titlebar-narrow.spec.ts`：删掉两处「文字高度 ≤ 行高 + 1px」的断言（标题栏规则 (a) 和阅读工具栏）。换行只按行数判断，即文字 client rects 去重后的 top 值个数 ≤ 1。`singleLine` 字段也只看行数。文字高度仍然记进 JSON，但不断言。行数断言没有改，分隔条相关的断言也没有改。
+- PR 记录：改正第五轮里分隔条位置的写法（分隔条在阅读区和对话区之间，不在阅读工具栏里），并补上这一轮的说明。
+
+### 验证（本地 Linux xvfb）
+- lint 和 tsc 通过。e2e 全量（throwaway keyring）：36 项通过，1 项失败（本用例，预期失败），0 跳过。
+- 跟换行有关的失败只剩「适合宽度」和「框选」的行数，三种状态都有；文字高度相关的报错已经没有了。

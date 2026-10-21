@@ -151,7 +151,10 @@ const designRules = (win: Win) =>
           textLines: lineTops.size,
           textHeight: +textHeight.toFixed(1),
           lineHeight: +lineHeight.toFixed(1),
-          singleLine: lineTops.size <= 1 && textHeight <= lineHeight + 1,
+          // Wrapping is judged by line count only (distinct tops of the painted text rects); text height is
+          // recorded for reference but not asserted: system-font glyph boxes (‹ › − +, digits) are taller
+          // than the computed line-height on Windows/macOS even on a single line.
+          singleLine: lineTops.size <= 1,
           windowControl: controls.includes(name),
           ...box(r)
         };
@@ -503,9 +506,8 @@ test("title bar at the minimum window size, at 1024px and maximized: screenshots
   const d = results[0]!.design!;
   expect.soft(d, "min: title bar found").not.toBeNull();
   for (const b of d.buttons) {
-    // (a) no button text wraps: one painted line, text height within one line box.
+    // (a) no button text wraps: one painted line (distinct tops of the text's client rects <= 1).
     expect.soft(b.textLines, `(a) min: “${b.name}” text lines`).toBeLessThanOrEqual(1);
-    expect.soft(b.textHeight, `(a) min: “${b.name}” text height vs line height ${b.lineHeight}px`).toBeLessThanOrEqual(b.lineHeight + 1);
   }
   // (b) collapse order: secondary buttons go icon-only before 打开; an icon-only 打开 keeps its ▾ caret.
   expect.soft(d.open, "(b) min: the 打开 menu button exists").not.toBeNull();
@@ -549,7 +551,6 @@ test("title bar at the minimum window size, at 1024px and maximized: screenshots
     for (const b of L.toolbarButtons.filter((x) => x.shown)) {
       expect.soft(b.insideToolbar, `${s}: toolbar button “${b.name}” inside the toolbar`).toBe(true);
       expect.soft(b.textLines, `${s}: toolbar button “${b.name}” text lines`).toBeLessThanOrEqual(1);
-      expect.soft(b.textHeight, `${s}: toolbar button “${b.name}” text height vs line height ${b.lineHeight}`).toBeLessThanOrEqual(b.lineHeight + 1);
     }
     expect.soft(L.pageNav.prevShown && L.pageNav.nextShown, `${s}: page nav ‹ › visible (${L.pageNav.prevText} ${L.pageNav.nextText})`).toBe(true);
     expect.soft(L.pageNav.labelInside ? L.pageNav.label : "", `${s}: page label n / N visible`).toMatch(/\d+\s*\/\s*\d+/);
