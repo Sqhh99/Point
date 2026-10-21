@@ -538,8 +538,11 @@ test("status bar shows workspace, doc and model; region capture attaches a scree
   await win.mouse.move(box.x + 200, box.y + 140, { steps: 5 });
   await expect(win.getByTestId("capture-rect")).toBeVisible();
   await win.mouse.up();
+  // Dashed selection stays on the page after release (and after 问 AI until the capture is consumed).
+  await expect(win.getByTestId("selection-overlay")).toBeVisible();
   await askRegion(win);
   await expect(overlay).toBeHidden();
+  await expect(win.getByTestId("selection-overlay")).toBeVisible();
   const attached = win.getByTestId("attached-image");
   const thumb = attached.locator("img");
   await expect(thumb).toBeVisible();
@@ -549,6 +552,7 @@ test("status bar shows workspace, doc and model; region capture attaches a scree
   // × removes it; capture again for the question below.
   await attached.getByRole("button", { name: "移除截图" }).click();
   await expect(attached).toBeHidden();
+  await expect(win.getByTestId("selection-overlay")).toBeHidden();
   await win.getByTestId("capture-button").click();
   await win.mouse.move(box.x + 20, box.y + 60);
   await win.mouse.down();

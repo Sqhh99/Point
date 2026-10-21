@@ -79,3 +79,18 @@ describe("docx colours", () => {
     expect(sanitizeDocxHtml('<span class="ptc-12345G">a</span>')).toBe("<span>a</span>");
   });
 });
+
+describe("region anchors with rects", () => {
+  const sha = "a".repeat(64);
+  const base = { kind: "region" as const, sha, width: 40, height: 20, page: 2 };
+  it("old region anchors (no rects) still parse unchanged", () => {
+    expect(parseAnchor(base)).toEqual(base);
+  });
+  it("keeps rects, rounded to 2 decimals", () => {
+    const a = parseAnchor({ ...base, rects: [{ x: 1.234, y: 2, w: 30, h: 10 }] });
+    expect(a).toMatchObject({ ...base, rects: [{ x: 1.23, y: 2, w: 30, h: 10 }] });
+  });
+  it("rejects malformed rects on region anchors too", () => {
+    expect(() => parseAnchor({ ...base, rects: [{ x: -1, y: 0, w: 1, h: 1 }] })).toThrow();
+  });
+});

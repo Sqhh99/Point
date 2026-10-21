@@ -3,6 +3,7 @@ import type { Block, DocView, Mark, MarkAnchor, PageRect, ParsedDoc, TaskKind } 
 import type { JSX } from "react";
 import type { CaptureResult } from "../shared/ipc";
 import { CaptureOverlay } from "./Capture";
+import { SelectionOverlay, confirmDuration, PDF_CSS_BASE, type OverlayMode } from "./SelectionOverlay";
 import { EmptyState } from "./EmptyState";
 import { IconAsk, IconCapture, IconDiagram, IconExplain, IconMark, IconMore, IconNote } from "./icons";
 import { isCaptureKey, placeBar, type Box } from "./layout";
@@ -28,6 +29,8 @@ export interface SelectionInfo {
 export interface RegionInfo extends CaptureResult {
   page?: number;
   blockId?: string;
+  /** Page coordinates of the dragged rectangle (PDF); written into RegionAnchor.rects on mark. */
+  rects?: PageRect[];
 }
 
 type BarAction = "ask" | "mark" | "explain" | "note" | "diagram";
@@ -90,6 +93,25 @@ function pdfAnchor(range: Range, text: string): Pick<SelectionInfo, "prefix" | "
     prefix: i > 0 ? flat.slice(Math.max(0, i - 32), i) : undefined,
     suffix: i >= 0 && i + q.length < flat.length ? flat.slice(i + q.length, i + q.length + 32) : undefined
   };
+}
+
+/** Client-pixel capture box → page PageRect(s). Only PDFs (`.pdf-page`) produce rects. */
+function pageRectsFromClient(rect: Box): { page: number; rects: PageRect[] } | null {
+  const el = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+  const page = el?.closest<HTMLElement>(".pdf-page");
+  if (!page) return null;
+  const n = Number(page.dataset.page);
+  if (!Number.isInteger(n) || n < 1) return null;
+  const box = page.getBoundingClientRect();
+  const k = Number(page.dataset.scale) / (96 / 72);
+  if (!(k > 0)) return null;
+  const r: PageRect = {
+    x: Math.max(0, Math.round(((rect.x - box.left) / k) * 100) / 100),
+    y: Math.max(0, Math.round(((rect.y - box.top) / k) * 100) / 100),
+    w: Math.max(0.01, Math.round((rect.width / k) * 100) / 100),
+    h: Math.max(0.01, Math.round((rect.height / k) * 100) / 100)
+  };
+  return { page: n, rects: [r] };
 }
 
 const stripIpc = (e: unknown): string => String((e as Error)?.message ?? e).replace(/^Error invoking remote method '[^']+': (Error: )?/, "");
@@ -157,11 +179,13 @@ interface ReaderProps {
   /** 解读 on a region. */
   onRegionExplain(r: RegionInfo): void;
   marks: Mark[];
-  /** Scroll to a block (from the marks list); a new seq re-runs. */
-  locate: { blockId?: string; page?: number; text?: string; seq: number } | null;
+  /** Scroll to a block / page (from the marks list); a new seq re-runs. `rects` draws SelectionOverlay. */
+  locate: { blockId?: string; page?: number; text?: string; rects?: PageRect[]; seq: number } | null;
+  /** Bumped when the composer drops a capture (send or remove); clears the pending dashed overlay. */
+  clearSelectionSeq?: number;
 }
 
-export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorkspace, onOpenFile, onOpenRecent, vision, onCapture, onCaptureError, onMark, onRegionExplain, marks, locate }: ReaderProps) {
+export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorkspace, onOpenFile, onOpenRecent, vision, onCapture, onCaptureError, onMark, onRegionExplain, marks, locate, clearSelectionSeq }: ReaderProps) {
   const [capture, setCapture] = useState<Box | null>(null);
   const [more, setMore] = useState(false);
   const [doc, setDoc] = useState<ParsedDoc | null>(null);
@@ -175,6 +199,16 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
   const [fit, setFit] = useState<{ seq: number; max?: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toolbar, setToolbar] = useState<{ top: number; left: number; sel?: SelectionInfo; region?: RegionInfo } | null>(null);
+  /**
+   * Session selection overlay (not persisted).
+   * - PDF: page + PageRects, drawn inside PdfView
+   * - other: local PageRects in the scroller's content coordinates
+   */
+  const [selection, setSelection] = useState<
+    | { mode: OverlayMode; page: number; rects: PageRect[] }
+    | { mode: OverlayMode; local: PageRect[] }
+    | null
+  >(null);
   const articleRef = useRef<HTMLElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const timer = useRef<number | undefined>(undefined);
@@ -182,11 +216,43 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
   /** The bar's real size once rendered; a fallback before the first paint. */
   const barSize = (fallbackWidth = 340) => ({ width: toolbarRef.current?.offsetWidth || fallbackWidth, height: toolbarRef.current?.offsetHeight || TOOLBAR_H });
 
-  const close = useCallback(() => {
+  const close = useCallback((opts?: { keepSelection?: boolean }) => {
     window.clearTimeout(timer.current);
     setToolbar(null);
     setMore(false);
+    if (!opts?.keepSelection) setSelection(null);
   }, []);
+
+  useEffect(() => {
+    if (clearSelectionSeq) setSelection(null);
+  }, [clearSelectionSeq]);
+
+  // Confirm flash: remove after fade+hold+fade (or hold only when reduced-motion).
+  useEffect(() => {
+    if (selection?.mode !== "confirm") return;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const t = window.setTimeout(() => setSelection(null), confirmDuration(reduced));
+    return () => window.clearTimeout(t);
+  }, [selection]);
+
+  // After 「问 AI」 the bar is gone but the dashed overlay stays until Esc / click outside / send.
+  useEffect(() => {
+    if (!selection || selection.mode !== "pending" || toolbar) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setSelection(null);
+    };
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement;
+      if (t.closest(".ai-panel, .selection-toolbar, .capture-overlay")) return;
+      setSelection(null);
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onDown);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("mousedown", onDown);
+    };
+  }, [selection, toolbar]);
 
   const measure = useCallback(() => {
     const article = articleRef.current;
@@ -204,6 +270,7 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
     const top = p.top + scroller.scrollTop;
     const left = p.left;
     const where = blockAt(range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement);
+    setSelection(null);
     setToolbar({ top, left, sel: { text, context: contextOf(range), page: pageOf(range), blockId: where.blockId, ...pdfAnchor(range, text) } });
   }, []);
 
@@ -228,15 +295,17 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
       if (!toolbarRef.current?.contains(e.target as Node)) close();
     };
     const onSel = () => !toolbar.region && window.getSelection()?.isCollapsed && close();
+    // Scroll dismisses the floating bar; region dashed overlay stays (it lives on the page).
+    const onScroll = () => (toolbar.region ? close({ keepSelection: true }) : close());
     document.addEventListener("keydown", onKey);
     document.addEventListener("mousedown", onDown);
     document.addEventListener("selectionchange", onSel);
-    scroller?.addEventListener("scroll", close, { passive: true });
+    scroller?.addEventListener("scroll", onScroll, { passive: true });
     return () => {
       document.removeEventListener("keydown", onKey);
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("selectionchange", onSel);
-      scroller?.removeEventListener("scroll", close);
+      scroller?.removeEventListener("scroll", onScroll);
     };
   }, [toolbar, close]);
 
@@ -253,20 +322,50 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
   );
   const markedIds = useMemo(() => new Set(marks.map((m) => (m.anchor.kind === "text" ? blockFor(m.anchor) : undefined)).filter((x): x is string => !!x)), [marks, blockFor]);
 
-  // Jump back to a mark: its block (switching sheet first for Excel) or, in a PDF, its page.
+  // Jump back to a mark: rects → confirm SelectionOverlay; else block .located / page only.
   useEffect(() => {
     if (!locate || !(doc || view)) return;
+    const scroller = articleRef.current?.parentElement;
+
+    const centerInView = (el: Element) => {
+      if (!scroller) return el.scrollIntoView({ block: "center" });
+      const margin = 48;
+      const er = el.getBoundingClientRect();
+      const sr = scroller.getBoundingClientRect();
+      const ideal = sr.top + sr.height / 2 - er.height / 2;
+      let delta = er.top - ideal;
+      const topAfter = er.top - delta;
+      const botAfter = er.bottom - delta;
+      if (topAfter < sr.top + margin) delta = er.top - (sr.top + margin);
+      if (botAfter > sr.bottom - margin) delta = er.bottom - (sr.bottom - margin);
+      scroller.scrollTop += delta;
+    };
+
+    if (locate.rects?.length && locate.page) {
+      setSelection({ mode: "confirm", page: locate.page, rects: locate.rects });
+      if (view?.kind === "pdf") setGoto({ page: locate.page, seq: locate.seq });
+      // After paint, bring the overlay (or page) to the middle with ≥48px margins.
+      requestAnimationFrame(() => {
+        const el =
+          scroller?.querySelector(`[data-testid="selection-overlay"][data-mode="confirm"]`) ??
+          scroller?.querySelector(`[data-page="${locate.page}"]`);
+        if (el) centerInView(el);
+      });
+      return;
+    }
+    setSelection(null);
     const target = locate.blockId && blockFor({ blockId: locate.blockId, text: locate.text ?? "" });
     if (target) {
       const m = /^s(\d+)r\d+$/.exec(target);
       if (m && view?.kind === "xlsx" && Number(m[1]) !== sheet) return setSheet(Number(m[1]));
       const el = articleRef.current?.querySelector(`[data-block-id="${CSS.escape(target)}"]`)?.closest(".block");
       if (!el) return;
-      el.scrollIntoView({ block: "center" });
+      centerInView(el);
       el.classList.add("located");
       const t = window.setTimeout(() => el.classList.remove("located"), 1200);
       return () => window.clearTimeout(t);
     }
+    // Old region marks (no rects): jump by page only — no whole-page flash.
     if (locate.page && view?.kind === "pdf") setGoto({ page: locate.page, seq: locate.seq });
   }, [locate?.seq, doc, view, sheet, pdfReady]);
 
@@ -276,22 +375,52 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
     if (!scroller) return onCapture(r);
     const box = scroller.getBoundingClientRect();
     const where = blockAt(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+    const placed = pageRectsFromClient(rect);
+    const page = placed?.page ?? where.page;
+    const rects = placed?.rects;
+    if (placed) {
+      setSelection({ mode: "pending", page: placed.page, rects: placed.rects });
+    } else {
+      // Article-scroller content coords so the dashed box scrolls with the document.
+      setSelection({
+        mode: "pending",
+        local: [
+          {
+            x: rect.x - box.left + scroller.scrollLeft,
+            y: rect.y - box.top + scroller.scrollTop,
+            w: rect.width,
+            h: rect.height
+          }
+        ]
+      });
+    }
     const p = placeBar({ top: rect.y, left: rect.x, width: rect.width, height: rect.height }, box, barSize(260));
     const top = p.top + scroller.scrollTop;
     const left = p.left;
-    setToolbar({ top, left, region: { ...r, ...where } });
+    setToolbar({ top, left, region: { ...r, blockId: where.blockId, page, rects } });
   };
 
   const run = (id: BarAction) => {
     if (!toolbar) return;
     const { sel, region } = toolbar;
-    close();
     if (region) {
-      if (id === "ask") onCapture(region);
-      else if (id === "mark") onMark({ kind: "region", sha: region.sha, width: region.width, height: region.height, blockId: region.blockId, page: region.page });
-      else if (id === "explain") onRegionExplain(region);
+      // 「问 AI」: keep the dashed overlay until the composer sends / drops the capture.
+      if (id === "ask") {
+        close({ keepSelection: true });
+        onCapture(region);
+        return;
+      }
+      close();
+      if (id === "mark") {
+        const a: MarkAnchor = { kind: "region", sha: region.sha, width: region.width, height: region.height };
+        if (region.blockId) a.blockId = region.blockId;
+        if (region.page) a.page = region.page;
+        if (region.rects?.length) a.rects = region.rects;
+        onMark(a);
+      } else if (id === "explain") onRegionExplain(region);
       return;
     }
+    close();
     if (!sel) return;
     if (id === "mark") {
       onMark({ kind: "text", text: sel.text, blockId: sel.blockId, page: sel.page, context: sel.context, prefix: sel.prefix, suffix: sel.suffix, rects: sel.rects });
@@ -423,6 +552,9 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
         }}
       />
     )}
+    {selection && "local" in selection && (
+      <SelectionOverlay rects={selection.local} scale={PDF_CSS_BASE} mode={selection.mode} />
+    )}
     {toolbar && (
       <div
         ref={toolbarRef}
@@ -479,6 +611,7 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
           goto={goto}
           markTexts={markTexts}
           markRects={markRects}
+          selection={selection && "page" in selection ? selection : null}
           fit={fit}
           onFit={setZoom}
           onState={setPdf}
