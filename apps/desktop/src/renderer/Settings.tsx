@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ProviderId } from "@point/core";
 import type { SettingsView } from "../shared/ipc";
+import { settingsFormModel } from "../shared/model-name";
 
 const api = window.point;
 
@@ -27,8 +28,9 @@ export function Settings({ onClose, onSaved }: { onClose(): void; onSaved?(): vo
   useEffect(() => {
     if (!cfg) return;
     setBaseURL(cfg.baseURL);
-    setModel(cfg.model);
-    setVision(cfg.visionOverride === true);
+    setModel(settingsFormModel(cfg));
+    // No key: nothing is chosen yet, so the vision toggle starts off too.
+    setVision(cfg.hasKey && cfg.visionOverride === true);
     setKey("");
   }, [id, state]);
 
@@ -43,6 +45,9 @@ export function Settings({ onClose, onSaved }: { onClose(): void; onSaved?(): vo
   const modelId = fallsBack ? preset.defaultModel : typed;
   const isPreset = preset.models.includes(modelId);
   const presetVision = preset.visionModels.includes(modelId);
+  // No key and no model typed: nothing is chosen. No model name anywhere, the 看图 toggle starts off, and
+  // Save waits for a model id (Save also stores the API Key).
+  const unset = !cfg.hasKey && !model.trim();
 
   const save = async () => {
     setBusy(true);
@@ -98,7 +103,7 @@ export function Settings({ onClose, onSaved }: { onClose(): void; onSaved?(): vo
       </label>
       <label className="field">
         模型
-        <input type="text" spellCheck={false} list="model-list" value={model} onChange={(e) => {
+        <input type="text" className="model-id" spellCheck={false} list="model-list" value={model} placeholder={cfg.hasKey ? undefined : "填写服务商的模型 id"} onChange={(e) => {
             setModel(e.target.value);
           }} />
         <datalist id="model-list">
@@ -112,7 +117,17 @@ export function Settings({ onClose, onSaved }: { onClose(): void; onSaved?(): vo
           预设服务只能用列表中的模型，保存后将改用 {preset.defaultModel}
         </div>
       )}
-      {isPreset ? (
+      {unset ? (
+        <div className="check-field">
+          <label className="check">
+            <input type="checkbox" data-testid="vision-toggle" checked={vision} onChange={(e) => setVision(e.target.checked)} />
+            支持看图
+          </label>
+          <span className="hint" data-testid="vision-unset-hint">
+            模型支持图片输入时再开启
+          </span>
+        </div>
+      ) : isPreset ? (
         <div className="field-readonly" data-testid="vision-readonly">
           看图：{presetVision ? "支持" : "不支持"}
         </div>
@@ -138,7 +153,7 @@ export function Settings({ onClose, onSaved }: { onClose(): void; onSaved?(): vo
         <span className="hint">{state.encryptionAvailable ? "API Key 只在本机用系统加密保存，不会再显示" : "系统加密不可用，暂时无法保存 API Key"}</span>
       </label>
       <div className="actions">
-        <button className="primary" onClick={save} disabled={busy}>
+        <button className="primary" onClick={save} disabled={busy || unset} title={unset ? "请先填写模型 id" : undefined}>
           保存
         </button>
         <button onClick={test} disabled={busy || !cfg.hasKey}>

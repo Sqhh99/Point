@@ -30,6 +30,9 @@ export const FAKE_FORMAT_ANSWER =
   "- **粗体要点**：带 `inline_code` 与 [链接文字](https://example.com/docs/page) 的一项\n" +
   "- 第二项普通文字\n";
 
+/** Returned when the prompt contains H3-PROBE: an answer that opens with an h3, then a second h3 mid-answer. */
+export const FAKE_H3_ANSWER = "### 开头的三级标题\n\n第一段正文，标题下方 4px。\n\n### 中间的三级标题\n\n第二段正文，标题上方 12px。\n";
+
 export const fakeEnabled = () => process.env.POINT_FAKE_LLM === "1";
 /** The fake model accepts images unless POINT_FAKE_VISION=0 (lets e2e cover the "no vision" path). */
 export const fakeVision = () => process.env.POINT_FAKE_VISION !== "0";
@@ -47,7 +50,7 @@ export class FakeProvider implements LLMProvider {
     const marksAnswer = parts
       ? `**模拟回答**：已收到 ${parts.filter((p) => p.type === "text" && p.text.startsWith("标记 ")).length} 个标记（图片 ${parts.filter((p) => p.type === "image").length} 张）。`
       : null;
-    const answer = marksAnswer ?? (prompt.includes("XSS-PROBE") ? FAKE_XSS_ANSWER : prompt.includes("FORMAT-PROBE") ? FAKE_FORMAT_ANSWER : prompt.includes("MATH-PROBE") ? FAKE_MATH_ANSWER : prompt.includes("TYPO-PROBE") ? FAKE_TYPO_ANSWER : last?.images?.length ? FAKE_IMAGE_ANSWER : FAKE_ANSWER);
+    const answer = marksAnswer ?? (prompt.includes("XSS-PROBE") ? FAKE_XSS_ANSWER : prompt.includes("FORMAT-PROBE") ? FAKE_FORMAT_ANSWER : prompt.includes("MATH-PROBE") ? FAKE_MATH_ANSWER : prompt.includes("TYPO-PROBE") ? FAKE_TYPO_ANSWER : prompt.includes("H3-PROBE") ? FAKE_H3_ANSWER : last?.images?.length ? FAKE_IMAGE_ANSWER : FAKE_ANSWER);
     const chunks = answer.match(/[\s\S]{1,12}/g) ?? [];
     for (const text of chunks) {
       if (opts.signal?.aborted) {

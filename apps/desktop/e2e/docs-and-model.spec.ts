@@ -170,6 +170,42 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
     await bar.getByTestId("model-open-settings").click();
     await expect(win.getByRole("heading", { name: "模型设置" })).toBeVisible();
     await expect(win.getByTestId("status-unconfigured")).toHaveText("未配置");
+    // No key: the form chooses nothing for the user (UI设计员 empty-state spec): empty model field with a
+    // neutral placeholder, 看图 toggle off with a hint, Save disabled until a model id is typed.
+    const modelField = win.getByLabel("模型", { exact: true });
+    const saveBtn = win.getByRole("button", { name: "保存" });
+    const emptyState = async () => {
+      await expect(modelField).toHaveValue("");
+      await expect(modelField).toHaveAttribute("placeholder", "填写服务商的模型 id");
+      await expect(win.getByTestId("vision-readonly")).toHaveCount(0);
+      await expect(win.getByTestId("vision-toggle")).not.toBeChecked();
+      await expect(win.getByTestId("vision-unset-hint")).toHaveText("模型支持图片输入时再开启");
+      await expect(saveBtn).toBeDisabled();
+      await expect(saveBtn).toHaveAttribute("title", "请先填写模型 id");
+      await expect(win.locator(".settings")).not.toContainText(/deepseek-|gpt-|glm-/i);
+    };
+    await emptyState();
+    // Chromium's getComputedStyle has no ::placeholder: check the loaded rule instead (a token, no literal colour).
+    await expect(modelField).toHaveClass(/\bmodel-id\b/);
+    const placeholderRule = await win.evaluate(() =>
+      [...document.styleSheets].flatMap((sh) => [...sh.cssRules]).filter((r): r is CSSStyleRule => r instanceof CSSStyleRule && r.selectorText === ".model-id::placeholder").map((r) => r.style.color)
+    );
+    expect(placeholderRule).toEqual(["var(--text-disabled)"]);
+    await win.getByLabel("模型服务").selectOption({ label: "OpenAI GPT" });
+    await emptyState();
+    await win.getByLabel("模型服务").selectOption({ label: "DeepSeek" });
+    await emptyState();
+    for (const scheme of ["light", "dark"] as const) {
+      await win.emulateMedia({ colorScheme: scheme });
+      await win.locator(".settings").screenshot({ path: join(results, "screenshots", `unconfigured-form-${scheme}.png`) });
+    }
+    await win.emulateMedia({ colorScheme: "light" });
+    // Typing a model id enables Save and shows that model's 看图 line.
+    await modelField.fill("deepseek-flash");
+    await expect(win.getByTestId("vision-readonly")).toHaveText("看图：支持");
+    await expect(saveBtn).toBeEnabled();
+    await modelField.fill("");
+    await expect(saveBtn).toBeDisabled();
     await win.screenshot({ path: join(results, "unconfigured-settings.png") });
   });
 
@@ -236,6 +272,50 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
     }
   });
 
+  test("custom endpoint: the status-bar tooltip has no DeepSeek prefix, only the model id", async () => {
+    const win = await app.firstWindow();
+    await requireEncryption(win);
+    await win.getByRole("button", { name: "设置" }).click();
+    await win.getByLabel("模型服务").selectOption({ label: "DeepSeek" });
+    const baseInput = win.getByLabel("Base URL");
+    const modelInput = win.getByLabel("模型", { exact: true });
+    // Mock endpoint (never called here): only the settings are saved and displayed.
+    await baseInput.fill("http://127.0.0.1:9/v1");
+    await modelInput.fill("mock-math");
+    await win.getByRole("button", { name: "保存" }).click();
+    await expect(win.getByText("已保存", { exact: true })).toBeVisible();
+    await leaveAndReopen(win);
+    const status = win.getByTestId("status-model");
+    await expect(status).toHaveText("mock-math");
+    await expect(status).toHaveAttribute("title", "mock-math");
+    // Evidence: the native tooltip is not capturable, so the test temporarily prints the item's title
+    // attribute (as read from the DOM) in the status bar, light and dark, then removes it.
+    const statusbar = win.getByTestId("statusbar");
+    await status.evaluate((el) => {
+      const probe = document.createElement("span");
+      probe.className = "statusbar-item";
+      probe.dataset.e2eProbe = "";
+      probe.textContent = `悬停提示（title）：${el.getAttribute("title")}`;
+      el.parentElement!.prepend(probe);
+    });
+    for (const scheme of ["light", "dark"] as const) {
+      await win.emulateMedia({ colorScheme: scheme });
+      await statusbar.screenshot({ path: join(results, "screenshots", `status-tooltip-custom-${scheme}.png`) });
+    }
+    await win.emulateMedia({ colorScheme: "light" });
+    await statusbar.evaluate((el) => el.querySelector("[data-e2e-probe]")!.remove());
+    // Back to the preset endpoint: the service name returns.
+    await win.getByRole("button", { name: "设置" }).click();
+    await win.getByLabel("模型服务").selectOption({ label: "DeepSeek" });
+    await baseInput.fill("");
+    await modelInput.fill("deepseek-flash");
+    await win.getByRole("button", { name: "保存" }).click();
+    await expect(win.getByText("已保存", { exact: true })).toBeVisible();
+    await leaveAndReopen(win);
+    await expect(status).toHaveText("deepseek-flash");
+    await expect(status).toHaveAttribute("title", "DeepSeek · deepseek-flash");
+  });
+
   test("the choice survives a restart, and the form shows it", async () => {
     await app.close();
     const win = await start();
@@ -256,6 +336,8 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
     const heading = win.getByRole("heading", { name: "模型设置" });
     if (!(await heading.isVisible())) await win.getByRole("button", { name: "设置", exact: true }).click();
     await win.getByLabel("模型服务").selectOption({ label: "DeepSeek" });
+    // Without a saved key (no OS encryption locally) Save needs a model id first.
+    await win.getByLabel("模型", { exact: true }).fill("deepseek-flash");
     await win.getByLabel("API Key").fill("sk-e2e-secret-123");
     await win.getByRole("button", { name: "保存" }).click();
     if (encryption) {
@@ -763,7 +845,29 @@ test.describe("per-conversation model and effort", () => {
     await answer.screenshot({ path: join(results, "chat-typography-dark.png") });
     await win.emulateMedia({ colorScheme: "light" });
   });
+  test("chat h3: 15px/600, 12px above and 4px below; an answer that opens with h3 has no top margin", async () => {
+    const win = await app.firstWindow();
+    await win.getByPlaceholder(/问点什么/).fill("H3-PROBE 三级标题");
+    await win.getByRole("button", { name: "发送", exact: true }).click();
+    const answer = win.locator(".msg.assistant").filter({ hasText: "中间的三级标题" }).last();
+    await expect(answer.getByRole("button", { name: "插入笔记" })).toBeVisible({ timeout: 15_000 });
+    const h3 = await answer.locator(".markdown h3").evaluateAll((els) =>
+      els.map((e) => {
+        const cs = getComputedStyle(e);
+        return { text: e.textContent, size: parseFloat(cs.fontSize), weight: cs.fontWeight, mt: parseFloat(cs.marginTop), mb: parseFloat(cs.marginBottom) };
+      })
+    );
+    expect(h3).toEqual([
+      { text: "开头的三级标题", size: 15, weight: "600", mt: 0, mb: 4 },
+      { text: "中间的三级标题", size: 15, weight: "600", mt: 12, mb: 4 }
+    ]);
+    await answer.screenshot({ path: join(results, "screenshots", "chat-h3-light.png") });
+    await win.emulateMedia({ colorScheme: "dark" });
+    await answer.screenshot({ path: join(results, "screenshots", "chat-h3-dark.png") });
+    await win.emulateMedia({ colorScheme: "light" });
+  });
 });
+
 
 const document_fonts_ready = (win: Win) => win.evaluate(async () => void (await document.fonts.ready));
 
