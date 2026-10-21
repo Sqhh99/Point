@@ -61,8 +61,26 @@ describe("Settings form without a key", () => {
     expect(src).toMatch(/const unset = !cfg\.hasKey && !model\.trim\(\);/);
     expect(src).toContain('placeholder={cfg.hasKey ? undefined : "填写服务商的模型 id"}');
     expect(src).toContain("模型支持图片输入时再开启");
-    expect(src).toContain('disabled={busy || unset} title={unset ? "请先填写模型 id" : undefined}');
+    expect(src).toContain('aria-disabled={unset || undefined} aria-describedby={unset ? "model-id-hint" : undefined} title={unset ? "请先填写模型 id" : undefined}');
     const css = readFileSync(join(import.meta.dirname, "../../src/renderer/style.css"), "utf8");
     expect(css).toContain(".model-id::placeholder { color: var(--text-disabled); }");
+  });
+  it("missing model id: a persistent hint under the field; Save / Enter focus the field instead of saving (aria-disabled, not disabled)", () => {
+    const src = readFileSync(join(import.meta.dirname, "../../src/renderer/Settings.tsx"), "utf8");
+    expect(src).toMatch(/\{unset && \(\s*<span className="hint model-id-hint" id="model-id-hint" data-testid="model-id-hint">\s*请先填写模型 id\s*<\/span>/);
+    expect(src).toContain('onClick={trySave} disabled={busy} aria-disabled={unset || undefined}');
+    expect(src).toMatch(/const trySave = \(\) => \{\s*if \(unset\) modelRef\.current\?\.focus\(\);\s*else void save\(\);/);
+    expect(src).toContain('<section className="settings" onKeyDown={onEnter}>');
+    expect(src).not.toMatch(/disabled=\{busy \|\| unset\}/);
+    const css = readFileSync(join(import.meta.dirname, "../../src/renderer/style.css"), "utf8");
+    expect(css).toContain(".model-id-hint { color: var(--text-disabled); }");
+    expect(css).toContain('button:disabled, button[aria-disabled="true"] { opacity: 0.45; cursor: default; }');
+  });
+  it("model suggestions: only this service's preset ids on its preset endpoint; none (no datalist) on a custom endpoint", () => {
+    const src = readFileSync(join(import.meta.dirname, "../../src/renderer/Settings.tsx"), "utf8");
+    expect(src).toContain("const suggestions = customEndpoint ? [] : preset.models;");
+    expect(src).toContain('list={suggestions.length ? "model-list" : undefined}');
+    expect(src).toMatch(/\{suggestions\.length > 0 && \(\s*<datalist id="model-list">/);
+    expect(src).not.toContain("{preset.models.map((m) => (");
   });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { ProviderId } from "@point/core";
 import type { SettingsView } from "../shared/ipc";
 import { settingsFormModel } from "../shared/model-name";
@@ -10,6 +10,7 @@ export function Settings({ onClose, onSaved }: { onClose(): void; onSaved?(): vo
   const [id, setId] = useState<ProviderId>("deepseek");
   const [baseURL, setBaseURL] = useState("");
   const [model, setModel] = useState("");
+  const modelRef = useRef<HTMLInputElement>(null);
   const [key, setKey] = useState("");
   const [vision, setVision] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -48,6 +49,23 @@ export function Settings({ onClose, onSaved }: { onClose(): void; onSaved?(): vo
   // No key and no model typed: nothing is chosen. No model name anywhere, the 看图 toggle starts off, and
   // Save waits for a model id (Save also stores the API Key).
   const unset = !cfg.hasKey && !model.trim();
+  // Suggestions: only this service's own preset ids, and only on its preset endpoint. A custom endpoint
+  // (e.g. Qwen behind an OpenAI-compatible URL) gets none, so no list pops up. Nothing is preselected or
+  // auto-filled; ↑↓ / Enter / Esc are the native list's (no <form>, so nothing submits).
+  const suggestions = customEndpoint ? [] : preset.models;
+
+  // Save while no model id: not saved (aria-disabled, still focusable); focus goes to the model field.
+  const trySave = () => {
+    if (unset) modelRef.current?.focus();
+    else void save();
+  };
+  // Enter in a field does the same only while the model id is missing; otherwise Enter does nothing (as before).
+  const onEnter = (e: KeyboardEvent) => {
+    if (e.key !== "Enter" || e.nativeEvent.isComposing || !unset) return;
+    if (!(e.target instanceof HTMLInputElement) || e.target.type === "checkbox") return;
+    e.preventDefault();
+    modelRef.current?.focus();
+  };
 
   const save = async () => {
     setBusy(true);
@@ -74,7 +92,7 @@ export function Settings({ onClose, onSaved }: { onClose(): void; onSaved?(): vo
   };
 
   return (
-    <section className="settings">
+    <section className="settings" onKeyDown={onEnter}>
       <div className="settings-head">
         <h1>模型设置</h1>
         <button className="link" onClick={onClose}>
@@ -103,14 +121,21 @@ export function Settings({ onClose, onSaved }: { onClose(): void; onSaved?(): vo
       </label>
       <label className="field">
         模型
-        <input type="text" className="model-id" spellCheck={false} list="model-list" value={model} placeholder={cfg.hasKey ? undefined : "填写服务商的模型 id"} onChange={(e) => {
+        <input ref={modelRef} type="text" className="model-id" aria-label="模型" aria-describedby={unset ? "model-id-hint" : undefined} spellCheck={false} list={suggestions.length ? "model-list" : undefined} value={model} placeholder={cfg.hasKey ? undefined : "填写服务商的模型 id"} onChange={(e) => {
             setModel(e.target.value);
           }} />
-        <datalist id="model-list">
-          {preset.models.map((m) => (
-            <option key={m} value={m} />
-          ))}
-        </datalist>
+        {suggestions.length > 0 && (
+          <datalist id="model-list">
+            {suggestions.map((m) => (
+              <option key={m} value={m} />
+            ))}
+          </datalist>
+        )}
+        {unset && (
+          <span className="hint model-id-hint" id="model-id-hint" data-testid="model-id-hint">
+            请先填写模型 id
+          </span>
+        )}
       </label>
       {fallsBack && (
         <div className="field-readonly" data-testid="model-fallback-hint">
@@ -153,7 +178,7 @@ export function Settings({ onClose, onSaved }: { onClose(): void; onSaved?(): vo
         <span className="hint">{state.encryptionAvailable ? "API Key 只在本机用系统加密保存，不会再显示" : "系统加密不可用，暂时无法保存 API Key"}</span>
       </label>
       <div className="actions">
-        <button className="primary" onClick={save} disabled={busy || unset} title={unset ? "请先填写模型 id" : undefined}>
+        <button className="primary" onClick={trySave} disabled={busy} aria-disabled={unset || undefined} aria-describedby={unset ? "model-id-hint" : undefined} title={unset ? "请先填写模型 id" : undefined}>
           保存
         </button>
         <button onClick={test} disabled={busy || !cfg.hasKey}>

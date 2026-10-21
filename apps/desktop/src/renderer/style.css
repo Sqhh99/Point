@@ -62,7 +62,7 @@ html, body, #app { height: 100%; margin: 0; }
 html, body { overflow: hidden; }
 #app { position: fixed; inset: 0; height: auto; }
 button { font: inherit; font-size: 13px; color: inherit; background: transparent; border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; cursor: pointer; }
-button:disabled { opacity: 0.45; cursor: default; }
+button:disabled, button[aria-disabled="true"] { opacity: 0.45; cursor: default; }
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 button.link, button.icon { border: none; padding: 4px 8px; color: var(--muted); }
 button.link:hover { color: var(--text); }
@@ -316,6 +316,7 @@ button.link.active { color: var(--accent); }
 .check-field { display: flex; flex-direction: column; gap: 4px; margin: -4px 0 16px; }
 .check-field .check { margin: 0; }
 .model-id::placeholder { color: var(--text-disabled); }
+.model-id-hint { color: var(--text-disabled); }
 .field-readonly { margin: -4px 0 16px; font-size: 13px; color: var(--text-secondary); }
 .capture-missing { display: grid; place-items: center; box-sizing: border-box; background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .attached-thumb .capture-missing { height: 48px; width: 86px; }

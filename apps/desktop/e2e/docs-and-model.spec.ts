@@ -180,8 +180,14 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
       await expect(win.getByTestId("vision-readonly")).toHaveCount(0);
       await expect(win.getByTestId("vision-toggle")).not.toBeChecked();
       await expect(win.getByTestId("vision-unset-hint")).toHaveText("模型支持图片输入时再开启");
-      await expect(saveBtn).toBeDisabled();
+      await expect(win.getByTestId("model-id-hint")).toHaveText("请先填写模型 id");
+      // Styled disabled but still focusable / clickable (aria-disabled), so it can send focus to the field.
+      await expect(saveBtn).toHaveAttribute("aria-disabled", "true");
+      // (Playwright's toBeEnabled counts aria-disabled as disabled, so read the native property.)
+      expect(await saveBtn.evaluate((b) => (b as HTMLButtonElement).disabled)).toBe(false);
       await expect(saveBtn).toHaveAttribute("title", "请先填写模型 id");
+      await expect(saveBtn).toHaveAttribute("aria-describedby", "model-id-hint");
+      await expect(modelField).toHaveAttribute("aria-describedby", "model-id-hint");
       await expect(win.locator(".settings")).not.toContainText(/deepseek-|gpt-|glm-/i);
     };
     await emptyState();
@@ -191,6 +197,24 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
       [...document.styleSheets].flatMap((sh) => [...sh.cssRules]).filter((r): r is CSSStyleRule => r instanceof CSSStyleRule && r.selectorText === ".model-id::placeholder").map((r) => r.style.color)
     );
     expect(placeholderRule).toEqual(["var(--text-disabled)"]);
+    const hintColor = await win.getByTestId("model-id-hint").evaluate((el) => {
+      const probe = document.createElement("span");
+      probe.style.color = "var(--text-disabled)";
+      document.body.append(probe);
+      const want = getComputedStyle(probe).color;
+      probe.remove();
+      return { got: getComputedStyle(el).color, want };
+    });
+    expect(hintColor.got).toBe(hintColor.want);
+    // Same greyed look as a disabled button, and hovering changes nothing.
+    const look = () => saveBtn.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return { opacity: cs.opacity, cursor: cs.cursor, bg: cs.backgroundColor, color: cs.color, border: cs.borderColor };
+    });
+    const before = await look();
+    expect(before).toMatchObject({ opacity: "0.45", cursor: "default" });
+    await saveBtn.hover();
+    expect(await look()).toEqual(before);
     await win.getByLabel("模型服务").selectOption({ label: "OpenAI GPT" });
     await emptyState();
     await win.getByLabel("模型服务").selectOption({ label: "DeepSeek" });
@@ -200,12 +224,61 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
       await win.locator(".settings").screenshot({ path: join(results, "screenshots", `unconfigured-form-${scheme}.png`) });
     }
     await win.emulateMedia({ colorScheme: "light" });
-    // Typing a model id enables Save and shows that model's 看图 line.
-    await modelField.fill("deepseek-flash");
-    await expect(win.getByTestId("vision-readonly")).toHaveText("看图：支持");
-    await expect(saveBtn).toBeEnabled();
+    // Suggestions (UI设计员): only this service's ids, nothing preselected, focusing fills nothing;
+    // ↑↓ / Enter / Esc in the field never save or leave settings. A custom endpoint lists nothing.
+    const listed = () => win.evaluate(() => {
+      const input = document.querySelector<HTMLInputElement>("input.model-id")!;
+      return { list: input.getAttribute("list"), ids: [...(input.list?.options ?? [])].map((o) => o.value), html: document.querySelector(".settings")!.innerHTML };
+    });
+    expect((await listed()).ids).toEqual(["deepseek-flash", "deepseek-v4-pro"]);
+    await win.getByLabel("模型服务").selectOption({ label: "OpenAI GPT" });
+    const openai = await listed();
+    expect(openai.ids.length).toBeGreaterThan(0);
+    expect(openai.ids.every((m) => m.startsWith("gpt-"))).toBe(true);
+    await win.getByLabel("模型服务").selectOption({ label: "DeepSeek" });
+    await modelField.focus();
+    await expect(modelField).toHaveValue("");
+    for (const k of ["ArrowDown", "ArrowDown", "ArrowUp", "Enter", "Escape"]) await modelField.press(k);
+    await expect(win.getByRole("heading", { name: "模型设置" })).toBeVisible();
+    await expect(win.getByText("已保存", { exact: true })).toHaveCount(0);
+    expect((await win.evaluate(() => window.point.settings.get())).configured).toBe(false);
     await modelField.fill("");
-    await expect(saveBtn).toBeDisabled();
+    const baseField = win.getByLabel("Base URL");
+    await baseField.fill("http://127.0.0.1:9/v1");
+    const custom = await listed();
+    expect(custom.list).toBeNull();
+    expect(custom.ids).toEqual([]);
+    expect(custom.html).not.toMatch(/<datalist|deepseek-flash|deepseek-v4-pro/);
+    await modelField.focus();
+    await modelField.press("ArrowDown");
+    await expect(modelField).toHaveValue("");
+    await baseField.fill("");
+    expect((await listed()).list).toBe("model-list");
+
+    // Key typed, model id empty: Save and Enter move focus to the model field and save nothing.
+    const keyField = win.getByLabel("API Key");
+    await keyField.fill("e2e-placeholder-not-a-key");
+    const isModelFocused = () => win.evaluate(() => document.activeElement === document.querySelector("input.model-id"));
+    // A real mouse click; force only skips Playwright's aria-disabled actionability check.
+    await saveBtn.click({ force: true });
+    expect(await isModelFocused()).toBe(true);
+    await keyField.focus();
+    expect(await isModelFocused()).toBe(false);
+    await keyField.press("Enter");
+    expect(await isModelFocused()).toBe(true);
+    await expect(win.getByText("已保存", { exact: true })).toHaveCount(0);
+    const after = await win.evaluate(() => window.point.settings.get());
+    expect(after.providers.every((p) => !p.hasKey)).toBe(true);
+    expect(after.configured).toBe(false);
+    await keyField.fill("");
+    // Typing a model id hides the hint, makes Save a real button and shows that model's 看图 line.
+    await modelField.fill("deepseek-flash");
+    await expect(win.getByTestId("model-id-hint")).toHaveCount(0);
+    await expect(saveBtn).not.toHaveAttribute("aria-disabled", "true");
+    await expect(win.getByTestId("vision-readonly")).toHaveText("看图：支持");
+    await modelField.fill("");
+    await expect(win.getByTestId("model-id-hint")).toBeVisible();
+    await expect(saveBtn).toHaveAttribute("aria-disabled", "true");
     await win.screenshot({ path: join(results, "unconfigured-settings.png") });
   });
 
