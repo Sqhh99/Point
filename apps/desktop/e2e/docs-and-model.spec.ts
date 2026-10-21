@@ -285,6 +285,10 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
     await win.getByRole("button", { name: "保存" }).click();
     await expect(win.getByText("已保存", { exact: true })).toBeVisible();
     await leaveAndReopen(win);
+    // The status bar shows the model picked in ModelBar (the tester's repro picks it there).
+    const select = win.getByTestId("model-bar").getByTestId("model-select");
+    await expect(select.locator('option[value="mock-math"]')).toHaveCount(1);
+    await select.selectOption("mock-math");
     const status = win.getByTestId("status-model");
     await expect(status).toHaveText("mock-math");
     await expect(status).toHaveAttribute("title", "mock-math");
@@ -312,6 +316,7 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
     await win.getByRole("button", { name: "保存" }).click();
     await expect(win.getByText("已保存", { exact: true })).toBeVisible();
     await leaveAndReopen(win);
+    await select.selectOption("deepseek-flash");
     await expect(status).toHaveText("deepseek-flash");
     await expect(status).toHaveAttribute("title", "DeepSeek · deepseek-flash");
   });
