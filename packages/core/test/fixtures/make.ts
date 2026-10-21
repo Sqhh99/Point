@@ -1,12 +1,12 @@
 import JSZip from "jszip";
 
-/** Minimal valid PDF with one text line per entry in `pages` (Helvetica, ASCII only). */
-export function makePdf(pages: string[][]): Uint8Array {
+/** Minimal valid PDF with one text line per entry in `pages` (ASCII only), 12pt lines 40pt apart, in one standard Type1 font by name (not embedded; Helvetica by default). */
+export function makePdf(pages: string[][], font = "Helvetica"): Uint8Array {
   const objs: string[] = [];
   const pageIds = pages.map((_, i) => 4 + i * 2);
   objs[1] = "<< /Type /Catalog /Pages 2 0 R >>";
   objs[2] = `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${pages.length} >>`;
-  objs[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
+  objs[3] = `<< /Type /Font /Subtype /Type1 /BaseFont /${font} >>`;
   pages.forEach((lines, i) => {
     const id = pageIds[i];
     let y = 760;

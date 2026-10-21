@@ -90,9 +90,16 @@ function Page({ doc, n, scale, size, marks, rects }: { doc: PDFDocumentProxy; n:
         task = page.render({ canvasContext: ctx, viewport, transform: dpr === 1 ? undefined : [dpr, 0, 0, dpr, 0, 0] });
         await task.promise;
         if (!live) return;
+        const content = await page.getTextContent();
+        if (!live) return;
         t.replaceChildren();
         t.style.setProperty("--scale-factor", String(viewport.scale));
-        const tl = new lib.TextLayer({ textContentSource: page.streamTextContent(), container: t, viewport });
+        // pdf.js sizes each span by measuring its text on a canvas whose lang is the PDF's /Lang ("" when
+        // unset). The layer must resolve fonts with that same lang: inheriting the app's lang="zh-CN"
+        // turns generic serif/sans-serif into CJK fonts (SimSun / YaHei on Windows) whose Latin widths
+        // differ, so spans overlap and drift from the glyphs.
+        t.lang = content.lang ?? "";
+        const tl = new lib.TextLayer({ textContentSource: content, container: t, viewport });
         layer = tl;
         await tl.render();
         if (live) setDone((d) => d + 1);
