@@ -102,6 +102,8 @@ function Page({ doc, n, scale, size, marks, rects }: { doc: PDFDocumentProxy; n:
         const tl = new lib.TextLayer({ textContentSource: content, container: t, viewport });
         layer = tl;
         await tl.render();
+        if (!live) return;
+        closeLineGaps(t);
         if (live) setDone((d) => d + 1);
       } catch (e) {
         if ((e as { name?: string }).name !== "RenderingCancelledException") console.warn("pdf page", n, e);
@@ -288,4 +290,64 @@ export function PdfView({ data, zoom, goto, markTexts, markRects, fit, onFit, on
       {doc && Array.from({ length: doc.numPages }, (_, i) => <Page key={i} doc={doc} n={i + 1} scale={scale} size={size} marks={markTexts.get(i + 1) ?? []} rects={markRects.get(i + 1) ?? []} />)}
     </div>
   );
+}
+
+/**
+ * Selection gaps between lines: spans are one font-size tall (line-height 1), so a multi-line selection
+ * shows strips of page between lines. Give each span a line box as tall as the distance to the next line
+ * below it (same column, close enough to be the same paragraph), centred on the glyphs so they don't move.
+ * Ratios are in em, so they hold for the span's own font size.
+ */
+function closeLineGaps(layer: HTMLElement) {
+  const spans = [...layer.querySelectorAll<HTMLElement>("span:not(.markedContent)")].filter((s) => s.textContent);
+  const lr = layer.getBoundingClientRect();
+  const boxes = spans.map((s) => {
+    const r = s.getBoundingClientRect();
+    return { s, top: r.top - lr.top, bottom: r.bottom - lr.top, left: r.left - lr.left, right: r.right - lr.left, size: parseFloat(getComputedStyle(s).fontSize) };
+  });
+  // Spans grouped by line top (half-pixel buckets), tops ascending: one pass over the rows below each span.
+  const rows = new Map<number, typeof boxes>();
+  for (const b of boxes) {
+    const k = Math.round(b.top * 2) / 2;
+    rows.set(k, [...(rows.get(k) ?? []), b]);
+  }
+  const tops = [...rows.keys()].sort((a, b) => a - b);
+  const bands: { b: (typeof boxes)[number]; top: number; bottom: number }[] = [];
+  for (const b of boxes) {
+    if (!(b.size > 0)) continue;
+    const h = b.bottom - b.top;
+    // Next line: the first row below this span (within 1.8 × its height) that overlaps it horizontally.
+    let pitch = 0;
+    for (const t of tops) {
+      if (t <= b.top + h * 0.5) continue;
+      if (t - b.top >= h * 1.8) break;
+      if (rows.get(t)!.some((o) => o.left < b.right && o.right > b.left)) {
+        pitch = t - b.top;
+        break;
+      }
+    }
+    if (!(pitch > h && pitch < h * 1.8)) continue;
+    const lh = pitch / b.size;
+    b.s.style.lineHeight = String(lh);
+    b.s.style.marginTop = `${-(lh - h / b.size) / 2}em`;
+    bands.push({ b, top: b.top - (pitch - h) / 2, bottom: b.bottom + (pitch - h) / 2 });
+  }
+  // Smaller spans inside a line (superscripts, footnote marks) take the band of the nearest full-size span
+  // of that line, so the selection has no hole around them. Their glyphs are transparent, so moving the
+  // text inside the taller box is invisible.
+  const done = new Set(bands.map((x) => x.b));
+  for (const b of boxes) {
+    if (done.has(b) || !(b.size > 0)) continue;
+    const mid = (b.top + b.bottom) / 2;
+    let best: (typeof bands)[number] | null = null;
+    let dist = Infinity;
+    for (const x of bands) {
+      if (mid < x.top || mid > x.bottom || x.b.size <= b.size) continue;
+      const d = Math.max(0, x.b.left - b.right, b.left - x.b.right);
+      if (d < dist) [best, dist] = [x, d];
+    }
+    if (!best || dist > best.b.size * 2) continue;
+    b.s.style.lineHeight = String((best.bottom - best.top) / b.size);
+    b.s.style.marginTop = `${(best.top - b.top) / b.size}em`;
+  }
 }
