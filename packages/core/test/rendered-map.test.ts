@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sourceSpanOf, spanMatches, visibleChars } from "../src/index.js";
+import { mathSpans, normalizeMathDelimiters, sourceSpanOf, spanMatches, visibleChars } from "../src/index.js";
 
 /** The rendered text the DOM would show (mdast visible chars), for building selections in tests. */
 const rendered = (src: string) => visibleChars(src).map((c) => c.ch).join("");
@@ -78,5 +78,68 @@ describe("sourceSpanOf (mdast offset map)", () => {
     const src = "a \\*b\\* &amp; c";
     expect(rendered(src)).toBe("a *b* & c");
     expect(pick(src, "& c")!.quote).toBe("&amp; c");
+  });
+});
+
+describe("math (remark-math, shared with the renderer)", () => {
+  const src = "## 一、有效声压：$p_e = \\dfrac{P}{\\sqrt{2}}$\n\n其中 $P$ 是峰值，\\(\\sqrt{2}\\) 来自正弦。\n\n\\[\nL = 20\\lg\\frac{p}{p_0}\n\\]\n\n$$x^2$$\n\n结论在这里。";
+
+  it("finds $…$, \\(…\\), \\[…\\] and $$…$$ with the right display mode and TeX", () => {
+    const m = mathSpans(src);
+    expect(m.map((x) => [x.tex, x.display])).toEqual([
+      ["p_e = \\dfrac{P}{\\sqrt{2}}", false],
+      ["P", false],
+      ["\\sqrt{2}", false],
+      ["L = 20\\lg\\frac{p}{p_0}", true],
+      ["x^2", true]
+    ]);
+    for (const x of m) expect(src.slice(x.start, x.end)).toMatch(/^(\$|\\\(|\\\[)/);
+  });
+
+  it("normalising \\( \\) and \\[ \\] keeps every offset (same length) and leaves code alone", () => {
+    const s = "a \\(x\\) b `\\(y\\)`\n\n```\n\\[z\\]\n```\n";
+    const n = normalizeMathDelimiters(s);
+    expect(n.length).toBe(s.length);
+    expect(n).toBe("a $$x$$ b `\\(y\\)`\n\n```\n\\[z\\]\n```\n");
+    expect(mathSpans(s).map((x) => x.tex)).toEqual(["x"]);
+  });
+
+  it("a formula's visible chars are its TeX, each mapped to its own source offset", () => {
+    expect(rendered(src)).toContain("p_e=\\dfrac{P}{\\sqrt{2}}".replace(/=/, " = "));
+    expect(rendered(src)).not.toContain("$");
+    for (const c of visibleChars(src)) expect(src[c.off]).toBe(c.ch);
+  });
+
+  it("a selection after formulas still aligns", () => {
+    expect(pick(src, "是峰值")).toEqual({ start: src.indexOf("是峰值"), end: src.indexOf("是峰值") + 3, quote: "是峰值" });
+    expect(pick(src, "来自正弦")?.quote).toBe("来自正弦");
+    expect(pick(src, "结论在这里")?.quote).toBe("结论在这里");
+  });
+
+  it("inline math: a selection through $P$ maps 1:1, quote keeps the LaTeX source", () => {
+    expect(pick(src, "其中 P 是峰值")?.quote).toBe("其中 $P$ 是峰值");
+    expect(pick(src, "\\sqrt{2} 来自")?.quote).toBe("\\sqrt{2}\\) 来自");
+    const h = pick(src, "p_e = \\dfrac{P}{\\sqrt{2}}");
+    expect(h?.quote).toBe("p_e = \\dfrac{P}{\\sqrt{2}}");
+    expect(spanMatches(src, h!.start, h!.end, h!.quote)).toBe(true);
+  });
+
+  it("block math: selecting the display formula maps to its TeX lines; across it into the next paragraph too", () => {
+    const tex = "L = 20\\lg\\frac{p}{p_0}";
+    expect(pick(src, tex)).toEqual({ start: src.indexOf(tex), end: src.indexOf(tex) + tex.length, quote: tex });
+    const across = pick(src, "x^2结论"); // rendered() has no block breaks; whitespace is ignored anyway
+    expect(across?.quote).toBe("x^2$$\n\n结论");
+  });
+
+  it("text that does not match the formula's TeX is still null (never a misaligned slice)", () => {
+    const r = rendered(src);
+    const i = r.indexOf("其中");
+    expect(sourceSpanOf(src, r.slice(0, i), "其中 p e = P 2")).toBeNull();
+  });
+
+  it("a dollar amount that is not closed stays text", () => {
+    const s = "价格是 $5，没有公式";
+    expect(mathSpans(s)).toEqual([]);
+    expect(pick(s, "$5")?.quote).toBe("$5");
   });
 });

@@ -16,6 +16,10 @@ export const FAKE_XSS_ANSWER =
   "```mermaid\nflowchart TD\n  A[\"<img src=z onerror=window.__pwned='mermaid'>\"] --> B[终点]\n" +
   "  click A call window.alert(1)\n  click B \"javascript:window.__pwned='click'\"\n```\n";
 
+/** Returned when the prompt contains MATH-PROBE: inline/display math in all four delimiter styles. */
+export const FAKE_MATH_ANSWER =
+  "## 有效声压：$p_e = \\dfrac{P}{\\sqrt{2}}$\n\n其中 $P$ 是峰值幅度，\\(\\sqrt{2}\\) 来自正弦均方根。\n\n\\[\nL = 20\\lg\\frac{p}{p_0}\n\\]\n\n$$\nI = \\frac{p^2}{\\rho c}\n$$\n\n结论：声压级按对数计算。\n";
+
 /** Returned when the prompt contains FORMAT-PROBE: list items mixing bold, inline code and a link. */
 export const FAKE_FORMAT_ANSWER =
   "格式探针：\n\n" +
@@ -39,7 +43,7 @@ export class FakeProvider implements LLMProvider {
     const marksAnswer = parts
       ? `**模拟回答**：已收到 ${parts.filter((p) => p.type === "text" && p.text.startsWith("标记 ")).length} 个标记（图片 ${parts.filter((p) => p.type === "image").length} 张）。`
       : null;
-    const answer = marksAnswer ?? (prompt.includes("XSS-PROBE") ? FAKE_XSS_ANSWER : prompt.includes("FORMAT-PROBE") ? FAKE_FORMAT_ANSWER : last?.images?.length ? FAKE_IMAGE_ANSWER : FAKE_ANSWER);
+    const answer = marksAnswer ?? (prompt.includes("XSS-PROBE") ? FAKE_XSS_ANSWER : prompt.includes("FORMAT-PROBE") ? FAKE_FORMAT_ANSWER : prompt.includes("MATH-PROBE") ? FAKE_MATH_ANSWER : last?.images?.length ? FAKE_IMAGE_ANSWER : FAKE_ANSWER);
     const chunks = answer.match(/[\s\S]{1,12}/g) ?? [];
     for (const text of chunks) {
       if (opts.signal?.aborted) {

@@ -1,8 +1,61 @@
 import type { Nodes, Root } from "mdast";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import remarkParse from "remark-parse";
 import { unified } from "unified";
 import { spanMatches } from "./tree.js";
+
+const parse = (src: string) => unified().use(remarkParse).use(remarkGfm).use(remarkMath).parse(src) as Root;
+
+/**
+ * Models often write math as `\( … \)` and `\[ … \]`. Rewrite both to `$$ … $$` (same length, so
+ * every source offset stays valid): `\(x\)` → `$$x$$` (inline math), `\[…\]` → `$$…$$` (block math
+ * when on its own lines). Delimiters inside code spans and fenced code are left alone.
+ */
+export function normalizeMathDelimiters(source: string): string {
+  if (!source.includes("\\(") && !source.includes("\\[")) return source;
+  const code: [number, number][] = [];
+  const walk = (n: Nodes) => {
+    if ((n.type === "inlineCode" || n.type === "code" || n.type === "html") && n.position) code.push([n.position.start.offset!, n.position.end.offset!]);
+    else if ("children" in n) for (const c of n.children as Nodes[]) walk(c);
+  };
+  walk(unified().use(remarkParse).use(remarkGfm).parse(source) as Root);
+  const inCode = (a: number, b: number) => code.some(([s, e]) => a < e && b > s);
+  return source.replace(/\\\(([^\n]+?)\\\)|\\\[([\s\S]+?)\\\]/g, (m: string, inl: string | undefined, blk: string | undefined, at: number) =>
+    inCode(at, at + m.length) ? m : `$$${inl ?? blk}$$`
+  );
+}
+
+/** A math node of the answer: source range, TeX, and whether it is shown as a display block. */
+export interface MathSpan {
+  start: number;
+  end: number;
+  tex: string;
+  display: boolean;
+}
+
+/**
+ * Math in a markdown answer (`$…$`, `$$…$$`, `\(…\)`, `\[…\]`), from the same mdast the branch
+ * map uses, so the renderer and the map always agree on what is math.
+ */
+export function mathSpans(source: string): MathSpan[] {
+  const norm = normalizeMathDelimiters(source);
+  const out: MathSpan[] = [];
+  const walk = (n: Nodes, parent?: Nodes) => {
+    if ((n.type === "math" || n.type === "inlineMath") && n.position) {
+      const start = n.position.start.offset!;
+      const end = n.position.end.offset!;
+      // `$$x$$` / `\[x\]` alone in a paragraph is shown as a block; `$x$` and `\(x\)` stay inline.
+      const alone = parent?.type === "paragraph" && parent.children.length === 1;
+      const display = n.type === "math" || (alone && norm.startsWith("$$", start) && !source.startsWith("\\(", start));
+      out.push({ start, end, tex: n.value, display });
+      return;
+    }
+    if ("children" in n) for (const c of n.children as Nodes[]) walk(c, n);
+  };
+  walk(parse(norm));
+  return out;
+}
 
 /** One visible character of rendered markdown and its UTF-16 offset in the source (-1 = not locatable). */
 export interface VisibleChar {
@@ -12,11 +65,11 @@ export interface VisibleChar {
 
 /**
  * The visible characters of a markdown answer, in document order, each with its source offset.
- * Built from the mdast: only `text`, `inlineCode` and `code` values are mapped. Link and image URLs,
+ * Built from the mdast: only `text`, `inlineCode`, `code` and math (TeX) values are mapped. Link and image URLs,
  * markup (`**`, backticks, `[`, `](…)`), html tags and images never produce visible characters.
  */
 export function visibleChars(source: string): VisibleChar[] {
-  const tree = unified().use(remarkParse).use(remarkGfm).parse(source) as Root;
+  const tree = parse(normalizeMathDelimiters(source));
   const out: VisibleChar[] = [];
   const push = (value: string, start?: number, end?: number) => {
     if (start === undefined || end === undefined) {
@@ -39,7 +92,9 @@ export function visibleChars(source: string): VisibleChar[] {
     }
   };
   const walk = (n: Nodes) => {
-    if (n.type === "text" || n.type === "inlineCode" || n.type === "code") {
+    // Math: the renderer reads each KaTeX element back as its TeX (the MathML annotation), so the
+    // formula's visible chars are its LaTeX source, mapped 1:1 like a code span (delimiters excluded).
+    if (n.type === "text" || n.type === "inlineCode" || n.type === "code" || n.type === "math" || n.type === "inlineMath") {
       push(n.value, n.position?.start.offset, n.position?.end.offset);
       return;
     }
@@ -57,6 +112,8 @@ const isSpace = (c: string) => /\s/.test(c);
  * `before` is the visible text preceding the selection, `selected` the selected visible text (both as
  * the DOM shows them). Whitespace is ignored on both sides; every other character must line up with
  * the mdast's visible characters, or the result is null (no branch). Never returns a misaligned slice.
+ * A formula counts as its TeX source (see visibleChars), so a selection may start, end or run through
+ * math and the anchor is the source slice, LaTeX included.
  */
 export function sourceSpanOf(source: string, before: string, selected: string): { start: number; end: number; quote: string } | null {
   const vis = visibleChars(source).filter((c) => !isSpace(c.ch));
