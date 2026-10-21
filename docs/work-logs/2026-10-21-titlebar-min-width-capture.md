@@ -67,3 +67,40 @@
 - 新用例单独跑通过（Linux 上「打开 ▾」不换行，(a)–(d) 都成立）。e2e 全量（throwaway keyring）37 项通过，0 跳过。
 - Linux 最小宽度的测量值：最宽拖动区 494px；窗口按钮区 762–900px，没有其他控件压在上面；「打开 ▾」是一行，高 24px，不是纯图标。
 - 预期 Windows 和 macOS CI 继续失败，等 功能实现 的修复合入后转绿。
+
+## 7. 追加（第三轮，2026-10-21）：标题栏间距、标题栏按钮提示、阅读工具栏布局
+
+### 请求
+> Title bar, all states (min, 1024, maximized) both OS: '打开' vertically centered …; gap 打开 → document title >= 12px; Windows caption buttons have a hover tooltip … Reader toolbar, all states both OS: children inside the toolbar; no button text wraps; page nav and zoom % visible; collapse order 框选 → 适合宽度 → ⋯ menu; icon-only buttons >= 32x32, aria-label = original text, hover tooltip; reader pane >= 360px and chat pane >= 320px (record actual widths).
+
+### 改动（只改 `apps/desktop/e2e/titlebar-narrow.spec.ts`）
+- 新增 `layoutRules`（只读几何）、`hoverTooltip`（先找 title 或 aria-describedby，再悬停找 role=tooltip）、`overflowItems`（打开 ⋯ 菜单，列出菜单项，按 Esc 关闭）。悬停和打开菜单都放在截图之后做，不会出现在截图里。
+- 断言用 `expect.soft`，覆盖三种状态和两个平台；窗口按钮提示只在非 macOS 上检查。不跳过。
+- 阅读区取包含阅读工具栏的那个 `<main>`。应用外层还有一个占满整个窗口的 `<main>`，第一次误用了它，已改正。
+
+### 验证（本地 Linux xvfb）
+- lint 和 tsc 通过。e2e 全量（throwaway keyring）：36 项通过，1 项失败（本用例，预期失败），0 跳过。
+- Linux 最小宽度的测量值：
+  - 「打开」上下间距 6/6；到文档标题的间距 6.1px（< 12，失败）；
+  - 窗口按钮没有任何悬停提示（失败）；
+  - 阅读工具栏范围 240–481，「缩放」组和「框选」超出了工具栏；「适合宽度」「框选」各 2 行；没有 ⋯ 菜单；
+  - 纯图标按钮：‹ › 是 28×28，− + 是 17.9×28，都没有悬停提示；
+  - 阅读区 256px，对话区 400px，两者可用空间一共 660px，放不下 360 + 320。
+
+## 8. 追加（第四轮，2026-10-21）：最小窗口宽度
+
+### 请求
+> Don't hardcode 900 as the 'min' state. Read the window's real minimum via getMinimumSize() and resize to exactly that width (record it) … assert actual window min width >= sidebar + reader + chat + splitter widths as measured … try setSize(minWidth-50) and assert the window refuses to go narrower.
+
+### 改动
+- 「min」状态本来就是用 `getMinimumSize()` 定的（没有写死 900）。这轮把读到的值、窗口实际尺寸和断言结果写进 `test-results/screenshots/min-width-<平台>.json`，同时输出一行 `TITLEBAR-MINWIDTH` 日志。
+- 新增软断言：
+  - 窗口宽度正好等于 getMinimumSize 的宽度；
+  - minWidth ≥ 侧栏 + 360 + 分隔条 + 320 + 对话区右侧剩余（都按实测值）；
+  - 阅读区 ≥ 360，对话区 ≥ 320；
+  - 页面没有横向溢出；
+  - `setSize(minWidth - 50)` 被拒绝。
+
+### 验证（本地 Linux xvfb）
+- lint 和 tsc 通过；单独跑本用例，预期失败。
+- 测量值：minWidth 900，侧栏 240，分隔条 4，需要 924 → 失败；阅读区 256 → 失败；对话区 400；scrollWidth 900（没有溢出）；setSize(850) 后宽度仍是 900 → 通过。
