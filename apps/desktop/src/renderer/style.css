@@ -479,10 +479,48 @@ button.link.active { color: var(--accent); }
 .doc-error-detail { margin-top: 12px; font-size: 12px; color: var(--danger); }
 
 /* Per-conversation model + thinking level above the input. */
-.model-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 0 8px; }
-.model-pick select { height: 28px; max-width: 28ch; padding: 0 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text); font-size: 13px; }
-.model-pick select:hover { border-color: var(--accent); }
-.model-pick select:disabled { opacity: 0.45; }
+.model-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 0 8px; container-type: inline-size; container-name: model-bar; }
+.model-pick { position: relative; min-width: 0; max-width: 100%; }
+.model-trigger {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 32px; height: 32px;
+  max-width: 100%; padding: 0 10px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg-elevated); color: var(--text); font-size: 13px; cursor: pointer;
+}
+.model-trigger:hover { border-color: var(--accent); }
+.model-trigger:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.model-trigger-label { display: inline-flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
+.model-trigger-caret { flex: none; color: var(--muted); font-size: 11px; }
+.model-cap-icon { flex: none; color: var(--muted); }
+/* Opens upward: bottom edge of the panel sits on the top edge of the trigger. */
+.model-popover {
+  position: absolute; left: 0; bottom: calc(100% + 4px); z-index: 30;
+  display: flex; flex-direction: column;
+  min-width: max(220px, 100%); width: max-content; max-width: 100cqi;
+  max-height: 280px;
+  padding: 0; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: var(--shadow); overflow: hidden;
+}
+.model-popover-scroll { overflow-y: auto; padding: 4px; flex: 1; min-height: 0; }
+.model-option {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  width: 100%; min-height: 32px; padding: 0 12px; border: none; border-radius: 6px;
+  background: transparent; color: var(--text); font-size: 13px; text-align: left; cursor: pointer;
+}
+.model-option-label { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.model-option:hover, .model-option.active { background: var(--hover); }
+.model-option:disabled { color: var(--text-disabled); cursor: default; }
+.model-option:disabled:hover { background: transparent; }
+.model-option-check { flex: none; color: var(--accent); font-size: 14px; line-height: 1; }
+.model-popover-footer { flex: none; padding: 8px; border-top: 1px solid var(--border); }
+.model-settings-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 100%; min-height: 32px; height: 32px; padding: 0 12px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg-elevated); color: var(--text); font-size: 13px; cursor: pointer;
+}
+.model-settings-btn:hover { background: var(--hover); }
+.model-settings-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.model-bar > .model-settings-btn { width: auto; min-width: 72px; }
 .effort-seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); }
 .effort-seg button { height: 24px; min-width: 32px; padding: 0 8px; border: none; border-radius: 6px; background: transparent; color: var(--muted); font-size: 12px; }
 .effort-seg button:hover { background: var(--hover); color: var(--text); }
@@ -494,10 +532,6 @@ button.link.active { color: var(--accent); }
 .model-notice button.link:hover { color: var(--accent-hover); text-decoration: underline; }
 .model-notice button.link:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .model-empty { font-size: 13px; color: var(--text-secondary); }
-.model-bar button.settings-link { padding: 0; font-size: 13px; color: var(--accent); text-decoration: none; }
-.model-bar button.settings-link:hover { color: var(--accent-hover); text-decoration: underline; }
-.model-bar button.settings-link:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
-.model-pick select option:checked { background: var(--surface-2); color: var(--text); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
 /* From the second collapse stage the document name (also in the title bar) gives up its sliver entirely. */
 .reader-toolbar[data-collapse="2"] .reader-title, .reader-toolbar[data-collapse="3"] .reader-title, .reader-toolbar[data-collapse="4"] .reader-title { display: none; }

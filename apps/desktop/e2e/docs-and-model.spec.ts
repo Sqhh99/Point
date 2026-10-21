@@ -22,6 +22,10 @@ const launchEnv = (extra: Record<string, string>, drop: string[] = []) => ({
 const keyring = process.platform === "linux" && process.env.POINT_E2E_KEYRING === "1" ? ["-r", join(import.meta.dirname, "keystore-preload.cjs")] : [];
 const launch = (env: Record<string, string>) =>
   electron.launch({ args: [...keyring, ...(process.platform === "linux" ? ["--no-sandbox"] : []), join(import.meta.dirname, "..", "out", "main", "index.js")], env });
+
+type Win = Awaited<ReturnType<ElectronApplication["firstWindow"]>>;
+type Bar = ReturnType<Win["getByTestId"]>;
+
 /**
  * Key-save cases need OS encryption. On CI (win DPAPI, mac keychain) it must be there, so a missing
  * store turns the test red; only a local run without a keyring may skip.
@@ -35,7 +39,37 @@ const stub = (app: ElectronApplication, paths: string[]) =>
   app.evaluate(({ dialog }, filePaths) => {
     dialog.showOpenDialog = (async () => ({ canceled: false, filePaths })) as typeof dialog.showOpenDialog;
   }, paths);
-type Win = Awaited<ReturnType<ElectronApplication["firstWindow"]>>;
+/** Custom ModelBar listbox helpers (native <select> was replaced). */
+async function openModelList(bar: Bar) {
+  const list = bar.getByTestId("model-select-list");
+  if ((await list.count()) === 0) await bar.getByTestId("model-select").click();
+  await expect(list).toBeVisible();
+  return list;
+}
+async function pickModelBar(bar: Bar, id: string) {
+  const list = await openModelList(bar);
+  await list.locator(`[role="option"][data-value="${id}"]`).click();
+  await expect(bar.getByTestId("model-select")).toHaveAttribute("data-value", id);
+}
+async function modelOptionCount(bar: Bar, id: string) {
+  const list = await openModelList(bar);
+  const n = await list.locator(`[role="option"][data-value="${id}"]`).count();
+  await bar.page().keyboard.press("Escape");
+  await expect(list).toHaveCount(0);
+  return n;
+}
+async function modelOptionLabels(bar: Bar) {
+  const list = await openModelList(bar);
+  const labels = await list.locator('[role="option"]').evaluateAll((els) =>
+    els.map((el) => {
+      const clone = el.cloneNode(true) as HTMLElement;
+      clone.querySelectorAll(".model-cap-icon, .model-option-check").forEach((n) => n.remove());
+      return (clone.textContent ?? "").trim();
+    })
+  );
+  return labels;
+}
+
 /** Last branch: its source anchor (offsets + slice) and the selection text the branch question carries. */
 const lastBranch = (win: Win) =>
   win.evaluate(async () => {
@@ -292,13 +326,13 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
     await win.screenshot({ path: join(results, "configured-settings.png") });
     await leaveAndReopen(win);
     const select = win.getByTestId("model-bar").getByTestId("model-select");
-    await expect(select.locator('option[value="deepseek-flash"]')).toHaveCount(1);
+    expect(await modelOptionCount(win.getByTestId("model-bar"), "deepseek-flash")).toBe(1);
     await expect(win.getByTestId("model-empty")).toHaveCount(0);
     await expect(win.getByText("尚未配置模型：请先在设置里填写 API Key")).toHaveCount(0);
     const list = await win.evaluate(() => window.point.models.list());
     expect(list.configured).toBe(true);
     expect(list.models.map((m) => m.id)).toContain("deepseek-flash");
-    await expect(select).toHaveValue(list.models[0]!.id);
+    await expect(select).toHaveAttribute("data-value", list.models[0]!.id);
     // The draft typed while unconfigured is still there; send is now enabled.
     await expect(win.getByPlaceholder(/问点什么/)).toHaveValue("没有模型时提问");
     await expect(win.getByRole("button", { name: "发送", exact: true })).toBeEnabled();
@@ -359,9 +393,8 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
     await expect(win.getByText("已保存", { exact: true })).toBeVisible();
     await leaveAndReopen(win);
     // The status bar shows the model picked in ModelBar (the tester's repro picks it there).
-    const select = win.getByTestId("model-bar").getByTestId("model-select");
-    await expect(select.locator('option[value="mock-math"]')).toHaveCount(1);
-    await select.selectOption("mock-math");
+    expect(await modelOptionCount(win.getByTestId("model-bar"), "mock-math")).toBe(1);
+    await pickModelBar(win.getByTestId("model-bar"), "mock-math");
     const status = win.getByTestId("status-model");
     await expect(status).toHaveText("mock-math");
     await expect(status).toHaveAttribute("title", "mock-math");
@@ -389,7 +422,7 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
     await win.getByRole("button", { name: "保存" }).click();
     await expect(win.getByText("已保存", { exact: true })).toBeVisible();
     await leaveAndReopen(win);
-    await select.selectOption("deepseek-flash");
+    await pickModelBar(win.getByTestId("model-bar"), "deepseek-flash");
     await expect(status).toHaveText("deepseek-flash");
     await expect(status).toHaveAttribute("title", "DeepSeek · deepseek-flash");
   });
@@ -482,41 +515,34 @@ test.describe("per-conversation model and effort", () => {
     await expect(bar).toBeVisible();
     const select = bar.getByTestId("model-select");
     await expect(select).toBeVisible();
-    const labels = await select.locator("option").allTextContents();
+    const labels = await modelOptionLabels(bar);
     expect(labels.some((t) => /Flash/i.test(t))).toBe(true);
     expect(labels.some((t) => /gpt-4o/i.test(t))).toBe(false); // other providers stay in Settings
     // Options show only the model id (no label, no 看图/思考 tags).
     expect(labels).toEqual(["deepseek-flash", "deepseek-v4-pro"]);
-    for (const opt of await select.locator("option").all()) expect(await opt.textContent()).toBe(await opt.getAttribute("value"));
-    // Evidence: show the option list in-page (size=N; the native popup is not capturable), light and dark.
-    await select.evaluate((el: HTMLSelectElement) => {
-      el.size = el.options.length;
-      el.style.height = "auto";
-    });
-    await select.screenshot({ path: join(results, "model-names.png") });
+    for (const id of labels) expect(id).toMatch(/^[a-z0-9._/-]+$/i);
+    // Evidence: open popover, light and dark.
+    const list = await openModelList(bar);
+    await list.screenshot({ path: join(results, "model-names.png") });
     await win.emulateMedia({ colorScheme: "dark" });
-    await select.screenshot({ path: join(results, "model-names-dark.png") });
+    await list.screenshot({ path: join(results, "model-names-dark.png") });
     await win.emulateMedia({ colorScheme: "light" });
-    await select.evaluate((el: HTMLSelectElement) => {
-      el.size = 0;
-      el.style.height = "";
-    });
+    await win.keyboard.press("Escape");
     await expect(bar.getByTestId("effort-control")).toBeVisible();
     await expect(bar.getByTestId("effort-off")).toBeVisible();
     await expect(bar.getByTestId("effort-high")).toBeVisible();
     await bar.getByTestId("effort-off").click();
     await expect(bar.getByTestId("effort-off")).toHaveAttribute("aria-pressed", "true");
     // Second model under the same provider (clearly labelled mock alternative to Flash).
-    await select.selectOption("deepseek-v4-pro");
-    await expect(select).toHaveValue("deepseek-v4-pro");
+    await pickModelBar(win.getByTestId("model-bar"), "deepseek-v4-pro");
+    await expect(select).toHaveAttribute("data-value", "deepseek-v4-pro");
     await expect(bar.getByTestId("effort-control")).toBeVisible();
     await win.screenshot({ path: join(results, "multi-model.png") });
   });
 
   test("settings save broadcasts: ModelBar re-fetches models:list for the new provider", async () => {
     const win = await app.firstWindow();
-    const select = win.getByTestId("model-bar").getByTestId("model-select");
-    await expect(select.locator('option[value="deepseek-flash"]')).toHaveCount(1);
+    expect(await modelOptionCount(win.getByTestId("model-bar"), "deepseek-flash")).toBe(1);
     // Switch active provider in Settings; broadcast must refresh ModelBar without remounting the chat.
     await win.getByRole("button", { name: "设置" }).click();
     await win.getByLabel("模型服务").selectOption({ label: "OpenAI GPT" });
@@ -525,8 +551,8 @@ test.describe("per-conversation model and effort", () => {
     await expect(win.getByText("已保存", { exact: true })).toBeVisible();
     await win.getByRole("button", { name: "返回阅读" }).click();
     // settings:changed → models:list; DeepSeek options gone, GPT present (conversationId unchanged).
-    await expect(select.locator('option[value="gpt-4o"]')).toHaveCount(1);
-    await expect(select.locator('option[value="deepseek-flash"]')).toHaveCount(0);
+    expect(await modelOptionCount(win.getByTestId("model-bar"), "gpt-4o")).toBe(1);
+    expect(await modelOptionCount(win.getByTestId("model-bar"), "deepseek-flash")).toBe(0);
     // Switch back so later asks still use DeepSeek presets in this serial suite.
     await win.getByRole("button", { name: "设置" }).click();
     await win.getByLabel("模型服务").selectOption({ label: "DeepSeek" });
@@ -534,13 +560,13 @@ test.describe("per-conversation model and effort", () => {
     await win.getByRole("button", { name: "保存" }).click();
     await expect(win.getByText("已保存", { exact: true })).toBeVisible();
     await win.getByRole("button", { name: "返回阅读" }).click();
-    await expect(select.locator('option[value="deepseek-flash"]')).toHaveCount(1);
+    expect(await modelOptionCount(win.getByTestId("model-bar"), "deepseek-flash")).toBe(1);
   });
 
   test("first ask stores ModelBar model/effort; unavailable model emits one model-notice", async () => {
     const win = await app.firstWindow();
     const bar = win.getByTestId("model-bar");
-    await bar.getByTestId("model-select").selectOption("deepseek-flash");
+    await pickModelBar(bar, "deepseek-flash");
     await bar.getByTestId("effort-off").click();
     await win.getByPlaceholder(/问点什么/).fill("记住模型和思考");
     await win.getByRole("button", { name: "发送" }).click();
@@ -582,11 +608,10 @@ test.describe("per-conversation model and effort", () => {
     await stub(app, [docx]);
     await win.getByRole("button", { name: "导入文档" }).click();
     await expect(win.getByTestId("reader").getByText("看图测试", { exact: true })).toBeVisible();
-    const select = win.getByTestId("model-bar").getByTestId("model-select");
     const capture = win.getByTestId("capture-button");
-    await select.selectOption("deepseek-flash");
+    await pickModelBar(win.getByTestId("model-bar"), "deepseek-flash");
     await expect(capture).toBeEnabled();
-    await select.selectOption("deepseek-v4-pro");
+    await pickModelBar(win.getByTestId("model-bar"), "deepseek-v4-pro");
     await expect(capture).toBeDisabled();
     // Status bar follows the ModelBar pick (Settings still has flash).
     await expect(win.getByTestId("status-model")).toHaveText("deepseek-v4-pro");
@@ -596,7 +621,7 @@ test.describe("per-conversation model and effort", () => {
     // Same source in the list main gates on.
     const listed = await win.evaluate(() => window.point.models.list());
     expect(listed.models.find((m) => m.id === "deepseek-v4-pro")?.vision).toBe(false);
-    await select.selectOption("deepseek-flash");
+    await pickModelBar(win.getByTestId("model-bar"), "deepseek-flash");
     await expect(capture).toBeEnabled();
     await expect(win.getByTestId("status-model")).toHaveText("deepseek-flash");
     await expect(win.getByTestId("status-vision")).toHaveText("支持看图");
@@ -613,7 +638,7 @@ test.describe("per-conversation model and effort", () => {
     const thumb = win.getByTestId("attached-image").locator("img");
     await expect(thumb).toBeVisible();
     const sha = (await thumb.getAttribute("src"))!.replace("point-capture://", "");
-    await select.selectOption("deepseek-v4-pro");
+    await pickModelBar(win.getByTestId("model-bar"), "deepseek-v4-pro");
     const before = await win.evaluate(async () => {
       const list = await window.point.conversations.list();
       let n = 0;
@@ -638,7 +663,7 @@ test.describe("per-conversation model and effort", () => {
     });
     expect(after).toEqual(before);
     await win.getByRole("button", { name: "移除截图" }).click();
-    await select.selectOption("deepseek-flash");
+    await pickModelBar(win.getByTestId("model-bar"), "deepseek-flash");
   });
 
   test("selecting formatted (bold) text in an answer offers 追问分支 and stores a span that matches the source", async () => {
@@ -973,8 +998,8 @@ test.describe("preset fallback notice", () => {
     await expect(notice).toContainText("原模型已不可用，已改用 deepseek-flash");
     // Fell back: ModelBar runs the provider default, the unknown id is not listed.
     const select = win.getByTestId("model-bar").getByTestId("model-select");
-    await expect(select).toHaveValue("deepseek-flash");
-    await expect(select.locator('option[value="deepseek-gone-xyz"]')).toHaveCount(0);
+    await expect(select).toHaveAttribute("data-value", "deepseek-flash");
+    expect(await modelOptionCount(win.getByTestId("model-bar"), "deepseek-gone-xyz")).toBe(0);
     // Inline (follows ModelBar in the composer), design variables only.
     const style = await notice.evaluate((el) => {
       const cs = getComputedStyle(el);
