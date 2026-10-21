@@ -33,7 +33,11 @@ v0.2.2 批次，#70 验收时测试员报的缺陷，加上架构设计师指出
 
 ![](https://raw.githubusercontent.com/Sqhh99/Point/fa23e4e908e66be2acaa19fc74c4b57f70aac149/docs/assets/pr/2026-10-21-unconfigured-form-dark.png)
 
-状态栏 tooltip（自定义端点 mock-math）：TOOLTIP_PENDING
+状态栏 tooltip（自定义端点 mock-math；提交 `37bd300`，取自 CI run 39620532494 的 macOS e2e 截图）。原生 tooltip 截不到，测试临时把 `title` 属性的值打印在状态栏左侧（「悬停提示（title）：mock-math」），截图后移除。浅色 / 深色：
+
+![](https://raw.githubusercontent.com/Sqhh99/Point/37bd30062587ee2c3a2c679e839c147c7b3f9e39/docs/assets/pr/2026-10-21-status-tooltip-custom-light.png)
+
+![](https://raw.githubusercontent.com/Sqhh99/Point/37bd30062587ee2c3a2c679e839c147c7b3f9e39/docs/assets/pr/2026-10-21-status-tooltip-custom-dark.png)
 
 ## 测试计划
 - [x] 新增 `test/main/model-id-text.test.ts`（7 项，修复前 6 项失败）：报错文案用 id、示例 id 都是支持看图的预设、`modelTooltip`、StatusBar 用它渲染、自定义端点 `providerName` 为空而预设端点为 DeepSeek、未配置时表单为空且保存不可点。
@@ -45,4 +49,5 @@ v0.2.2 批次，#70 验收时测试员报的缺陷，加上架构设计师指出
 - [x] 本地：core 208 项通过；test:main 769 项通过、14 项跳过；e2e 33 项通过、6 项跳过（本地没有系统加密，保存 Key 的用例跳过）；lint、typecheck 通过。
 - [x] 本地 `pnpm install --frozen-lockfile` 通过（pnpm 10.34.6）。
 - [x] 新增内容里没有任何 API Key，端点只用 mock。
-- [ ] 六项 CI 全绿
+- [x] CI run 39620532494（a01a864）六项全绿，macOS / Windows e2e 各 39 项通过
+- [ ] 六项 CI 全绿（最终 head）
