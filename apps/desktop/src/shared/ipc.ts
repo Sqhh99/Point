@@ -13,6 +13,7 @@ export interface ProviderSettings {
 
 /** What the status bar shows: the model questions are sent to right now. */
 export interface ActiveModel {
+  /** Preset service name (DeepSeek / OpenAI GPT / 智谱 GLM); "" on a custom endpoint, which has no name. */
   providerName: string;
   model: string;
   vision: boolean;
@@ -208,6 +209,7 @@ export interface PointAPI {
   models: {
     list(): Promise<{
       providerId: string;
+      /** "" on a custom endpoint (Base URL changed): the preset's name would be wrong there. */
       providerName: string;
       /** false → no key for the active provider; `models` is empty. */
       configured: boolean;
