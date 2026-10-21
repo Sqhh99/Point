@@ -1,4 +1,5 @@
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
@@ -129,9 +130,14 @@ describe("buildPageTextGeom (hydro-serif)", () => {
 
       const line = { fixture: "hydro-serif.pdf", method: "geom-fillText-xcorr", drift };
       console.log(`PDF-TJ-GEOM-DRIFT ${JSON.stringify(line)}`);
-      const evidenceDir = process.env.POINT_TJ_EVIDENCE || "/workspace/evidence/pdf-tj-geom";
-      mkdirSync(evidenceDir, { recursive: true });
-      writeFileSync(join(evidenceDir, "pdf-tj-geom-drift.json"), JSON.stringify(line, null, 2));
+      // Optional evidence file: only when POINT_TJ_EVIDENCE is set, else try os.tmpdir(); never hardcode /workspace.
+      const evidenceDir = process.env.POINT_TJ_EVIDENCE || tmpdir();
+      try {
+        mkdirSync(evidenceDir, { recursive: true });
+        writeFileSync(join(evidenceDir, "pdf-tj-geom-drift.json"), JSON.stringify(line, null, 2));
+      } catch {
+        /* CI runners may lack the path; console.log above is enough */
+      }
       for (const [z, d] of Object.entries(drift)) {
         expect(d.total, `${z}% words`).toBeGreaterThanOrEqual(30);
         expect(d.words, `${z}% measured`).toBe(d.total);
