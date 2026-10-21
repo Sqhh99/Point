@@ -49,3 +49,8 @@ export const IconBranch = () => (
     <path d="M4.5 5v6M11.5 6.5c0 2.5-2 3.5-5 4.2" />
   </svg>
 );
+export const IconFitWidth = () => (
+  <svg {...base}>
+    <path d="M2.5 3v10M13.5 3v10M5 8h6M6.5 6.5L5 8l1.5 1.5M9.5 6.5L11 8l-1.5 1.5" />
+  </svg>
+);
