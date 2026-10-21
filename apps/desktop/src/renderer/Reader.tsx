@@ -389,22 +389,26 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
         : undefined;
   return (
     <>
-    <ReaderBar title={title || "文档"} switcher={switcher} zoom={zoom} onZoom={setZoom} onFitWidth={view.kind === "pdf" ? () => setFit({ seq: Date.now() }) : undefined} loading={loading}>
-      {/* Disabled buttons swallow hover, so the tooltip lives on the wrapper. */}
-      <span title={vision ? undefined : "当前模型不支持图片"}>
-      <button
-        className="tool-button"
-        data-testid="capture-button"
-        onClick={startCapture}
-        disabled={!vision || loading}
-        title={vision ? `框选截图（${mod}）` : "当前模型不支持图片"}
-        aria-pressed={!!capture}
-      >
-        <IconCapture />
-        <span>框选</span>
-      </button>
-      </span>
-    </ReaderBar>
+    <ReaderBar
+      title={title || "文档"}
+      switcher={switcher}
+      zoom={zoom}
+      onZoom={setZoom}
+      onFitWidth={view.kind === "pdf" ? () => setFit({ seq: Date.now() }) : undefined}
+      loading={loading}
+      actions={[
+        {
+          id: "capture",
+          label: "框选",
+          icon: <IconCapture />,
+          onClick: startCapture,
+          disabled: !vision || loading,
+          title: vision ? `框选截图（${mod}）` : "当前模型不支持图片",
+          pressed: !!capture,
+          testId: "capture-button"
+        }
+      ]}
+    />
     {capture && (
       <CaptureOverlay
         bounds={capture}

@@ -69,24 +69,40 @@ button.link:hover { color: var(--text); }
 button.link.active { color: var(--accent); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-.shell { display: grid; grid-template-rows: 36px minmax(0, 1fr) 24px; height: 100%; }
-.titlebar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; height: 36px; background: var(--panel); border-bottom: 1px solid var(--line); font-size: 13px; -webkit-app-region: drag; user-select: none; }
+.shell { display: grid; grid-template-rows: 36px minmax(0, 1fr) 24px; grid-template-columns: minmax(0, 1fr); height: 100%; }
+.titlebar { position: relative; z-index: 25; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(min-content, 1fr); align-items: center; height: 36px; background: var(--panel); border-bottom: 1px solid var(--line); font-size: 13px; -webkit-app-region: drag; user-select: none; }
 .titlebar.mac .titlebar-left { padding-left: 78px; }
-.titlebar-left { display: flex; align-items: center; gap: 8px; padding-left: 12px; min-width: 0; }
-.titlebar-workspace { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.titlebar-title { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40vw; }
+/* Left: never squeezes the open button (it collapses to icon + ▾ instead); the workspace name ellipsizes. */
+.titlebar-left { display: flex; align-items: center; align-self: stretch; gap: 8px; padding-left: 12px; padding-right: 12px; min-width: 0; container: titlebar-left / inline-size; }
+.titlebar-workspace { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 2em; }
+/* The centre cell is drag area too: at least 48px of it is always kept. */
+.titlebar-title { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40vw; min-width: 48px; padding: 0 8px; text-align: center; }
 .titlebar-right { display: flex; justify-content: flex-end; height: 100%; }
 .no-drag { -webkit-app-region: no-drag; }
 .titlebar-menu { position: relative; }
-.titlebar-open { height: 24px; padding: 0 8px; border-radius: 6px; }
+.titlebar button { white-space: nowrap; }
+.titlebar button svg { flex-shrink: 0; }
+.titlebar-open { height: 24px; padding: 0 8px; border-radius: 6px; display: inline-flex; align-items: center; align-self: center; gap: 4px; flex-shrink: 0; white-space: nowrap; }
+.titlebar-open-caret { display: none; }
+/* Collapsed: icon + ▾ only, hit area ≥ 32×32 (the bar is 36px tall). The left cell's content box excludes
+   the 12px (78px on mac, traffic lights) inset and the 12px gap before the document title, so one
+   threshold fits every platform: below it the workspace name could not keep 2em next to the full button. */
+@container titlebar-left (max-width: 130px) {
+  .titlebar-open-label { display: none; }
+  .titlebar-open-caret { display: inline; }
+  .titlebar-open { min-width: 32px; height: 32px; padding: 0 6px; justify-content: center; }
+}
 .menu { position: absolute; top: 28px; left: 0; z-index: 20; min-width: 140px; padding: 4px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; display: flex; flex-direction: column; }
 .menu button { text-align: left; padding: 6px 8px; border-radius: 6px; }
-.window-controls { display: flex; height: 100%; }
+.window-controls { display: flex; height: 100%; flex-shrink: 0; }
 .window-controls button { width: 46px; height: 36px; border: 0; border-radius: 0; background: transparent; color: inherit; display: grid; place-items: center; }
 .window-controls button:hover { background: var(--line); }
 .window-controls button.close:hover { background: var(--danger); color: var(--bg-elevated); }
-.desk { display: grid; grid-template-columns: 240px minmax(0, 1fr) 4px var(--chat-width, 400px); min-height: 0; height: 100%; }
-.desk.library-collapsed { grid-template-columns: 40px minmax(0, 1fr) 4px var(--chat-width, 400px); }
+/* Sizes come from shared/layout-sizes.ts (deskVars). The chat column takes the user's width but gives
+   way first when the window narrows: never below --chat-min, and never so wide the reader drops under
+   --reader-min. The window minimum (main) is the sum of the columns, so all minimums hold together. */
+.desk { --library: var(--library-width, 240px); display: grid; grid-template-columns: var(--library) minmax(var(--reader-min, 360px), 1fr) var(--splitter-width, 4px) clamp(var(--chat-min, 320px), var(--chat-width, 400px), calc(100% - var(--library) - var(--splitter-width, 4px) - var(--reader-min, 360px))); min-height: 0; height: 100%; }
+.desk.library-collapsed { --library: var(--library-collapsed-width, 40px); }
 .col-resizer { cursor: col-resize; margin: 0 -2px; z-index: 5; }
 .col-resizer:hover { background: var(--accent); opacity: 0.4; }
 
@@ -261,15 +277,22 @@ button.link.active { color: var(--accent); }
 .recent-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* reader toolbar + region capture */
-.reader-toolbar { position: sticky; top: 0; z-index: 4; display: flex; justify-content: flex-start; align-items: center; gap: 4px; height: 40px; padding: 0 12px; background: var(--bg); border-bottom: 1px solid var(--line); }
+.reader-toolbar { position: sticky; top: 0; z-index: 4; display: flex; min-width: 0; justify-content: flex-start; align-items: center; gap: 2px; height: 40px; padding: 0 8px; background: var(--bg); border-bottom: 1px solid var(--line); }
 .tool-button { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border: none; border-radius: 6px; font-size: 13px; color: var(--muted); }
 .tool-button:hover:not(:disabled), .tool-button[aria-pressed="true"] { background: var(--hover); color: var(--text); }
 .tool-button:disabled { opacity: 0.45; cursor: default; }
-.tool-button.icon-only { width: 28px; justify-content: center; padding: 0; font-size: 16px; line-height: 1; }
+.tool-button { white-space: nowrap; flex-shrink: 0; }
+.tool-button svg { flex-shrink: 0; }
+/* Icon-only: ≥ 32×32 hit area; the label stays in aria-label and the tooltip. */
+.tool-button.icon-only { width: 32px; height: 32px; justify-content: center; padding: 0; font-size: 16px; line-height: 1; }
+.tool-wrap { display: inline-flex; flex-shrink: 0; }
+.bar-more { position: relative; flex-shrink: 0; }
+.menu.menu-right { left: auto; right: 0; top: 36px; }
+.menu button { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .tool-button.zoom-value { min-width: 48px; justify-content: center; font-variant-numeric: tabular-nums; }
-.reader-title { max-width: 28ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; color: var(--text); margin-right: 8px; }
-.bar-group { display: flex; align-items: center; gap: 2px; padding-left: 8px; margin-left: 4px; border-left: 1px solid var(--line); }
-.bar-label { min-width: 56px; text-align: center; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.reader-title { max-width: 28ch; min-width: 0; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; color: var(--text); margin-right: 8px; }
+.bar-group { display: flex; flex-shrink: 0; align-items: center; gap: 0; padding-left: 4px; margin-left: 2px; border-left: 1px solid var(--line); }
+.bar-label { min-width: 44px; text-align: center; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .bar-spacer { flex: 1; }
 .reader-toolbar[aria-busy="true"] .reader-title::after { content: " · 加载中…"; font-weight: 400; color: var(--muted); }
 .capture-overlay { position: fixed; z-index: 30; cursor: crosshair; background: var(--hover); user-select: none; touch-action: none; }
@@ -426,3 +449,5 @@ button.link.active { color: var(--accent); }
 .model-bar button.settings-link:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .model-pick select option:checked { background: var(--surface-2); color: var(--text); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
+/* From the second collapse stage the document name (also in the title bar) gives up its sliver entirely. */
+.reader-toolbar[data-collapse="2"] .reader-title, .reader-toolbar[data-collapse="3"] .reader-title, .reader-toolbar[data-collapse="4"] .reader-title { display: none; }
