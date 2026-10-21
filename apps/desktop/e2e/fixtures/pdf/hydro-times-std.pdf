@@ -1,0 +1,48 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [5 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Times-Bold >>
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 1501 >>
+stream
+BT /F2 16 Tf 72 720 Td (4.1 Depth determination) Tj ET
+BT /F1 11 Tf 8.053 Tw 72 690 Td (Depth determination is a fundamental task for a hydrographer, which requires specific) Tj ET
+BT /F1 11 Tf 7.161 Tw 72 676 Td (knowledge of the techniques and equipment involved. According to the IHO publication) Tj ET
+BT /F1 11 Tf 7.027 Tw 72 662 Td (S-44 5) Tj /F1 6.6 Tf 4 Ts (th) Tj /F1 11 Tf 0 Ts ( Edition, the uncertainty of depth measurements shall be estimated at the 95%) Tj ET
+BT /F1 11 Tf 0 Tw 72 648 Td (confidence level for every sounding in the survey.) Tj ET
+BT /F1 11 Tf 7.499 Tw 72 626 Td (During the last decade, hydrographic surveying has experienced a conceptual change in) Tj ET
+BT /F1 11 Tf 8.151 Tw 72 612 Td (depth measurement, moving from single-beam echo sounders to multibeam and LiDAR) Tj ET
+BT /F1 11 Tf 7.876 Tw 72 598 Td (systems. The 2) Tj /F1 6.6 Tf 4 Ts (nd) Tj /F1 11 Tf 0 Ts ( generation of swath systems delivers dense coverage of the seafloor) Tj ET
+BT /F1 11 Tf 0 Tw 72 584 Td (with reduced survey time and improved accuracy.) Tj ET
+BT /F1 11 Tf 5.991 Tw 72 562 Td (Lead line and sounding pole were the earliest methods used for directly measuring water) Tj ET
+BT /F1 11 Tf 6.158 Tw 72 548 Td (depth. These methods are still applied in very shallow waters, where acoustic instruments) Tj ET
+BT /F1 11 Tf 6.307 Tw 72 534 Td (cannot be operated safely, and they remain useful as an independent check of the echo) Tj ET
+BT /F1 11 Tf 0 Tw 72 520 Td (sounder calibration.) Tj ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000187 00000 n 
+0000000258 00000 n 
+0000000394 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+1946
+%%EOF

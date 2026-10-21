@@ -52,7 +52,9 @@ describe("marked paragraph style", () => {
     expect(rule).toContain("color-mix(in srgb, var(--accent) 12%, transparent)");
     expect(rule).toMatch(/inset 0 -2px 0 var\(--accent\)/);
   });
-  it("leaves text selection to the system ::selection", () => {
-    expect(css).not.toMatch(/::selection/);
+  it("leaves text selection to the system ::selection (only the PDF text layer styles its own, upstream pdf.js style)", () => {
+    const rules = [...css.matchAll(/([^{}]*::selection[^{}]*)\{/g)].map((m) => m[1]!.trim());
+    expect(rules.length).toBeGreaterThan(0);
+    for (const sel of rules) for (const part of sel.split(",")) expect(part.trim()).toMatch(/^\.pdf-text\b/);
   });
 });

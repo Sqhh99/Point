@@ -29,10 +29,10 @@ describe("chat typography", () => {
     expect(rule(".markdown .katex")).toContain("font-size: 1.05em");
     expect(rule(".markdown :is(h1, h2, h3, h4, h5, h6) .katex")).toContain("font-size: 1em");
   });
-  it("headings: h1 18px/600 20px 0 8px, h2 16px/600 16px 0 6px, h3 15px/600; first child has no top margin", () => {
+  it("headings: h1 18px/600 20px 0 8px, h2 16px/600 16px 0 6px, h3 15px/600 12px 0 4px; first child has no top margin", () => {
     expect(rule(".markdown h1")).toMatch(/font-size: 18px; font-weight: 600; margin: 20px 0 8px;/);
     expect(rule(".markdown h2")).toMatch(/font-size: 16px; font-weight: 600; margin: 16px 0 6px;/);
-    expect(rule(".markdown h3")).toMatch(/font-size: 15px; font-weight: 600;/);
+    expect(rule(".markdown h3")).toMatch(/font-size: 15px; font-weight: 600; margin: 12px 0 4px;/);
     expect(rule(".markdown > :first-child")).toContain("margin-top: 0");
   });
   it("display math box: 12px 0, 4px padding-block, slim theme-neutral scrollbar", () => {
