@@ -8,3 +8,8 @@
 - h3：只加 `margin: 12px 0 4px`；`.markdown > :first-child`（0,2,0）优先级高于 `.markdown h3`（0,1,1），开头的 h3 上边距仍为 0。为截图和计算样式断言加了 fake LLM 的 H3-PROBE 回答。
 - 本地 gnome-keyring 会弹出 gcr 解锁提示导致挂起，所以 e2e 在没有 keyring 的情况下运行；需要系统加密的 6 项本地跳过，由 CI（macOS、Windows）覆盖。
 - 新截图写到 `test-results/screenshots/`，CI 会无条件上传这个目录。状态栏 tooltip 的截图需要保存 Key，取自 CI 产物。
+- 跟进（UI设计员裁定，保留「先填模型 id 才能保存」的流程）：
+  - 字段下常驻提示「请先填写模型 id」。提示放在 label 里会让输入框的可访问名变成「模型 请先填写模型 id」，`getByLabel("模型", { exact: true })` 就找不到了，所以输入框加了 `aria-label="模型"`，再用 `aria-describedby` 关联提示。
+  - 「保存」改为 `aria-disabled`，点击时把焦点移到模型字段；Enter 在设置页的输入框里做同样的事。Playwright 的 `toBeEnabled` 把 aria-disabled 当作禁用，所以 e2e 读取原生 `disabled` 属性，点击用 `force`（只跳过可操作性检查，仍是真实鼠标点击）。
+  - 第一次改 CSS 时用字符串替换，把 `.tool-button:disabled` 也改了，和 #69 冲突；处理冲突时按 d00488d 的 style.css 重新只加了两条规则，#69 的工具栏样式没有动。
+  - 自定义端点原来也会列出 deepseek 的 datalist 候选（`preset.models` 不分端点）。现在只在预设端点列当前服务的 id，自定义端点不渲染 datalist。
