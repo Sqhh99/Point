@@ -13,6 +13,10 @@ files:
   - node_modules/better-sqlite3/build/Release/better_sqlite3.node
   - node_modules/bindings/**
   - node_modules/file-uri-to-path/**
+  # pdfjs-dist's optional @napi-rs/canvas is collected as a production dependency anyway
+  # (node_modules only honours excludes). pnpm installs both CPU variants (see
+  # pnpm-workspace.yaml); drop the ones that don't match the arch being packaged.
+  - "!node_modules/@napi-rs/canvas-!(*${arch}*)/**"
 # Rebuild better-sqlite3 for each target arch (x64 + arm64) against Electron's ABI.
 npmRebuild: true
 asar: true
