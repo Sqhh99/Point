@@ -1,16 +1,39 @@
-export const CHAT_MIN = 320;
-export const CHAT_MAX = 640;
-export const CHAT_DEFAULT = 400;
+import type { CSSProperties } from "react";
+import { CHAT_DEFAULT, CHAT_MAX, CHAT_MIN, LIBRARY_COLLAPSED_WIDTH, LIBRARY_WIDTH, READER_MIN, SPLITTER_WIDTH } from "../shared/layout-sizes";
+export { CHAT_DEFAULT, CHAT_MAX, CHAT_MIN };
+
+/** CSS variables for the desk grid (style.css): the chat pane gives way first, down to CHAT_MIN,
+ *  so the reader keeps READER_MIN; above that the chat keeps the user's width. */
+export const deskVars = (chatWidth: number) =>
+  ({
+    "--chat-width": `${chatWidth}px`,
+    "--chat-min": `${CHAT_MIN}px`,
+    "--reader-min": `${READER_MIN}px`,
+    "--library-width": `${LIBRARY_WIDTH}px`,
+    "--library-collapsed-width": `${LIBRARY_COLLAPSED_WIDTH}px`,
+    "--splitter-width": `${SPLITTER_WIDTH}px`
+  }) as CSSProperties;
 
 /** Plain decimal only: hex, binary and octal literals ("0x200") are treated as invalid. */
 const DECIMAL = /^\s*[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?\s*$/i;
 
-/** Clamp a chat panel width into [CHAT_MIN, CHAT_MAX]; anything non-numeric falls back to the default. */
-export function clampChatWidth(v: unknown): number {
+/**
+ * Clamp a chat panel width; anything non-numeric falls back to the default.
+ * With the desk width (and whether the library is open): chat ≥ CHAT_MIN and reader ≥ READER_MIN, used
+ * on drag, on window resize / library toggle, and when reading the persisted point.chatWidth.
+ * CHAT_MIN wins if both can't hold (only below the window minimum, which main forbids).
+ */
+export function clampChatWidth(v: unknown, desk?: { width: number; libraryOpen: boolean }): number {
   const n = typeof v === "string" && DECIMAL.test(v) ? Number(v) : typeof v === "number" ? v : NaN;
-  if (!Number.isFinite(n)) return CHAT_DEFAULT;
-  return Math.round(Math.min(CHAT_MAX, Math.max(CHAT_MIN, n)));
+  const base = Number.isFinite(n) ? n : CHAT_DEFAULT;
+  // With a desk the only upper bound is the room left after the reader's minimum (no fixed maximum);
+  // without one (no layout yet) the stored value is kept within [CHAT_MIN, CHAT_MAX].
+  const upper = desk ? desk.width - (desk.libraryOpen ? LIBRARY_WIDTH : LIBRARY_COLLAPSED_WIDTH) - SPLITTER_WIDTH - READER_MIN : CHAT_MAX;
+  return Math.round(Math.max(CHAT_MIN, Math.min(upper, base)));
 }
+
+/** The stored preference as a number (≥ CHAT_MIN, no maximum; the window decides what is shown). */
+export const readChatPref = (v: unknown): number => clampChatWidth(v, { width: Infinity, libraryOpen: true });
 
 /** True only for ⌘\ on macOS or Ctrl+\ elsewhere; the other platform's modifier and key auto-repeat never toggle. */
 export function isToggleLibraryKey(

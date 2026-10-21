@@ -7,7 +7,7 @@ import { Reader } from "./Reader";
 import { Settings } from "./Settings";
 import { StatusBar } from "./StatusBar";
 import { TitleBar } from "./TitleBar";
-import { clampChatWidth, isToggleLibraryKey, openShortcutOf } from "./layout";
+import { clampChatWidth, deskVars, readChatPref, isToggleLibraryKey, openShortcutOf } from "./layout";
 
 const api = window.point;
 
@@ -20,7 +20,11 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [trigger, setTrigger] = useState<TaskTrigger | null>(null);
   const [docTitle, setDocTitle] = useState<string | null>(null);
-  const [chatWidth, setChatWidth] = useState(() => clampChatWidth(localStorage.getItem("point.chatWidth")));
+  // point.chatWidth is the user's dragged preference, written only when a drag ends. What is shown is
+  // that preference clamped to the current window (reader ≥ READER_MIN, chat ≥ CHAT_MIN); resizing never
+  // writes back, so enlarging the window again restores the preferred width.
+  const [chatPref, setChatPref] = useState(() => readChatPref(localStorage.getItem("point.chatWidth")));
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const [configured, setConfigured] = useState<boolean | null>(null);
   // The model picked in ModelBar (name + ModelSpec.vision / custom declaration): status bar and the
   // region tool read the same value the ask gate uses.
@@ -49,17 +53,24 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const chatWidth = clampChatWidth(chatPref, { width: viewportWidth, libraryOpen });
+
   const startResize = (e: React.PointerEvent) => {
     drag.current = { x: e.clientX, w: chatWidth };
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
   };
   const onResize = (e: React.PointerEvent) => {
     if (!drag.current) return;
-    setChatWidth(clampChatWidth(drag.current.w + drag.current.x - e.clientX));
+    setChatPref(clampChatWidth(drag.current.w + drag.current.x - e.clientX, { width: window.innerWidth, libraryOpen }));
   };
   const endResize = () => {
     drag.current = null;
-    localStorage.setItem("point.chatWidth", String(chatWidth));
+    localStorage.setItem("point.chatWidth", String(chatPref));
   };
 
   const refresh = useCallback(async () => {
@@ -143,7 +154,7 @@ export function App() {
   return (
     <div className="shell">
     <TitleBar workspace={workspace.path} fileName={view === "settings" ? "设置" : docTitle} onOpenWorkspace={chooseWorkspace} onOpenFile={openFile} onImport={importDocs} />
-    <div className={`desk${libraryOpen ? "" : " library-collapsed"}`} style={{ "--chat-width": `${chatWidth}px` } as React.CSSProperties}>
+    <div className={`desk${libraryOpen ? "" : " library-collapsed"}`} style={deskVars(chatWidth)}>
       <Library
         open={libraryOpen}
         onToggle={() => setLibraryOpen((o) => !o)}
