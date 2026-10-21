@@ -678,7 +678,94 @@ test.describe("per-conversation model and effort", () => {
       "这个公式怎么来的？"
     );
   });
+
+  test("chat typography: prices stay text, KaTeX 1.05em, heading sizes, inline \\dfrac as \\frac, display box, local fonts under CSP, error colour", async () => {
+    const win = await app.firstWindow();
+    const csp: string[] = [];
+    win.on("console", (m) => {
+      if (/Content Security Policy|Refused to load/i.test(m.text())) csp.push(m.text());
+    });
+    const input = win.getByPlaceholder(/问点什么/);
+    await input.fill("TYPO-PROBE 排版检查");
+    await win.getByRole("button", { name: "发送", exact: true }).click();
+    const answer = win.locator(".msg.assistant").filter({ hasText: "作为行高基准" }).last();
+    await expect(answer.getByRole("button", { name: "插入笔记" })).toBeVisible({ timeout: 15_000 });
+    const md = answer.locator(".markdown");
+    await expect(md.locator(".katex")).toHaveCount(5);
+    await expect(md.locator(".katex-error")).toHaveCount(1);
+    // (1) Pandoc rule: prices are literal text.
+    const price = md.locator("p", { hasText: "价格" });
+    await expect(price).toHaveText("价格 $5 和 $10 都行。");
+    await expect(price.locator(".katex")).toHaveCount(0);
+    await document_fonts_ready(win);
+    const m = await md.evaluate((el) => {
+      const px = (e: Element, prop: string) => parseFloat(getComputedStyle(e).getPropertyValue(prop));
+      const pBy = (t: string) => [...el.querySelectorAll("p")].find((p) => p.textContent!.includes(t))!;
+      const h1 = el.querySelector("h1")!;
+      const h2 = el.querySelector("h2")!;
+      const plain = pBy("作为行高基准");
+      const frac = pBy("行内分式");
+      const displays = [...el.querySelectorAll<HTMLElement>(".katex-display")];
+      const err = el.querySelector(".katex-error")!;
+      const probe = document.createElement("span");
+      probe.style.color = "var(--danger)";
+      el.append(probe);
+      const danger = getComputedStyle(probe).color;
+      probe.remove();
+      const fontSrcs = [...document.styleSheets].flatMap((sh) => [...sh.cssRules]).filter((r) => r instanceof CSSFontFaceRule).map((r) => (r as CSSFontFaceRule).style.getPropertyValue("src"));
+      return {
+        inlineRatio: px(frac.querySelector(".katex")!, "font-size") / px(frac, "font-size"),
+        h1: { size: px(h1, "font-size"), weight: getComputedStyle(h1).fontWeight, mt: px(h1, "margin-top"), mb: px(h1, "margin-bottom"), mathRatio: px(h1.querySelector(".katex")!, "font-size") / px(h1, "font-size") },
+        h2: { size: px(h2, "font-size"), weight: getComputedStyle(h2).fontWeight, mt: px(h2, "margin-top"), mb: px(h2, "margin-bottom") },
+        plainH: plain.getBoundingClientRect().height,
+        fracH: frac.getBoundingClientRect().height,
+        inlineFracH: frac.querySelector(".katex .katex-html")!.getBoundingClientRect().height,
+        displayH: displays[0]!.querySelector(".katex-html")!.getBoundingClientRect().height,
+        display: { mt: px(displays[0]!, "margin-top"), mb: px(displays[0]!, "margin-bottom"), ml: px(displays[0]!, "margin-left"), pt: px(displays[0]!, "padding-top"), pb: px(displays[0]!, "padding-bottom"), width: displays[0]!.getBoundingClientRect().width, text: el.getBoundingClientRect().width },
+        scroll: { overflow: displays[1]!.scrollWidth > displays[1]!.clientWidth, sbH: displays[1]!.offsetHeight - displays[1]!.clientHeight - px(displays[1]!, "border-top-width") - px(displays[1]!, "border-bottom-width") },
+        errColor: getComputedStyle(err).color,
+        danger,
+        dataFonts: fontSrcs.filter((s) => s.includes("data:")).length,
+        katexFonts: fontSrcs.filter((s) => s.includes("KaTeX")).length,
+        sizeFontLoaded: [...document.fonts].some((f) => f.family.replace(/"/g, "").startsWith("KaTeX_Size") && f.status === "loaded")
+      };
+    });
+    // (2) inline math = 1.05 × body text; inside a heading 1em.
+    expect(Math.abs(m.inlineRatio - 1.05)).toBeLessThanOrEqual(0.01);
+    expect(Math.abs(m.h1.mathRatio - 1)).toBeLessThanOrEqual(0.01);
+    // (3)/(6) heading sizes, weight and margins (first heading: no top margin).
+    expect(m.h1).toMatchObject({ size: 18, weight: "600", mt: 0, mb: 8 });
+    expect(m.h2).toMatchObject({ size: 16, weight: "600", mt: 16, mb: 6 });
+    // (5) inline \dfrac renders as \frac: the line stays within 4px of a plain line; display \dfrac stays large.
+    expect(Math.abs(m.fracH - m.plainH)).toBeLessThanOrEqual(4);
+    expect(m.displayH).toBeGreaterThan(m.inlineFracH * 1.3);
+    // (7) display box: 12px 0, text width, 4px padding-block; long formula scrolls with a 6px bar.
+    expect(m.display).toMatchObject({ mt: 12, mb: 12, ml: 0, pt: 4, pb: 4 });
+    expect(Math.abs(m.display.width - m.display.text)).toBeLessThanOrEqual(1);
+    expect(m.scroll.overflow).toBe(true);
+    expect(m.scroll.sbH).toBe(6);
+    // (8) KaTeX error text uses --danger.
+    expect(m.errColor).toBe(m.danger);
+    // (4) fonts are files, never data: URIs, and nothing was refused by the CSP (\bigg needs KaTeX_Size*).
+    expect(m.katexFonts).toBeGreaterThan(0);
+    expect(m.dataFonts).toBe(0);
+    expect(m.sizeFontLoaded).toBe(true);
+    expect(csp).toEqual([]);
+    // The stored message keeps \dfrac (render-time macro only).
+    const stored = await win.evaluate(async () => {
+      const [c] = await window.point.conversations.list();
+      const t = await window.point.conversations.tree(c!.id);
+      return t.messages.filter((x) => x.role === "assistant").map((x) => x.content).find((x) => x.includes("行高基准")) ?? "";
+    });
+    expect(stored).toContain("行内分式 $\\dfrac{P}{\\sqrt{2}}$");
+    await answer.screenshot({ path: join(results, "chat-typography.png") });
+    await win.emulateMedia({ colorScheme: "dark" });
+    await answer.screenshot({ path: join(results, "chat-typography-dark.png") });
+    await win.emulateMedia({ colorScheme: "light" });
+  });
 });
+
+const document_fonts_ready = (win: Win) => win.evaluate(async () => void (await document.fonts.ready));
 
 test.describe("preset fallback notice", () => {
   test.describe.configure({ mode: "serial" });

@@ -5,7 +5,37 @@ import remarkParse from "remark-parse";
 import { unified } from "unified";
 import { spanMatches } from "./tree.js";
 
-const parse = (src: string) => unified().use(remarkParse).use(remarkGfm).use(remarkMath).parse(src) as Root;
+/**
+ * Pandoc's rule for single-dollar inline math, so prices stay text ("价格 $5 和 $10 都行。"): the opening
+ * `$` must not be followed by whitespace, and the closing `$` must not be preceded by whitespace nor
+ * followed by a digit. remark-math has no such option, so violating `inlineMath` nodes are turned back
+ * into a text node holding their exact source slice, at the same position. The string itself is never
+ * edited before parsing, so every offset (branch anchors, quotes) stays the source's.
+ */
+function pandocDollars(tree: Root, src: string): Root {
+  const isWs = (c: string | undefined) => c !== undefined && /\s/.test(c);
+  const visit = (n: Nodes) => {
+    if (!("children" in n)) return;
+    const kids = n.children as Nodes[];
+    for (let i = 0; i < kids.length; i++) {
+      const k = kids[i]!;
+      if (k.type === "inlineMath" && k.position) {
+        const start = k.position.start.offset!;
+        const end = k.position.end.offset!;
+        const single = src[start] === "$" && src[start + 1] !== "$";
+        if (single && (isWs(src[start + 1]) || isWs(src[end - 2]) || /[0-9]/.test(src[end] ?? ""))) {
+          kids[i] = { type: "text", value: src.slice(start, end), position: k.position };
+        }
+        continue;
+      }
+      visit(k);
+    }
+  };
+  visit(tree);
+  return tree;
+}
+
+const parse = (src: string) => pandocDollars(unified().use(remarkParse).use(remarkGfm).use(remarkMath).parse(src) as Root, src);
 
 /**
  * Models often write math as `\( … \)` and `\[ … \]`. Rewrite both to `$$ … $$` (same length, so

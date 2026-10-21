@@ -143,3 +143,25 @@ describe("math (remark-math, shared with the renderer)", () => {
     expect(pick(s, "$5")?.quote).toBe("$5");
   });
 });
+
+describe("Pandoc dollar rule (prices are not math)", () => {
+  const price = "价格 $5 和 $10 都行。";
+  it("'价格 $5 和 $10 都行。' has no math and renders both $ literally", () => {
+    expect(mathSpans(price)).toEqual([]);
+    expect(rendered(price)).toBe(price);
+    for (const c of visibleChars(price)) expect(price[c.off]).toBe(c.ch);
+  });
+  it("branch quotes over the price text match the source exactly", () => {
+    expect(pick(price, "$5 和 $10")).toEqual({ start: 3, end: 11, quote: "$5 和 $10" });
+    expect(pick(price, "都行")?.quote).toBe("都行");
+    expect(pick(price, "价格 $5")?.quote).toBe("价格 $5");
+  });
+  it("opening $ followed by space, or closing $ preceded by space, is text; tight $x$ stays math", () => {
+    expect(mathSpans("a $ x$ b")).toEqual([]);
+    expect(mathSpans("a $x $ b")).toEqual([]);
+    expect(mathSpans("共 $3$4 个")).toEqual([]);
+    expect(mathSpans("由 $x$ 得 $y$。").map((m) => m.tex)).toEqual(["x", "y"]);
+    expect(mathSpans("$$x$$ 与 \\(y\\)\n\n$$\nz\n$$").map((m) => m.tex)).toEqual(["x", "y", "z"]);
+    expect(mathSpans("代码 `$5 和 $10` 不动")).toEqual([]);
+  });
+});
