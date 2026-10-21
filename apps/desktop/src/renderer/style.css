@@ -448,3 +448,5 @@ button.link.active { color: var(--accent); }
 .model-bar button.settings-link:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .model-pick select option:checked { background: var(--surface-2); color: var(--text); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
+/* From the second collapse stage the document name (also in the title bar) gives up its sliver entirely. */
+.reader-toolbar[data-collapse="2"] .reader-title, .reader-toolbar[data-collapse="3"] .reader-title, .reader-toolbar[data-collapse="4"] .reader-title { display: none; }
