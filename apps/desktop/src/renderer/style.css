@@ -56,6 +56,11 @@
 }
 * { box-sizing: border-box; }
 html, body, #app { height: 100%; margin: 0; }
+/* The window is an app shell, never a scrolling page: pin #app to the viewport. Anything a library
+   appends to <body> (e.g. pdf.js's measuring canvas) or a scrollIntoView that reaches the viewport
+   can then never push the title bar out of the window. */
+html, body { overflow: hidden; }
+#app { position: fixed; inset: 0; height: auto; }
 button { font: inherit; font-size: 13px; color: inherit; background: transparent; border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; cursor: pointer; }
 button:disabled { opacity: 0.45; cursor: default; }
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
