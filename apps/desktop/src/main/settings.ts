@@ -71,6 +71,9 @@ function customEndpoint(id: ProviderId, cur: StoredProvider): boolean {
   return normUrl(cur.baseURL || preset.baseURL) !== normUrl(preset.baseURL);
 }
 
+/** Name shown for the active service: the preset's, or "" on a custom endpoint (not that vendor's API). */
+const providerNameOf = (id: ProviderId, cur: StoredProvider, name: string) => (customEndpoint(id, cur) ? "" : name);
+
 /** Saved id is not usable on this path: preset endpoint and not in the ModelSpec table. */
 function unavailable(id: ProviderId, cur: StoredProvider): boolean {
   return !modelSpec(id, cur.model) && !customEndpoint(id, cur);
@@ -128,7 +131,7 @@ export function view(): SettingsView {
     configured: configuredOf(s),
     active: fakeEnabled()
       ? { providerName: "测试模型", model: "fake", vision: fakeVision() }
-      : { providerName: getPreset(s.activeProvider)!.name, model: modelOf(s.activeProvider, act), vision: visionOf(s.activeProvider, act) },
+      : { providerName: providerNameOf(s.activeProvider, act, getPreset(s.activeProvider)!.name), model: modelOf(s.activeProvider, act), vision: visionOf(s.activeProvider, act) },
     presets: [...PROVIDER_PRESETS],
     encryptionAvailable: safeStorage.isEncryptionAvailable(),
     providers: PROVIDER_PRESETS.map((p) => {
@@ -197,8 +200,9 @@ export function listModels(): { providerId: ProviderId; providerName: string; co
   const p = providerConfig(s.activeProvider)!;
   const cur = providerOf(s, s.activeProvider);
   const configured = configuredOf(s);
+  const providerName = providerNameOf(s.activeProvider, cur, p.label);
   // No key → no usable model: list nothing (presets included) so the UI cannot default-select one.
-  if (!configured) return { providerId: s.activeProvider, providerName: p.label, configured: false, models: [] };
+  if (!configured) return { providerId: s.activeProvider, providerName, configured: false, models: [] };
   // Preset endpoint + unknown saved id: fell back to defaultModel; say so (as before).
   const notice = unavailable(s.activeProvider, cur) ? modelFallbackNotice(s.activeProvider) : undefined;
   // A saved custom model (custom endpoint only) is listed first; presets follow.
@@ -206,7 +210,7 @@ export function listModels(): { providerId: ProviderId; providerName: string; co
   const specs: (ModelSpec & { custom?: boolean })[] = custom?.custom ? [{ id: custom.id, label: custom.label, vision: custom.vision, efforts: [], defaultEffort: null, custom: true }, ...p.models] : [...p.models];
   return {
     providerId: s.activeProvider,
-    providerName: p.label,
+    providerName,
     configured: true,
     notice,
     // ModelBar's default pick: the model saved in Settings when it is listed.

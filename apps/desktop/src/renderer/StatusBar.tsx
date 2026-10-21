@@ -1,4 +1,5 @@
 import type { ActiveModel } from "../shared/ipc";
+import { modelTooltip } from "../shared/model-name";
 
 interface Props {
   workspace: string | null;
@@ -28,7 +29,7 @@ export function StatusBar({ workspace, docTitle, model, configured }: Props) {
       )}
       {model && configured && (
         <span className="statusbar-right">
-          <span className="statusbar-item" data-testid="status-model" title={`${model.providerName} · ${model.model}`}>
+          <span className="statusbar-item" data-testid="status-model" title={modelTooltip(model)}>
             {model.model}
           </span>
           <span className="statusbar-item" data-testid="status-vision">
