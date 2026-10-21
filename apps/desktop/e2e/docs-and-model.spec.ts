@@ -325,6 +325,22 @@ test.describe("per-conversation model and effort", () => {
     const labels = await select.locator("option").allTextContents();
     expect(labels.some((t) => /Flash/i.test(t))).toBe(true);
     expect(labels.some((t) => /gpt-4o/i.test(t))).toBe(false); // other providers stay in Settings
+    // Options show only the model id (no label, no 看图/思考 tags).
+    expect(labels).toEqual(["deepseek-flash", "deepseek-v4-pro"]);
+    for (const opt of await select.locator("option").all()) expect(await opt.textContent()).toBe(await opt.getAttribute("value"));
+    // Evidence: show the option list in-page (size=N; the native popup is not capturable), light and dark.
+    await select.evaluate((el: HTMLSelectElement) => {
+      el.size = el.options.length;
+      el.style.height = "auto";
+    });
+    await select.screenshot({ path: join(results, "model-names.png") });
+    await win.emulateMedia({ colorScheme: "dark" });
+    await select.screenshot({ path: join(results, "model-names-dark.png") });
+    await win.emulateMedia({ colorScheme: "light" });
+    await select.evaluate((el: HTMLSelectElement) => {
+      el.size = 0;
+      el.style.height = "";
+    });
     await expect(bar.getByTestId("effort-control")).toBeVisible();
     await expect(bar.getByTestId("effort-off")).toBeVisible();
     await expect(bar.getByTestId("effort-high")).toBeVisible();

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ModelSpec } from "@point/core";
+import { modelDisplayName } from "../shared/model-name.js";
 
 type Listed = ModelSpec & { configured: boolean };
 type List = { providerId: string; providerName: string; configured: boolean; defaultModel?: string; notice?: string; models: Listed[] };
@@ -87,9 +88,7 @@ export function ModelBar({
         >
           {list.models.map((m) => (
             <option key={m.id} value={m.id} disabled={!m.configured} title={m.configured ? undefined : "未配置密钥"}>
-              {m.label}
-              {m.vision ? " · 看图" : ""}
-              {m.efforts.length ? " · 思考" : ""}
+              {modelDisplayName(m)}
               {m.configured ? "" : "（未配置密钥）"}
             </option>
           ))}
