@@ -351,7 +351,7 @@ export function runsToWords(runs: TjGlyphRun[], viewport: Viewport): TjWordBox[]
     let text = start.str;
     let minX = start.x;
     let maxX = start.x + (start.advance ?? 0);
-    let baselineY = start.y;
+    const baselineY = start.y;
     let ascent = start.ascent;
     let j = i + 1;
     // Merge runs that sit on the same baseline with no gap that looks like a space.
