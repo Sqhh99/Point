@@ -7,7 +7,7 @@ import { Reader } from "./Reader";
 import { Settings } from "./Settings";
 import { StatusBar } from "./StatusBar";
 import { TitleBar } from "./TitleBar";
-import { clampChatWidth, isToggleLibraryKey, openShortcutOf } from "./layout";
+import { clampChatWidth, deskVars, isToggleLibraryKey, openShortcutOf } from "./layout";
 
 const api = window.point;
 
@@ -143,7 +143,7 @@ export function App() {
   return (
     <div className="shell">
     <TitleBar workspace={workspace.path} fileName={view === "settings" ? "设置" : docTitle} onOpenWorkspace={chooseWorkspace} onOpenFile={openFile} onImport={importDocs} />
-    <div className={`desk${libraryOpen ? "" : " library-collapsed"}`} style={{ "--chat-width": `${chatWidth}px` } as React.CSSProperties}>
+    <div className={`desk${libraryOpen ? "" : " library-collapsed"}`} style={deskVars(chatWidth)}>
       <Library
         open={libraryOpen}
         onToggle={() => setLibraryOpen((o) => !o)}

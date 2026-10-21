@@ -1,6 +1,18 @@
-export const CHAT_MIN = 320;
-export const CHAT_MAX = 640;
-export const CHAT_DEFAULT = 400;
+import type { CSSProperties } from "react";
+import { CHAT_DEFAULT, CHAT_MAX, CHAT_MIN, LIBRARY_COLLAPSED_WIDTH, LIBRARY_WIDTH, READER_MIN, SPLITTER_WIDTH } from "../shared/layout-sizes";
+export { CHAT_DEFAULT, CHAT_MAX, CHAT_MIN };
+
+/** CSS variables for the desk grid (style.css): the chat pane gives way first, down to CHAT_MIN,
+ *  so the reader keeps READER_MIN; above that the chat keeps the user's width. */
+export const deskVars = (chatWidth: number) =>
+  ({
+    "--chat-width": `${chatWidth}px`,
+    "--chat-min": `${CHAT_MIN}px`,
+    "--reader-min": `${READER_MIN}px`,
+    "--library-width": `${LIBRARY_WIDTH}px`,
+    "--library-collapsed-width": `${LIBRARY_COLLAPSED_WIDTH}px`,
+    "--splitter-width": `${SPLITTER_WIDTH}px`
+  }) as CSSProperties;
 
 /** Plain decimal only: hex, binary and octal literals ("0x200") are treated as invalid. */
 const DECIMAL = /^\s*[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?\s*$/i;

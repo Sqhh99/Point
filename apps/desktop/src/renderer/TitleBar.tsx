@@ -44,15 +44,15 @@ export function TitleBar(p: Props) {
       <div className="titlebar-right">
         {!isMac && (
           <div className="window-controls no-drag">
-            <button aria-label="最小化" onClick={() => void api.window.action("minimize")}>
+            <button aria-label="最小化" title="最小化" onClick={() => void api.window.action("minimize")}>
               <svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5h10" stroke="currentColor" /></svg>
             </button>
-            <button aria-label={maximized ? "还原" : "最大化"} onClick={() => void api.window.action("toggleMaximize")}>
+            <button aria-label={maximized ? "还原" : "最大化"} title={maximized ? "还原" : "最大化"} onClick={() => void api.window.action("toggleMaximize")}>
               <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor">
                 {maximized ? <path d="M2.5 2.5V.5h7v7h-2M.5 2.5h7v7h-7z" /> : <rect x=".5" y=".5" width="9" height="9" />}
               </svg>
             </button>
-            <button className="close" aria-label="关闭" onClick={() => void api.window.action("close")}>
+            <button className="close" aria-label="关闭" title="关闭" onClick={() => void api.window.action("close")}>
               <svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" /></svg>
             </button>
           </div>

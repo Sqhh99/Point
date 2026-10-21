@@ -10,6 +10,7 @@ import { registerTasksIpc } from "./tasks-ipc.js";
 import { registerWindowIpc, titleBarOptions, watchMaximized } from "./window-ipc.js";
 import { notifyIfUpdateAvailable } from "./update-check.js";
 import { closeWorkspace, restoreWorkspace } from "./workspace.js";
+import { WINDOW_MIN_HEIGHT, WINDOW_MIN_WIDTH } from "../shared/layout-sizes.js";
 
 // Packaging check: open a temp SQLite DB through the native module, report, exit.
 if (process.env.POINT_SMOKE_OUT) runSmoke(process.env.POINT_SMOKE_OUT);
@@ -23,8 +24,8 @@ function createWindow(): void {
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
-    minWidth: 900,
-    minHeight: 600,
+    minWidth: WINDOW_MIN_WIDTH,
+    minHeight: WINDOW_MIN_HEIGHT,
     ...titleBarOptions(process.platform),
     webPreferences: {
       preload: join(import.meta.dirname, "../preload/index.cjs"),
