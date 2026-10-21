@@ -1,6 +1,7 @@
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 import react from "@vitejs/plugin-react";
 import { resolve } from "node:path";
+import { assetsInlineLimit } from "./vite-assets";
 
 // Bundle @point/core from source so the app never depends on its dist/ at runtime.
 const alias = {
@@ -20,5 +21,5 @@ export default defineConfig({
     build: { rollupOptions: { output: { format: "cjs", entryFileNames: "[name].cjs" } } }
   },
   // .pfb/.bcmap are pdf.js font/CMap binaries; declaring them assets lets `?inline` bundle them as lazy chunks.
-  renderer: { plugins: [react()], resolve: { alias }, assetsInclude: ["**/*.pfb", "**/*.bcmap"] }
+  renderer: { plugins: [react()], resolve: { alias }, assetsInclude: ["**/*.pfb", "**/*.bcmap"], build: { assetsInlineLimit } }
 });
