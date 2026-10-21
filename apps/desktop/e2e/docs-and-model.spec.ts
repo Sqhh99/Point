@@ -544,7 +544,7 @@ test.describe("per-conversation model and effort", () => {
     expect(b.quote).toBe("与 [链接文字](https://example.com/docs/page) 的一");
   });
 
-  test("formulas render with local KaTeX ($…$, \\(…\\), \\[…\\], $$…$$); branch selection skips math or returns no anchor", async () => {
+  test("formulas render with local KaTeX ($…$, \\(…\\), \\[…\\], $$…$$); branch selections through and from formulas map to their LaTeX", async () => {
     const win = await app.firstWindow();
     const input = win.getByPlaceholder(/问点什么/);
     await input.fill("MATH-PROBE 解释一下这个公式");
@@ -617,22 +617,50 @@ test.describe("per-conversation model and effort", () => {
     expect(b.quote).toBe(b.slice);
     expect(b.quote).toBe("来自正弦均方根");
     await win.getByTestId("crumbs").getByRole("button", { name: "主线" }).click();
-    // A selection spanning a formula has no safe source anchor: no 追问分支 bar.
+    // Through an inline formula: the formula counts as its LaTeX, shown/sent as $…$, anchor maps 1:1.
     const ans = win.locator(".msg.assistant").filter({ hasText: "结论" }).first().locator(".markdown");
     await expect(ans.locator(".katex")).toHaveCount(5);
-    const across = await ans.evaluate((el) => {
-      const p = [...el.querySelectorAll("p")].find((x) => x.textContent!.includes("是峰值幅度"))!;
-      const range = document.createRange();
-      range.setStart(p.firstChild!, 0);
-      range.setEnd(p.lastChild!, Math.min(4, (p.lastChild as Text).data?.length ?? 0));
-      const sel = window.getSelection()!;
-      sel.removeAllRanges();
-      sel.addRange(range);
-      el.closest(".msg.assistant")!.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-      return !!p.querySelector(".katex") && sel.toString().length > 0;
-    });
-    expect(across).toBe(true);
-    await expect(bar).toHaveCount(0);
+    const branchVia = async (mode: "inline" | "display", expected: string, quote: string, ask: string) => {
+      await ans.evaluate((el, which) => {
+        const range = document.createRange();
+        if (which === "inline") {
+          const p = [...el.querySelectorAll("p")].find((x) => x.textContent!.includes("是峰值幅度"))!;
+          const after = p.childNodes[2] as Text; // " 是峰值幅度，" after the $P$ formula
+          range.setStart(p.firstChild!, 0);
+          range.setEnd(after, after.data.indexOf("，"));
+        } else {
+          // Inside the KaTeX block only: the formula is selected whole.
+          range.selectNodeContents(el.querySelectorAll(".katex-display")[0]!.querySelector(".katex-html")!);
+        }
+        const sel = window.getSelection()!;
+        sel.removeAllRanges();
+        sel.addRange(range);
+        el.closest(".msg.assistant")!.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+      }, mode);
+      await bar.getByRole("button", { name: "追问分支" }).click();
+      await expect(win.getByTestId("branch-draft")).toContainText(`追问分支：「${expected.slice(0, 40)}」`);
+      await input.fill(ask);
+      await win.getByRole("button", { name: "发送", exact: true }).click();
+      await expect(win.getByTestId("crumbs")).toContainText(`「${expected.slice(0, 16)}`);
+      const got = await lastBranch(win);
+      expect(got.selection).toBe(expected);
+      expect(got.quote).toBe(got.slice);
+      expect(got.quote).toBe(quote);
+      await win.getByTestId("crumbs").getByRole("button", { name: "主线" }).click();
+    };
+    await branchVia(
+      "inline",
+      "其中 $P$ 是峰值幅度",
+      "其中 $P$ 是峰值幅度",
+      "P 指什么？"
+    );
+    // Branch from a display formula itself.
+    await branchVia(
+      "display",
+      "$$L = 20\\lg\\frac{p}{p_0}$$",
+      "L = 20\\lg\\frac{p}{p_0}",
+      "这个公式怎么来的？"
+    );
   });
 });
 

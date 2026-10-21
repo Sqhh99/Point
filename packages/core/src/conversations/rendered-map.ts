@@ -65,7 +65,7 @@ export interface VisibleChar {
 
 /**
  * The visible characters of a markdown answer, in document order, each with its source offset.
- * Built from the mdast: only `text`, `inlineCode` and `code` values are mapped. Link and image URLs,
+ * Built from the mdast: only `text`, `inlineCode`, `code` and math (TeX) values are mapped. Link and image URLs,
  * markup (`**`, backticks, `[`, `](…)`), html tags and images never produce visible characters.
  */
 export function visibleChars(source: string): VisibleChar[] {
@@ -92,13 +92,13 @@ export function visibleChars(source: string): VisibleChar[] {
     }
   };
   const walk = (n: Nodes) => {
-    if (n.type === "text" || n.type === "inlineCode" || n.type === "code") {
+    // Math: the renderer reads each KaTeX element back as its TeX (the MathML annotation), so the
+    // formula's visible chars are its LaTeX source, mapped 1:1 like a code span (delimiters excluded).
+    if (n.type === "text" || n.type === "inlineCode" || n.type === "code" || n.type === "math" || n.type === "inlineMath") {
       push(n.value, n.position?.start.offset, n.position?.end.offset);
       return;
     }
-    // Math is rendered by KaTeX: its glyphs are not source characters, so it maps to nothing (the
-    // renderer skips `.katex` too); a selection overlapping it gets no anchor (see sourceSpanOf).
-    if (n.type === "html" || n.type === "image" || n.type === "imageReference" || n.type === "definition" || n.type === "math" || n.type === "inlineMath") return;
+    if (n.type === "html" || n.type === "image" || n.type === "imageReference" || n.type === "definition") return;
     if ("children" in n) for (const c of n.children as Nodes[]) walk(c);
   };
   walk(tree);
@@ -112,7 +112,8 @@ const isSpace = (c: string) => /\s/.test(c);
  * `before` is the visible text preceding the selection, `selected` the selected visible text (both as
  * the DOM shows them). Whitespace is ignored on both sides; every other character must line up with
  * the mdast's visible characters, or the result is null (no branch). Never returns a misaligned slice.
- * A span that overlaps a formula is also null: KaTeX output cannot be quoted back as source.
+ * A formula counts as its TeX source (see visibleChars), so a selection may start, end or run through
+ * math and the anchor is the source slice, LaTeX included.
  */
 export function sourceSpanOf(source: string, before: string, selected: string): { start: number; end: number; quote: string } | null {
   const vis = visibleChars(source).filter((c) => !isSpace(c.ch));
@@ -132,7 +133,6 @@ export function sourceSpanOf(source: string, before: string, selected: string): 
   const code = source.charCodeAt(last.off);
   if (code >= 0xd800 && code <= 0xdbff) end++;
   if (end <= start) return null;
-  if (mathSpans(source).some((m) => start < m.end && end > m.start)) return null;
   const quote = source.slice(start, end);
   return spanMatches(source, start, end, quote) ? { start, end, quote } : null;
 }

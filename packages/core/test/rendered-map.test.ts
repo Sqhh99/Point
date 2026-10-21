@@ -104,25 +104,37 @@ describe("math (remark-math, shared with the renderer)", () => {
     expect(mathSpans(s).map((x) => x.tex)).toEqual(["x"]);
   });
 
-  it("math produces no visible chars; text around it still maps to its own source", () => {
-    expect(rendered(src)).not.toContain("dfrac");
-    expect(rendered(src)).not.toContain("sqrt");
+  it("a formula's visible chars are its TeX, each mapped to its own source offset", () => {
+    expect(rendered(src)).toContain("p_e=\\dfrac{P}{\\sqrt{2}}".replace(/=/, " = "));
+    expect(rendered(src)).not.toContain("$");
     for (const c of visibleChars(src)) expect(src[c.off]).toBe(c.ch);
   });
 
-  it("a selection after a formula still aligns (the DOM skips .katex the same way)", () => {
+  it("a selection after formulas still aligns", () => {
     expect(pick(src, "是峰值")).toEqual({ start: src.indexOf("是峰值"), end: src.indexOf("是峰值") + 3, quote: "是峰值" });
     expect(pick(src, "来自正弦")?.quote).toBe("来自正弦");
     expect(pick(src, "结论在这里")?.quote).toBe("结论在这里");
   });
 
-  it("a selection that spans a formula returns null (no branch), never a slice with TeX in it", () => {
-    // Visible "其中是峰值" around $P$: the chars align, but the span would cover the formula.
+  it("inline math: a selection through $P$ maps 1:1, quote keeps the LaTeX source", () => {
+    expect(pick(src, "其中 P 是峰值")?.quote).toBe("其中 $P$ 是峰值");
+    expect(pick(src, "\\sqrt{2} 来自")?.quote).toBe("\\sqrt{2}\\) 来自");
+    const h = pick(src, "p_e = \\dfrac{P}{\\sqrt{2}}");
+    expect(h?.quote).toBe("p_e = \\dfrac{P}{\\sqrt{2}}");
+    expect(spanMatches(src, h!.start, h!.end, h!.quote)).toBe(true);
+  });
+
+  it("block math: selecting the display formula maps to its TeX lines; across it into the next paragraph too", () => {
+    const tex = "L = 20\\lg\\frac{p}{p_0}";
+    expect(pick(src, tex)).toEqual({ start: src.indexOf(tex), end: src.indexOf(tex) + tex.length, quote: tex });
+    const across = pick(src, "x^2结论"); // rendered() has no block breaks; whitespace is ignored anyway
+    expect(across?.quote).toBe("x^2$$\n\n结论");
+  });
+
+  it("text that does not match the formula's TeX is still null (never a misaligned slice)", () => {
     const r = rendered(src);
     const i = r.indexOf("其中");
-    expect(sourceSpanOf(src, r.slice(0, i), "其中 是峰值")).toBeNull();
-    // A selection made only of KaTeX glyphs (no source chars) → null.
-    expect(sourceSpanOf(src, r.slice(0, i), "p e = P 2")).toBeNull();
+    expect(sourceSpanOf(src, r.slice(0, i), "其中 p e = P 2")).toBeNull();
   });
 
   it("a dollar amount that is not closed stays text", () => {
