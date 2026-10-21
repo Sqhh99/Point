@@ -32,10 +32,14 @@ export interface TextAnchor {
 export interface RegionAnchor {
   kind: "region";
   sha: string;
+  /** PNG pixel width (not page coordinates). */
   width: number;
+  /** PNG pixel height (not page coordinates). */
   height: number;
   blockId?: string;
   page?: number;
+  /** Where the region sits on `page` (page CSS px at 100% zoom). Optional: old marks have none. */
+  rects?: PageRect[];
 }
 
 export type MarkAnchor = TextAnchor | RegionAnchor;
@@ -101,6 +105,7 @@ export function parseAnchor(raw: unknown): MarkAnchor {
     const page = optPage(r.page);
     if (blockId) a.blockId = blockId;
     if (page) a.page = page;
+    if (r.rects !== undefined && r.rects !== null) a.rects = parseRects(r.rects);
     return a;
   }
   return fail();

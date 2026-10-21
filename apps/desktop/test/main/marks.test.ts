@@ -86,7 +86,9 @@ describe("anchors", () => {
     const r = s.create(DOC, { kind: "region", sha, width: 40, height: 20, page: 1, path: "/etc/passwd" });
     expect(s.get(t.id)!.anchor).toEqual({ kind: "text", text: "熵是无序度", blockId: "b3", page: 2, context: "ctx" });
     expect(s.get(r.id)!.anchor).toEqual({ kind: "region", sha, width: 40, height: 20, page: 1 });
-    expect(s.list(DOC).map((m) => m.id)).toEqual([t.id, r.id]);
+    const rr = s.create(DOC, { kind: "region", sha, width: 40, height: 20, page: 3, rects: [{ x: 10.129, y: 20, w: 100, h: 40 }] });
+    expect(s.get(rr.id)!.anchor).toEqual({ kind: "region", sha, width: 40, height: 20, page: 3, rects: [{ x: 10.13, y: 20, w: 100, h: 40 }] });
+    expect(s.list(DOC).map((m) => m.id)).toEqual([t.id, r.id, rr.id]);
   });
 
   it.each([

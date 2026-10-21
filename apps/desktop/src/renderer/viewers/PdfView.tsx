@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { PageRect } from "@point/core";
+import { SelectionOverlay, type OverlayMode } from "../SelectionOverlay";
 import { BundledCMaps, BundledStandardFonts } from "./pdf-assets";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist/legacy/build/pdf.mjs";
 
@@ -33,6 +34,8 @@ interface Props {
   markTexts: Map<number, string[]>;
   /** Stored highlight rectangles per page (page coordinates at 100% zoom). */
   markRects: Map<number, PageRect[]>;
+  /** Session selection (pending capture or mark locate); drawn as a dashed overlay on that page. */
+  selection: { page: number; rects: PageRect[]; mode: OverlayMode } | null;
   fit: { seq: number; max?: number } | null;
   onFit(zoom: number): void;
   onState(s: PdfState): void;
@@ -42,7 +45,7 @@ interface Props {
 
 const norm = (s: string) => s.replace(/\s+/g, " ").trim();
 
-function Page({ doc, n, scale, size, marks, rects }: { doc: PDFDocumentProxy; n: number; scale: number; size: [number, number]; marks: string[]; rects: PageRect[] }) {
+function Page({ doc, n, scale, size, marks, rects, selection }: { doc: PDFDocumentProxy; n: number; scale: number; size: [number, number]; marks: string[]; rects: PageRect[]; selection: { rects: PageRect[]; mode: OverlayMode } | null }) {
   const wrap = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const text = useRef<HTMLDivElement>(null);
@@ -133,12 +136,13 @@ function Page({ doc, n, scale, size, marks, rects }: { doc: PDFDocumentProxy; n:
       {rects.map((r, i) => (
         <div key={i} className="mark-rect" data-testid="mark-rect" style={{ left: r.x * scale / BASE, top: r.y * scale / BASE, width: r.w * scale / BASE, height: r.h * scale / BASE }} />
       ))}
+      {selection && selection.rects.length > 0 && <SelectionOverlay rects={selection.rects} scale={scale} mode={selection.mode} />}
       <div className="textLayer pdf-text" ref={text} />
     </div>
   );
 }
 
-export function PdfView({ data, zoom, goto, markTexts, markRects, fit, onFit, onState, onReady, onError }: Props) {
+export function PdfView({ data, zoom, goto, markTexts, markRects, selection, fit, onFit, onState, onReady, onError }: Props) {
   const root = useRef<HTMLDivElement>(null);
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
   const [size, setSize] = useState<[number, number]>([612, 792]);
@@ -287,7 +291,7 @@ export function PdfView({ data, zoom, goto, markTexts, markRects, fit, onFit, on
 
   return (
     <div className="pdf-doc" ref={root} data-testid="pdf-doc">
-      {doc && Array.from({ length: doc.numPages }, (_, i) => <Page key={i} doc={doc} n={i + 1} scale={scale} size={size} marks={markTexts.get(i + 1) ?? []} rects={markRects.get(i + 1) ?? []} />)}
+      {doc && Array.from({ length: doc.numPages }, (_, i) => <Page key={i} doc={doc} n={i + 1} scale={scale} size={size} marks={markTexts.get(i + 1) ?? []} rects={markRects.get(i + 1) ?? []} selection={selection?.page === i + 1 ? { rects: selection.rects, mode: selection.mode } : null} />)}
     </div>
   );
 }

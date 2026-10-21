@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ActiveModel, CaptureResult, DocMeta, OpenResult, WorkspaceInfo } from "../shared/ipc";
-import type { Mark, MarkAnchor } from "@point/core";
+import type { Mark, MarkAnchor, PageRect } from "@point/core";
 import { AIPanel, type BatchTrigger, type TaskTrigger } from "./AIPanel";
 import { Library } from "./Library";
 import { Reader } from "./Reader";
@@ -33,7 +33,8 @@ export function App() {
   const [marks, setMarks] = useState<Mark[]>([]);
   const [checked, setChecked] = useState<string[]>([]);
   const [batch, setBatch] = useState<BatchTrigger | null>(null);
-  const [locate, setLocate] = useState<{ blockId?: string; page?: number; text?: string; seq: number } | null>(null);
+  const [locate, setLocate] = useState<{ blockId?: string; page?: number; text?: string; rects?: PageRect[]; seq: number } | null>(null);
+  const [clearSelectionSeq, setClearSelectionSeq] = useState(0);
   const drag = useRef<{ x: number; w: number } | null>(null);
 
   useEffect(() => {
@@ -177,8 +178,9 @@ export function App() {
           setView("reader");
           const a = m.anchor;
           const blockId = a.blockId;
-          const page = a.kind === "text" ? a.page : undefined;
-          if (blockId || page) setLocate((l) => ({ blockId, page, text: a.kind === "text" ? a.text : undefined, seq: (l?.seq ?? 0) + 1 }));
+          const page = a.page;
+          const rects = a.rects;
+          if (blockId || page) setLocate((l) => ({ blockId, page, text: a.kind === "text" ? a.text : undefined, rects, seq: (l?.seq ?? 0) + 1 }));
         }}
         onRemoveMark={removeMark}
         onBatchAsk={batchAsk}
@@ -205,6 +207,7 @@ export function App() {
             onRegionExplain={(r) => setTrigger((t) => ({ seq: (t?.seq ?? 0) + 1, kind: "explain", sel: { text: "", context: "", page: r.page }, image: r.sha }))}
             marks={marks}
             locate={locate}
+            clearSelectionSeq={clearSelectionSeq}
           />
         )}
       </main>
@@ -216,6 +219,7 @@ export function App() {
         hasWorkspace={!!workspace.path}
         onPick={setPicked}
         capture={capture}
+        onCaptureClear={() => setClearSelectionSeq((n) => n + 1)}
         batch={batch}
         onOpenSettings={() => setView("settings")}
       />

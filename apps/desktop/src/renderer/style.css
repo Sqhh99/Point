@@ -279,7 +279,16 @@ button.link.active { color: var(--accent); }
 /* reader toolbar + region capture */
 .reader-toolbar { position: sticky; top: 0; z-index: 4; display: flex; min-width: 0; justify-content: flex-start; align-items: center; gap: 2px; height: 40px; padding: 0 8px; background: var(--bg); border-bottom: 1px solid var(--line); }
 .tool-button { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border: none; border-radius: 6px; font-size: 13px; color: var(--muted); }
-.tool-button:hover:not(:disabled), .tool-button[aria-pressed="true"] { background: var(--hover); color: var(--text); }
+.tool-button:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.tool-button[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text);
+}
+.tool-button[aria-pressed="true"] { background: rgba(47, 111, 235, 0.12); }
+@supports (background: color-mix(in srgb, red 50%, blue)) {
+  .tool-button[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+}
+.tool-button[data-testid="capture-button"] { height: 32px; min-height: 32px; }
 .tool-button:disabled { opacity: 0.45; cursor: default; }
 .tool-button { white-space: nowrap; flex-shrink: 0; }
 .tool-button svg { flex-shrink: 0; }
@@ -297,6 +306,40 @@ button.link.active { color: var(--accent); }
 .reader-toolbar[aria-busy="true"] .reader-title::after { content: " · 加载中…"; font-weight: 400; color: var(--muted); }
 .capture-overlay { position: fixed; z-index: 30; cursor: crosshair; background: var(--hover); user-select: none; touch-action: none; }
 .capture-rect { position: absolute; outline: 1.5px dashed var(--accent); background: var(--highlight); pointer-events: none; }
+/* SelectionOverlay: pending = dashed after capture; confirm = solid flash after mark locate. */
+.selection-overlay {
+  position: absolute; z-index: 3; pointer-events: none; box-sizing: border-box; border-radius: 2px;
+}
+.selection-overlay-pending {
+  outline: 1.5px dashed var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.selection-overlay-pending {
+  background: rgba(47, 111, 235, 0.12);
+}
+@supports (background: color-mix(in srgb, red 50%, blue)) {
+  .selection-overlay-pending { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+}
+.selection-overlay-confirm {
+  outline: none;
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+  animation: selection-confirm 1.56s ease-out forwards;
+}
+.selection-overlay-confirm {
+  background: rgba(47, 111, 235, 0.25);
+}
+@supports (background: color-mix(in srgb, red 50%, blue)) {
+  .selection-overlay-confirm { background: color-mix(in srgb, var(--accent) 25%, transparent); }
+}
+@keyframes selection-confirm {
+  0% { opacity: 0; }
+  11.54% { opacity: 1; }
+  88.46% { opacity: 1; }
+  100% { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .selection-overlay-confirm { animation: none; opacity: 1; }
+}
 .capture-hint { position: absolute; top: 52px; left: 50%; transform: translateX(-50%); padding: 4px 12px; border-radius: 6px; background: var(--bg-elevated); border: 1px solid var(--border); color: var(--muted); font-size: 12px; pointer-events: none; }
 .quote-image { display: block; padding: 0; margin: 2px 0 4px; border: none; background: none; cursor: zoom-in; }
 .quote-image img { display: block; max-width: 240px; max-height: 240px; border-radius: 4px; border: 1px solid var(--line); }

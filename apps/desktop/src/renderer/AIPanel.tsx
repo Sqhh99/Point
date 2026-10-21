@@ -36,6 +36,8 @@ interface Props {
   onPick?(model: ActiveModel | null): void;
   /** Latest region capture; a new seq attaches it to the composer. */
   capture: (CaptureResult & { seq: number }) | null;
+  /** Fired when the attached capture is removed (send or dismiss), so the reader can drop the dashed overlay. */
+  onCaptureClear?(): void;
   batch: BatchTrigger | null;
   onOpenSettings(): void;
 }
@@ -206,7 +208,7 @@ function QuoteCard({ meta, onOpenImage }: { meta: MessageMeta; onOpenImage(sha: 
   );
 }
 
-export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onPick, capture, batch, onOpenSettings }: Props) {
+export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onPick, capture, onCaptureClear, batch, onOpenSettings }: Props) {
   const [batchMarks, setBatchMarks] = useState<Mark[] | null>(null);
   const [image, setImage] = useState<CaptureResult | null>(null);
   const [viewing, setViewing] = useState<string | null>(null);
@@ -564,9 +566,11 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onPick, captur
     // Checked again in main; this keeps the question and the image so the user can switch models.
     if (image && !vision) return setFailure({ code: "no_vision", message: NO_VISION_TEXT, request: req });
     setQuestion("");
+    const hadCapture = !!image;
     void run("ask", attached, q, image?.sha);
     setAttached(null);
     setImage(null);
+    if (hadCapture) onCaptureClear?.();
   };
 
   const stop = () => {
@@ -861,7 +865,7 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onPick, captur
             {image && (
               <div className="attached-thumb" data-testid="attached-image">
                 <CaptureImg key={image.sha} sha={image.sha} alt={`截图 ${image.width}×${image.height}`} />
-                <button className="thumb-remove" onClick={() => setImage(null)} aria-label="移除截图">
+                <button className="thumb-remove" onClick={() => { setImage(null); onCaptureClear?.(); }} aria-label="移除截图">
                   ×
                 </button>
               </div>

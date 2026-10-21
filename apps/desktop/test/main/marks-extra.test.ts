@@ -166,6 +166,14 @@ describe("anchor validation", () => {
     }
   });
 
+  it("region anchor keeps page rects (rounded); old marks without rects still parse", () => {
+    const db = memDb();
+    const s = new MarkStore(db, nextId);
+    const m = s.create(DOC_A, { kind: "region", sha: S, width: 40, height: 30, page: 2, rects: [{ x: 1.239, y: 4, w: 80, h: 24 }] });
+    expect(m.anchor).toEqual({ kind: "region", sha: S, width: 40, height: 30, page: 2, rects: [{ x: 1.24, y: 4, w: 80, h: 24 }] });
+    expect(s.create(DOC_A, { kind: "region", sha: S, width: 4, height: 4 }).anchor).toEqual({ kind: "region", sha: S, width: 4, height: 4 });
+  });
+
   it("stored region anchor_json has no path / imagePath (main derives it from the sha)", () => {
     const db = memDb();
     const s = new MarkStore(db, nextId);
