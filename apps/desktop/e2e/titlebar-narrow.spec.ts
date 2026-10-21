@@ -192,7 +192,155 @@ const designRules = (win: Win) =>
     { controls: WINDOW_CONTROLS, trafficLights: MAC_TRAFFIC_LIGHTS }
   );
 
-async function capture(win: Win, testInfo: TestInfo, label: string, size: [number, number] | "maximized") {
+/**
+ * Title-bar spacing and reader-toolbar layout (#68 round 2), all from role / aria / computed geometry:
+ * the reader toolbar is role=toolbar “阅读工具”, the reader pane is <main>, the chat pane is the
+ * complementary region “AI 面板”, the open menu is the button named 打开…, the document title is the
+ * title-bar element that paints the open file's name.
+ */
+const layoutRules = (win: Win, docName: string) =>
+  win.evaluate(
+    ({ docName, controls }) => {
+      const shown = (el: Element) => {
+        const cs = getComputedStyle(el);
+        const r = el.getBoundingClientRect();
+        return cs.visibility !== "hidden" && cs.display !== "none" && Number(cs.opacity) > 0 && r.width > 0.5 && r.height > 0.5;
+      };
+      const box = (r: DOMRect) => ({ left: +r.left.toFixed(1), top: +r.top.toFixed(1), right: +r.right.toFixed(1), bottom: +r.bottom.toFixed(1), width: +r.width.toFixed(1), height: +r.height.toFixed(1) });
+      const painted = (el: Element) => {
+        let text = "";
+        const rects: DOMRect[] = [];
+        const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        for (let n = w.nextNode(); n; n = w.nextNode()) {
+          if (!n.textContent!.trim() || !shown(n.parentElement!)) continue;
+          const r = document.createRange();
+          r.selectNodeContents(n);
+          const rs = [...r.getClientRects()].filter((x) => x.width > 1 && x.height > 1);
+          if (!rs.length) continue;
+          text += n.textContent;
+          rects.push(...rs);
+        }
+        return { text: text.trim(), rects };
+      };
+      const name = (b: Element) => ((b.getAttribute("aria-label") ?? "").trim() || (b.textContent ?? "").trim());
+      const tooltipAttr = (b: Element, root: Element) => {
+        for (let el: Element | null = b; el && el !== root.parentElement; el = el.parentElement) {
+          const t = el.getAttribute("title");
+          if (t) return t;
+        }
+        const ids = b.getAttribute("aria-describedby");
+        return ids ? ids.split(/\s+/).map((id) => document.getElementById(id)?.textContent?.trim() ?? "").join(" ").trim() || null : null;
+      };
+      const inside = (r: DOMRect, o: DOMRect) => r.left >= o.left - 0.5 && r.right <= o.right + 0.5 && r.top >= o.top - 0.5 && r.bottom <= o.bottom + 0.5;
+
+      // ---- title bar
+      const tb = document.querySelector('[data-testid="titlebar"]') ?? document.querySelector("header");
+      const tr = tb!.getBoundingClientRect();
+      const tbButtons = [...tb!.querySelectorAll<HTMLElement>('button, [role="button"]')];
+      const openEl = tbButtons.find((b) => shown(b) && /^打开/.test(name(b))) ?? null;
+      const openR = openEl?.getBoundingClientRect();
+      // Deepest title-bar element whose own painted text is (a prefix of) the document name.
+      const key = docName.slice(0, 6);
+      const titleEl = [...tb!.querySelectorAll<HTMLElement>("*")].filter((el) => shown(el) && (el.textContent ?? "").includes(key) && ![...el.children].some((c) => (c.textContent ?? "").includes(key))).pop() ?? null;
+      const titleText = titleEl ? painted(titleEl) : null;
+      const titleLeft = titleText?.rects.length ? Math.min(...titleText.rects.map((x) => x.left)) : titleEl?.getBoundingClientRect().left ?? null;
+      const titlebar = {
+        open: openR ? { ...box(openR), topGap: +(openR.top - tr.top).toFixed(1), bottomGap: +(tr.bottom - openR.bottom).toFixed(1), centerDelta: +Math.abs((openR.top - tr.top) - (tr.bottom - openR.bottom)).toFixed(1) } : null,
+        docTitle: titleEl ? { ...box(titleEl.getBoundingClientRect()), paintedLeft: titleLeft === null ? null : +titleLeft.toFixed(1), text: titleText?.text.slice(0, 60) ?? "" } : null,
+        openToTitleGap: openR && titleLeft !== null ? +(titleLeft - openR.right).toFixed(1) : null,
+        captionButtons: tbButtons.filter((b) => shown(b) && controls.includes(name(b))).map((b) => ({ name: name(b), title: b.getAttribute("title"), tooltipAttr: tooltipAttr(b, tb!) }))
+      };
+
+      // ---- reader toolbar
+      const bar = document.querySelector<HTMLElement>('[role="toolbar"][aria-label="阅读工具"]');
+      const br = bar?.getBoundingClientRect();
+      const all = bar ? [...bar.querySelectorAll<HTMLElement>('button, [role="button"]')] : [];
+      const iconGlyphs = /^[‹›−+\-⋯…▾\s]*$/;
+      const btns = all.map((b, index) => {
+        const r = b.getBoundingClientRect();
+        const t = painted(b);
+        const tops = new Set(t.rects.map((x) => Math.round(x.top)));
+        const lh = parseFloat(getComputedStyle(b).lineHeight) || parseFloat(getComputedStyle(b).fontSize) * 1.2;
+        const textHeight = t.rects.length ? Math.max(...t.rects.map((x) => x.bottom)) - Math.min(...t.rects.map((x) => x.top)) : 0;
+        return {
+          index,
+          name: name(b),
+          ariaLabel: (b.getAttribute("aria-label") ?? "").trim() || null,
+          sourceText: (b.textContent ?? "").trim(),
+          paintedText: t.text,
+          shown: shown(b),
+          iconOnly: iconGlyphs.test(t.text),
+          tooltipAttr: tooltipAttr(b, bar!),
+          textLines: tops.size,
+          textHeight: +textHeight.toFixed(1),
+          lineHeight: +lh.toFixed(1),
+          insideToolbar: !!br && shown(b) && inside(r, br),
+          ...box(r)
+        };
+      });
+      const children = bar ? [...bar.children].filter(shown).map((c) => ({ name: (c.getAttribute("aria-label") ?? c.textContent ?? "").trim().slice(0, 40), ...box(c.getBoundingClientRect()), inside: inside(c.getBoundingClientRect(), br!) })) : [];
+      const find = (re: RegExp) => btns.find((b) => re.test(b.name)) ?? null;
+      const label = bar?.querySelector<HTMLElement>('[aria-live], [data-testid="switcher-label"]');
+      const labelText = label && shown(label) ? painted(label).text : "";
+      const zoomBtn = btns.find((b) => /^\d+%$/.test(b.paintedText)) ?? null;
+      const prev = find(/^上一/), next = find(/^下一/);
+      const overflow = btns.find((b) => b.shown && (/更多|溢出|overflow/i.test(b.name) || /^[⋯…]$/.test(b.paintedText))) ?? null;
+      // Reader pane: the <main> landmark holding the reader toolbar; chat pane: the “AI 面板” region.
+      const main = bar?.closest("main") ?? document.querySelector("main"), aside = document.querySelector('aside[aria-label="AI 面板"], [role="complementary"]');
+      const readerW = main ? +main.getBoundingClientRect().width.toFixed(1) : null, chatW = aside ? +aside.getBoundingClientRect().width.toFixed(1) : null;
+      const chain: string[] = [];
+      for (let el: Element | null = bar; el && el !== document.body; el = el.parentElement) chain.push(`${el.tagName.toLowerCase()} ${Math.round(el.getBoundingClientRect().left)}-${Math.round(el.getBoundingClientRect().right)}`);
+      return {
+        titlebar,
+        toolbar: br ? { ...box(br), scrollWidth: bar!.scrollWidth, clientWidth: bar!.clientWidth } : null,
+        toolbarChildren: children,
+        toolbarButtons: btns,
+        pageNav: { prevShown: !!prev?.shown && prev.insideToolbar, prevText: prev?.paintedText ?? null, nextShown: !!next?.shown && next.insideToolbar, nextText: next?.paintedText ?? null, label: labelText, labelInside: !!label && !!br && shown(label) && inside(label.getBoundingClientRect(), br) },
+        zoom: { text: zoomBtn?.paintedText ?? null, inside: !!zoomBtn?.insideToolbar },
+        capture: find(/框选/),
+        fitWidth: find(/适合宽度/),
+        overflowButton: overflow ? { ...overflow, rightmost: children.every((c) => c.right <= overflow.right + 0.5) } : null,
+        panes: { reader: readerW, spaceForReaderAndChat: main && aside ? +(aside.getBoundingClientRect().right - main.getBoundingClientRect().left).toFixed(1) : null, readerBox: main ? box(main.getBoundingClientRect()) : null, chatBox: aside ? box(aside.getBoundingClientRect()) : null, toolbarAncestors: chain, chat: chatW, viewport: innerWidth, fits360plus320: !!main && !!aside && aside.getBoundingClientRect().right - main.getBoundingClientRect().left >= 360 + 320 + (aside.getBoundingClientRect().left - main.getBoundingClientRect().right) }
+      };
+    },
+    { docName, controls: WINDOW_CONTROLS }
+  );
+
+/** Hover tooltip: title / aria-describedby (from layoutRules), else a role=tooltip element shown on hover. */
+async function hoverTooltip(win: Win, target: ReturnType<Win["locator"]>, attr: string | null) {
+  if (attr) return { source: "attribute", text: attr };
+  try {
+    await target.hover({ force: true, timeout: 2_000 });
+    await win.waitForTimeout(800);
+    const tip = win.getByRole("tooltip");
+    const text = (await tip.count()) ? ((await tip.first().textContent()) ?? "").trim() : "";
+    await win.mouse.move(1, 200);
+    return text ? { source: "role=tooltip", text } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Opens the reader toolbar's ⋯ overflow menu (if any) and lists its items, then closes it. */
+async function overflowItems(win: Win, index: number | undefined) {
+  if (index === undefined) return null;
+  const toolbar = win.getByRole("toolbar", { name: "阅读工具" });
+  try {
+    await toolbar.locator('button, [role="button"]').nth(index).click({ timeout: 2_000 });
+    const menu = win.getByRole("menu");
+    await menu.first().waitFor({ state: "visible", timeout: 2_000 });
+    const items = await menu.first().locator('[role="menuitem"], [role="menuitemcheckbox"], button').evaluateAll((els) => els.map((e) => ((e.getAttribute("aria-label") ?? "").trim() || (e.textContent ?? "").trim())));
+    await win.keyboard.press("Escape");
+    return items;
+  } catch {
+    await win.keyboard.press("Escape").catch(() => undefined);
+    return [];
+  }
+}
+
+type Layout = Awaited<ReturnType<typeof layoutRules>> & { captionTooltips: { name: string; tooltip: { source: string; text: string } | null }[]; iconTooltips: { name: string; tooltip: { source: string; text: string } | null }[]; overflowMenu: string[] | null };
+
+async function capture(win: Win, testInfo: TestInfo, label: string, size: [number, number] | "maximized", docName: string) {
   if (size === "maximized") {
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.maximize());
     // maximize() is async on every platform; wait for the resize (or give up and record what happened).
@@ -218,7 +366,7 @@ async function capture(win: Win, testInfo: TestInfo, label: string, size: [numbe
     screenLeft: +(cb.x + b.left).toFixed(1), screenTop: +(cb.y + b.top).toFixed(1), screenRight: +(cb.x + b.right).toFixed(1),
     toWorkAreaRight: +(wa.x + wa.width - (cb.x + b.right)).toFixed(1), toWorkAreaTop: +(cb.y + b.top - wa.y).toFixed(1)
   }));
-  const m = { label, platform: process.platform, requested: size, ...bounds, ...measured, windowControls: controls, design: await designRules(win) };
+  const base = { label, platform: process.platform, requested: size, ...bounds, ...measured, windowControls: controls, design: await designRules(win) };
 
   const tb = win.getByTestId("titlebar");
   mkdirSync(shots, { recursive: true });
@@ -230,6 +378,16 @@ async function capture(win: Win, testInfo: TestInfo, label: string, size: [numbe
   await win.screenshot({ path: files.window });
   await testInfo.attach(`titlebar-${label}-${process.platform}.png`, { path: files.titlebar, contentType: "image/png" });
   await testInfo.attach(`window-${label}-${process.platform}.png`, { path: files.window, contentType: "image/png" });
+  // Interactive checks run after the screenshots so hover / menus don't show up in them.
+  const layout = await layoutRules(win, docName);
+  const tbLoc = win.getByTestId("titlebar");
+  const captionTooltips: Layout["captionTooltips"] = [];
+  for (const c of layout.titlebar.captionButtons) captionTooltips.push({ name: c.name, tooltip: await hoverTooltip(win, tbLoc.getByRole("button", { name: c.name, exact: true }), c.tooltipAttr) });
+  const toolbarLoc = win.getByRole("toolbar", { name: "阅读工具" }).locator('button, [role="button"]');
+  const iconTooltips: Layout["iconTooltips"] = [];
+  for (const b of layout.toolbarButtons.filter((x) => x.shown && x.iconOnly)) iconTooltips.push({ name: b.name, tooltip: await hoverTooltip(win, toolbarLoc.nth(b.index), b.tooltipAttr) });
+  const menu = await overflowItems(win, layout.overflowButton?.index);
+  const m = { ...base, layout: { ...layout, captionTooltips, iconTooltips, overflowMenu: menu } as Layout };
   const json = join(shots, `titlebar-${label}-${process.platform}.json`);
   writeFileSync(json, JSON.stringify(m, null, 2));
   await testInfo.attach(`titlebar-${label}-${process.platform}.json`, { path: json, contentType: "application/json" });
@@ -246,7 +404,8 @@ test("title bar at the minimum window size, at 1024px and maximized: screenshots
   // and the reader toolbar (page switcher, zoom, 适合宽度) is on screen.
   const ws = mkdtempSync(join(tmpdir(), "point-e2e-tbnarrow-ws-"));
   const src = mkdtempSync(join(tmpdir(), "point-e2e-tbnarrow-src-"));
-  const pdf = join(src, "一份文件名很长的水文测量报告-Depth-determination-and-uncertainty.pdf");
+  const docName = "一份文件名很长的水文测量报告-Depth-determination-and-uncertainty";
+  const pdf = join(src, `${docName}.pdf`);
   writeFileSync(pdf, makePdf([["Page one of the title bar capture"], ["Page two"]]));
   await stub([ws]);
   await win.getByRole("button", { name: "选择工作区…" }).click();
@@ -258,9 +417,9 @@ test("title bar at the minimum window size, at 1024px and maximized: screenshots
   const [minW, minH] = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.getMinimumSize());
   expect(minW, "the window declares a minimum width").toBeGreaterThan(0);
   const results = [
-    await capture(win, testInfo, "min", [minW, minH]),
-    await capture(win, testInfo, "1024", [1024, Math.max(minH, 700)]),
-    await capture(win, testInfo, "maximized", "maximized")
+    await capture(win, testInfo, "min", [minW, minH], docName),
+    await capture(win, testInfo, "1024", [1024, Math.max(minH, 700)], docName),
+    await capture(win, testInfo, "maximized", "maximized", docName)
   ];
 
   // UI designer's narrow-title-bar rules, at the minimum width on every platform. Expected to fail on
@@ -290,6 +449,61 @@ test("title bar at the minimum window size, at 1024px and maximized: screenshots
   expect.soft(d.widestDragRun, "(d) min: widest drag region (px)").toBeGreaterThanOrEqual(48);
   if (process.platform === "darwin") expect.soft(d.overlapsTrafficLights, `(d) min: controls inside the ${MAC_TRAFFIC_LIGHTS}px traffic-light area`).toEqual([]);
   else expect.soft(d.overlapsCaption, "(d) min: controls over the caption-button area").toEqual([]);
+
+
+  // Title bar spacing + reader toolbar layout, every state (min, 1024, maximized), every platform.
+  // Expected to fail on main until the product fix lands; soft so each value is reported.
+  for (const m of results) {
+    const L = m.layout!;
+    const s = m.label;
+    // Title bar: 打开 vertically centred in the 36px bar, >= 12px clear of the document title.
+    expect.soft(L.titlebar.open, `${s}: 打开 button found`).not.toBeNull();
+    expect.soft(L.titlebar.open?.centerDelta, `${s}: 打开 |top gap - bottom gap| (top ${L.titlebar.open?.topGap}, bottom ${L.titlebar.open?.bottomGap})`).toBeLessThanOrEqual(1);
+    expect.soft(L.titlebar.docTitle, `${s}: document title found in the title bar`).not.toBeNull();
+    expect.soft(L.titlebar.openToTitleGap, `${s}: gap 打开 → document title (px)`).toBeGreaterThanOrEqual(12);
+    // Caption buttons (Windows / frameless Linux): hover tooltip with the button's name.
+    if (process.platform !== "darwin") {
+      const want: Record<string, RegExp> = { 最小化: /^最小化$/, 最大化: /^(最大化|还原)$/, 还原: /^(最大化|还原)$/, 关闭: /^关闭$/ };
+      expect.soft(L.captionTooltips.map((c) => c.name).sort(), `${s}: caption buttons present`).toHaveLength(3);
+      for (const c of L.captionTooltips) expect.soft(c.tooltip?.text ?? "", `${s}: “${c.name}” hover tooltip`).toMatch(want[c.name] ?? /^$/);
+    }
+    // Reader toolbar.
+    expect.soft(L.toolbar, `${s}: reader toolbar found`).not.toBeNull();
+    for (const c of L.toolbarChildren) expect.soft(c.inside, `${s}: toolbar child “${c.name}” inside the toolbar (${c.left}–${c.right} vs ${L.toolbar?.left}–${L.toolbar?.right})`).toBe(true);
+    for (const b of L.toolbarButtons.filter((x) => x.shown)) {
+      expect.soft(b.insideToolbar, `${s}: toolbar button “${b.name}” inside the toolbar`).toBe(true);
+      expect.soft(b.textLines, `${s}: toolbar button “${b.name}” text lines`).toBeLessThanOrEqual(1);
+      expect.soft(b.textHeight, `${s}: toolbar button “${b.name}” text height vs line height ${b.lineHeight}`).toBeLessThanOrEqual(b.lineHeight + 1);
+    }
+    expect.soft(L.pageNav.prevShown && L.pageNav.nextShown, `${s}: page nav ‹ › visible (${L.pageNav.prevText} ${L.pageNav.nextText})`).toBe(true);
+    expect.soft(L.pageNav.labelInside ? L.pageNav.label : "", `${s}: page label n / N visible`).toMatch(/\d+\s*\/\s*\d+/);
+    expect.soft(L.zoom.inside ? L.zoom.text : "", `${s}: zoom percentage visible`).toMatch(/^\d+%$/);
+    // Collapse order: 框选 icon-only before 适合宽度 goes; 适合宽度 leads the rightmost ⋯ menu.
+    const fitVisible = !!L.fitWidth?.shown && !!L.fitWidth?.insideToolbar;
+    const capVisible = !!L.capture?.shown && !!L.capture?.insideToolbar;
+    const menu = L.overflowMenu ?? [];
+    if (fitVisible && capVisible && L.fitWidth!.iconOnly) expect.soft(L.capture!.iconOnly, `${s}: 框选 icon-only before 适合宽度`).toBe(true);
+    if (!fitVisible) {
+      expect.soft(capVisible ? L.capture!.iconOnly : menu.some((n) => /框选/.test(n)), `${s}: 适合宽度 overflowed → 框选 icon-only or in ⋯`).toBe(true);
+      expect.soft(L.overflowButton, `${s}: ⋯ overflow button present`).not.toBeNull();
+      expect.soft(menu[0] ?? "", `${s}: ⋯ menu starts with 适合宽度`).toMatch(/适合宽度/);
+    }
+    if (L.overflowButton) expect.soft(L.overflowButton.rightmost, `${s}: ⋯ is the rightmost toolbar item`).toBe(true);
+    for (const b of L.toolbarButtons.filter((x) => !x.shown || !x.insideToolbar)) expect.soft(menu.some((n) => n.includes(b.name.replace(/[▾\s]/g, "").slice(0, 4))), `${s}: overflowed “${b.name}” reachable via ⋯`).toBe(true);
+    // Icon-only toolbar buttons: >= 32x32, aria-label = original text, hover tooltip.
+    const original: Record<string, string> = { 框选: "框选", 适合宽度: "适合宽度" };
+    for (const b of L.toolbarButtons.filter((x) => x.shown && x.iconOnly)) {
+      expect.soft(b.width, `${s}: icon-only “${b.name}” hit-box width`).toBeGreaterThanOrEqual(32);
+      expect.soft(b.height, `${s}: icon-only “${b.name}” hit-box height`).toBeGreaterThanOrEqual(32);
+      const orig = Object.keys(original).find((k) => b.sourceText.includes(k) || (b.ariaLabel ?? "").includes(k));
+      if (orig) expect.soft(b.ariaLabel, `${s}: icon-only “${b.name}” aria-label`).toBe(original[orig]);
+      else expect.soft(b.ariaLabel, `${s}: icon-only “${b.name}” has an aria-label`).toBeTruthy();
+      expect.soft(L.iconTooltips.find((t) => t.name === b.name)?.tooltip?.text ?? "", `${s}: icon-only “${b.name}” hover tooltip`).not.toBe("");
+    }
+    // Panes: reader >= 360px, chat >= 320px (recorded; at min the window may not fit both).
+    expect.soft(L.panes.reader, `${s}: reader pane width (space for reader+chat ${L.panes.spaceForReaderAndChat}px, 360+320 fits: ${L.panes.fits360plus320})`).toBeGreaterThanOrEqual(360);
+    expect.soft(L.panes.chat, `${s}: chat pane width`).toBeGreaterThanOrEqual(320);
+  }
 
   for (const m of results) {
     // Hold on main and after #65: the bar is visible and wholly inside the viewport.
