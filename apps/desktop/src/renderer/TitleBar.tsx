@@ -22,8 +22,14 @@ export function TitleBar(p: Props) {
       <div className="titlebar-left">
         <span className="titlebar-workspace" title={p.workspace ?? undefined}>{folder ?? "Point"}</span>
         <div className="titlebar-menu no-drag">
-          <button className="titlebar-open" onClick={() => setMenu((m) => !m)} aria-expanded={menu} aria-haspopup="menu">
-            打开 ▾
+          {/* Narrow title bar: the label collapses (CSS container query), the folder icon and ▾ stay;
+              the tooltip and aria-label keep the full label. */}
+          <button className="titlebar-open" onClick={() => setMenu((m) => !m)} aria-expanded={menu} aria-haspopup="menu" aria-label="打开" title="打开">
+            <svg className="titlebar-open-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
+              <path d="M1.5 3.5h4l1.5 1.5h7.5v8h-13z" />
+            </svg>
+            <span className="titlebar-open-label">打开</span>
+            <span className="titlebar-open-caret" aria-hidden="true">▾</span>
           </button>
           {menu && (
             <div className="menu" role="menu" onMouseLeave={() => setMenu(false)}>

@@ -69,19 +69,33 @@ button.link:hover { color: var(--text); }
 button.link.active { color: var(--accent); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-.shell { display: grid; grid-template-rows: 36px minmax(0, 1fr) 24px; height: 100%; }
-.titlebar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; height: 36px; background: var(--panel); border-bottom: 1px solid var(--line); font-size: 13px; -webkit-app-region: drag; user-select: none; }
+.shell { display: grid; grid-template-rows: 36px minmax(0, 1fr) 24px; grid-template-columns: minmax(0, 1fr); height: 100%; }
+.titlebar { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; height: 36px; background: var(--panel); border-bottom: 1px solid var(--line); font-size: 13px; -webkit-app-region: drag; user-select: none; }
 .titlebar.mac .titlebar-left { padding-left: 78px; }
-.titlebar-left { display: flex; align-items: center; gap: 8px; padding-left: 12px; min-width: 0; }
-.titlebar-workspace { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.titlebar-title { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40vw; }
+/* Left: never squeezes the open button (it collapses to icon + ▾ instead); the workspace name ellipsizes. */
+.titlebar-left { display: flex; align-items: center; gap: 8px; padding-left: 12px; min-width: 0; container: titlebar-left / inline-size; }
+.titlebar-workspace { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* The centre cell is drag area too: at least 48px of it is always kept. */
+.titlebar-title { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40vw; min-width: 48px; padding: 0 8px; text-align: center; }
 .titlebar-right { display: flex; justify-content: flex-end; height: 100%; }
 .no-drag { -webkit-app-region: no-drag; }
 .titlebar-menu { position: relative; }
-.titlebar-open { height: 24px; padding: 0 8px; border-radius: 6px; }
+.titlebar button { white-space: nowrap; }
+.titlebar button svg { flex-shrink: 0; }
+.titlebar-open { height: 24px; padding: 0 8px; border-radius: 6px; display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; white-space: nowrap; }
+.titlebar-open-caret { font-size: 11px; }
+/* Collapsed: icon + ▾ only, hit area ≥ 32×32 (the bar is 36px tall). mac reserves 78px for the traffic lights. */
+@container titlebar-left (max-width: 160px) {
+  .titlebar:not(.mac) .titlebar-open-label { display: none; }
+  .titlebar:not(.mac) .titlebar-open { min-width: 32px; height: 32px; padding: 0 6px; justify-content: center; }
+}
+@container titlebar-left (max-width: 230px) {
+  .titlebar.mac .titlebar-open-label { display: none; }
+  .titlebar.mac .titlebar-open { min-width: 32px; height: 32px; padding: 0 6px; justify-content: center; }
+}
 .menu { position: absolute; top: 28px; left: 0; z-index: 20; min-width: 140px; padding: 4px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; display: flex; flex-direction: column; }
 .menu button { text-align: left; padding: 6px 8px; border-radius: 6px; }
-.window-controls { display: flex; height: 100%; }
+.window-controls { display: flex; height: 100%; flex-shrink: 0; }
 .window-controls button { width: 46px; height: 36px; border: 0; border-radius: 0; background: transparent; color: inherit; display: grid; place-items: center; }
 .window-controls button:hover { background: var(--line); }
 .window-controls button.close:hover { background: var(--danger); color: var(--bg-elevated); }
