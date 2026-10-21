@@ -300,7 +300,7 @@ const layoutRules = (win: Win, docName: string) =>
         capture: find(/框选/),
         fitWidth: find(/适合宽度/),
         overflowButton: overflow ? { ...overflow, rightmost: children.every((c) => c.right <= overflow.right + 0.5) } : null,
-        panes: { reader: readerW, spaceForReaderAndChat: main && aside ? +(aside.getBoundingClientRect().right - main.getBoundingClientRect().left).toFixed(1) : null, readerBox: main ? box(main.getBoundingClientRect()) : null, chatBox: aside ? box(aside.getBoundingClientRect()) : null, toolbarAncestors: chain, chat: chatW, viewport: innerWidth, fits360plus320: !!main && !!aside && aside.getBoundingClientRect().right - main.getBoundingClientRect().left >= 360 + 320 + (aside.getBoundingClientRect().left - main.getBoundingClientRect().right) }
+        panes: { reader: readerW, spaceForReaderAndChat: main && aside ? +(aside.getBoundingClientRect().right - main.getBoundingClientRect().left).toFixed(1) : null, readerBox: main ? box(main.getBoundingClientRect()) : null, chatBox: aside ? box(aside.getBoundingClientRect()) : null, toolbarAncestors: chain, chat: chatW, viewport: innerWidth, docScrollWidth: document.scrollingElement!.scrollWidth, bodyScrollWidth: document.body.scrollWidth, fits360plus320: !!main && !!aside && aside.getBoundingClientRect().right - main.getBoundingClientRect().left >= 360 + 320 + (aside.getBoundingClientRect().left - main.getBoundingClientRect().right) }
       };
     },
     { docName, controls: WINDOW_CONTROLS }
@@ -421,6 +421,31 @@ test("title bar at the minimum window size, at 1024px and maximized: screenshots
     await capture(win, testInfo, "1024", [1024, Math.max(minH, 700)], docName),
     await capture(win, testInfo, "maximized", "maximized", docName)
   ];
+
+  // Minimum window: the “min” state is the window's real minimum (getMinimumSize(), not a fixed 900),
+  // and that minimum must fit sidebar + reader >= 360 + chat >= 320 + splitters without horizontal overflow.
+  const min = results[0]!;
+  const P = min.layout!.panes;
+  const rb = P.readerBox, cbx = P.chatBox;
+  const requiredMinWidth = rb && cbx ? +(rb.left + 360 + (cbx.left - rb.right) + 320 + (P.viewport - cbx.right)).toFixed(1) : null;
+  // Window refuses to go below its minimum.
+  await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]!; if (w.isMaximized()) w.unmaximize(); });
+  const narrower = await app.evaluate(async ({ BrowserWindow }, [w, h]) => {
+    const bw = BrowserWindow.getAllWindows()[0]!;
+    bw.setSize(w!, h!);
+    await new Promise((r) => setTimeout(r, 300));
+    return { requested: [w, h], size: bw.getSize(), contentSize: bw.getContentSize() };
+  }, [minW - 50, minH]);
+  const minCheck = { minimumSize: [minW, minH], minStateSize: min.size, minStateContentWidth: min.viewport.width, sidebarWidth: rb?.left ?? null, splitterWidth: rb && cbx ? +(cbx.left - rb.right).toFixed(1) : null, rightOfChat: cbx ? +(P.viewport - cbx.right).toFixed(1) : null, reader: P.reader, chat: P.chat, requiredMinWidth, docScrollWidth: P.docScrollWidth, bodyScrollWidth: P.bodyScrollWidth, setSizeMinus50: narrower };
+  writeFileSync(join(shots, `min-width-${process.platform}.json`), JSON.stringify(minCheck, null, 2));
+  console.log(`TITLEBAR-MINWIDTH ${JSON.stringify(minCheck)}`);
+  expect.soft(min.size[0], `min: window resized to exactly getMinimumSize() width ${minW}`).toBe(minW);
+  expect.soft(minW, `min: minWidth vs sidebar ${minCheck.sidebarWidth} + reader 360 + splitter ${minCheck.splitterWidth} + chat 320 + ${minCheck.rightOfChat}`).toBeGreaterThanOrEqual(requiredMinWidth ?? Infinity);
+  expect.soft(P.reader, "min: reader pane >= 360 at the minimum width").toBeGreaterThanOrEqual(360);
+  expect.soft(P.chat, "min: chat pane >= 320 at the minimum width").toBeGreaterThanOrEqual(320);
+  expect.soft(P.docScrollWidth, `min: no horizontal overflow (document scrollWidth vs ${P.viewport})`).toBeLessThanOrEqual(P.viewport);
+  expect.soft(cbx?.right ?? Infinity, "min: chat pane ends inside the window").toBeLessThanOrEqual(P.viewport + 0.5);
+  expect.soft(narrower.size[0], `min: setSize(${minW - 50}) is refused (window stays >= ${minW})`).toBeGreaterThanOrEqual(minW);
 
   // UI designer's narrow-title-bar rules, at the minimum width on every platform. Expected to fail on
   // main until the product fix lands; soft so each rule reports its own measured value.
