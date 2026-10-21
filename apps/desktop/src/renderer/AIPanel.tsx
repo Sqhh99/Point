@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Mark, MarkAnchor, TaskKind } from "@point/core";
 // Pure tree helpers only: the core barrel also pulls in Node modules that cannot load in the renderer.
 import { branchTree, branchesFrom, breadcrumb, defaultLeaf, latestLeaf, pathTo, siblingsOf, type BranchOrigin, type BranchTreeNode } from "@point/core/tree";
-import type { CaptureResult, MessageMeta, StoredMessage, TaskEvent, TaskRequest } from "../shared/ipc";
+import type { ActiveModel, CaptureResult, MessageMeta, StoredMessage, TaskEvent, TaskRequest } from "../shared/ipc";
+import { sourceSpanOf } from "@point/core/rendered-map";
 import { IconBranch } from "./icons";
+import { NO_VISION_CUSTOM_MESSAGE, NO_VISION_MESSAGE } from "../shared/vision-text";
 import { ModelBar } from "./ModelBar";
 import { Markdown } from "./Markdown";
 import { NotesPanel, type NoteFlash } from "./NotesPanel";
@@ -30,8 +32,8 @@ interface Props {
   docId: string | null;
   docTitle: string | null;
   hasWorkspace: boolean;
-  /** Current model accepts images. */
-  vision: boolean;
+  /** Reports the model picked in ModelBar (name + vision from the same list main gates on); null when none. */
+  onPick?(model: ActiveModel | null): void;
   /** Latest region capture; a new seq attaches it to the composer. */
   capture: (CaptureResult & { seq: number }) | null;
   batch: BatchTrigger | null;
@@ -50,9 +52,33 @@ const REASONS: Record<string, string> = {
   not_configured: "未配置模型"
 };
 
-export const NO_VISION_TEXT = "当前模型不支持图片。请在「设置」里换一个支持看图的模型（例如 gpt-4o、glm-4v-flash），或勾选「该模型支持看图」。";
 
 const stripIpcPrefix = (m: string) => m.replace(/^Error invoking remote method '[^']+': (Error: )?/, "");
+
+/** Mermaid's toggle buttons and drawn SVG are UI, not answer text. */
+const NOT_TEXT = ".mermaid-toggle, .mermaid-figure, .mermaid-failed";
+
+/** Visible text of `md` before and inside `range`, char by char from the DOM (whitespace kept). */
+function visibleAround(md: HTMLElement, range: Range): { before: string; selected: string } {
+  let before = "";
+  let selected = "";
+  const walker = document.createTreeWalker(md, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => (n.parentElement?.closest(NOT_TEXT) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT)
+  });
+  for (let n = walker.nextNode() as Text | null; n; n = walker.nextNode() as Text | null) {
+    const t = n.data;
+    if (range.comparePoint(n, t.length) < 0) {
+      before += t;
+      continue;
+    }
+    if (range.comparePoint(n, 0) > 0) break;
+    for (let k = 0; k < t.length; k++) {
+      if (range.comparePoint(n, k) < 0) before += t[k];
+      else if (range.comparePoint(n, k + 1) === 0) selected += t[k];
+    }
+  }
+  return { before, selected };
+}
 
 export const captureUrl = (sha: string) => `point-capture://${sha}`;
 
@@ -156,7 +182,7 @@ function QuoteCard({ meta, onOpenImage }: { meta: MessageMeta; onOpenImage(sha: 
   );
 }
 
-export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, capture, batch, onOpenSettings }: Props) {
+export function AIPanel({ trigger, docId, docTitle, hasWorkspace, onPick, capture, batch, onOpenSettings }: Props) {
   const [batchMarks, setBatchMarks] = useState<Mark[] | null>(null);
   const [image, setImage] = useState<CaptureResult | null>(null);
   const [viewing, setViewing] = useState<string | null>(null);
@@ -169,12 +195,13 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
   const messages = useMemo(() => (leafId ? pathTo(tree.messages, leafId) : []), [tree, leafId]);
   /** Next send goes under this message (从这里分支); `null` = new first question. */
   const [fork, setFork] = useState<({ parentId: string } | { siblingOf: string }) & { label: string } | null>(null);
-  const [branchDraft, setBranchDraft] = useState<NonNullable<TaskRequest["branch"]> | null>(null);
+  /** `branch` is the source anchor (offsets + source slice, checked by spanMatches); `text` is what the user saw and what is shown and sent. */
+  const [branchDraft, setBranchDraft] = useState<{ branch: NonNullable<TaskRequest["branch"]>; text: string } | null>(null);
   /** First message re-mounted by a sibling switch, to fade it in. */
   const [switched, setSwitched] = useState<string | null>(null);
   const [treeOpen, setTreeOpen] = useState(false);
   const [chipOpen, setChipOpen] = useState<string | null>(null);
-  const [answerBar, setAnswerBar] = useState<{ top: number; left: number; branch: NonNullable<TaskRequest["branch"]> } | null>(null);
+  const [answerBar, setAnswerBar] = useState<{ top: number; left: number; draft: { branch: NonNullable<TaskRequest["branch"]>; text: string } } | null>(null);
 
   const refresh = useCallback(async (convId: string, leaf?: string | null) => {
     const t = await api.conversations.tree(convId);
@@ -188,14 +215,42 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
   const [pickModel, setPickModel] = useState<string | null>(null);
   const [pickEffort, setPickEffort] = useState<string | null>(null);
   const [modelNotice, setModelNotice] = useState<string | null>(null);
-  // A "not configured" refusal is stale once a key is saved.
-  useEffect(() => window.point.settings.onChanged(() => setFailure((f) => (f?.code === "not_configured" ? null : f))), []);
+  // Fallback notice (models:list or task model-notice) shows once per conversation; dismissed keys are
+  // "<conversation>#<settings generation>", so it can show again after switching or reconfiguring.
+  const [settingsGen, setSettingsGen] = useState(0);
+  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set());
+  const noticeKey = `${conversationId ?? "new"}#${settingsGen}`;
+  // models:list is the one source for "configured" and per-model vision (ModelSpec.vision), same as main.
+  const [listed, setListed] = useState<Awaited<ReturnType<typeof window.point.models.list>> | null>(null);
+  useEffect(() => {
+    let live = true;
+    const load = () => void window.point.models.list().then((l) => live && setListed(l), () => undefined);
+    load();
+    const off = window.point.settings.onChanged(() => {
+      load();
+      setSettingsGen((g) => g + 1);
+      // A "not configured" refusal is stale once a key is saved.
+      setFailure((f) => (f?.code === "not_configured" ? null : f));
+    });
+    return () => {
+      live = false;
+      off();
+    };
+  }, []);
+  const configured = !!listed?.configured;
+  const shownNotice = dismissed.has(noticeKey) ? null : (modelNotice ?? listed?.notice ?? null);
+  const picked = listed?.models.find((m) => m.id === pickModel);
+  const vision = !!picked?.vision;
+  const NO_VISION_TEXT = picked?.custom ? NO_VISION_CUSTOM_MESSAGE : NO_VISION_MESSAGE;
+  const pickedName = configured && picked ? picked.id : null;
+  const providerName = listed?.providerName ?? "";
+  useEffect(() => onPick?.(pickedName ? { providerName, model: pickedName, vision } : null), [pickedName, providerName, vision, onPick]);
   // Seed from models:list default; conversation memory overrides when we have an id.
   useEffect(() => {
     let live = true;
     void window.point.models.list().then((l) => {
       if (!live || pickModel) return;
-      const def = l.models.find((m) => m.configured) ?? l.models[0];
+      const def = l.models.find((m) => m.id === l.defaultModel) ?? l.models[0];
       if (def) {
         setPickModel(def.id);
         setPickEffort(def.defaultEffort);
@@ -291,7 +346,18 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
         requestRef.current = { id: started.requestId, req };
         const queued = early.current.filter((e) => e.requestId === started.requestId);
         early.current = [];
-        if (started.conversationId !== conversationId) setConversationId(started.conversationId);
+        if (started.conversationId !== conversationId) {
+          // A notice dismissed before the first ask stays dismissed in the conversation it creates.
+          if (conversationId === null)
+            setDismissed((d) => {
+              const k = `new#${settingsGen}`;
+              if (!d.has(k)) return d;
+              const n = new Set([...d, `${started.conversationId}#${settingsGen}`]);
+              n.delete(k);
+              return n;
+            });
+          setConversationId(started.conversationId);
+        }
         // Show the thread down to the question being answered; the old answer (if any) stays as a sibling.
         await refresh(started.conversationId, started.userMessage?.id ?? (req.regenerate ? (req.parentId ?? undefined) : undefined));
         setDraft({ requestId: started.requestId, text: "" });
@@ -303,7 +369,7 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
         setFailure({ code, message, request: req });
       }
     },
-    [conversationId, refresh]
+    [conversationId, refresh, settingsGen]
   );
 
   const run = useCallback(
@@ -387,18 +453,25 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
     if (!s || s.isCollapsed || !log || draft) return setAnswerBar(null);
     const range = s.getRangeAt(0);
     const el = (range.commonAncestorContainer instanceof Element ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement)?.closest<HTMLElement>(".msg.assistant[data-id]");
-    const quote = s.toString().trim();
     const src = el && messages.find((m) => m.id === el.dataset.id);
-    if (!src || quote.length < 2) return setAnswerBar(null);
-    // Offsets are in the stored markdown: take the occurrence of the quote (rendered text may differ from source).
-    const start = src.content.indexOf(quote);
-    if (start < 0) return setAnswerBar(null);
+    const md = el?.querySelector<HTMLElement>(".markdown");
+    if (!src || !md) return setAnswerBar(null);
+    // Clip to the answer's markdown (a triple-click may end just past it).
+    const sel = range.cloneRange();
+    if (!md.contains(sel.startContainer)) sel.setStart(md, 0);
+    if (!md.contains(sel.endContainer)) sel.setEnd(md, md.childNodes.length);
+    const text = sel.toString().trim();
+    if (text.length < 2) return setAnswerBar(null);
+    const { before, selected } = visibleAround(md, sel);
+    // The source span is only the anchor; what is shown and sent is the on-screen text.
+    const span = sourceSpanOf(src.content, before, selected);
+    if (!span) return setAnswerBar(null);
     const r = range.getBoundingClientRect();
     const box = log.getBoundingClientRect();
     setAnswerBar({
       top: Math.max(r.top - box.top + log.scrollTop - 8 - 32, log.scrollTop),
       left: Math.min(Math.max(r.left - box.left + r.width / 2, 60), box.width - 60),
-      branch: { sourceId: src.id, start, end: start + quote.length, quote }
+      draft: { branch: { sourceId: src.id, start: span.start, end: span.end, quote: span.quote }, text }
     });
   };
 
@@ -438,13 +511,13 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
     if (branchDraft || fork) {
       const req: TaskRequest = {
         kind: "ask",
-        selection: branchDraft?.quote ?? "",
+        selection: branchDraft?.text ?? "",
         question: q,
         docId: docId ?? undefined,
         conversationId: conversationId ?? undefined,
         model: pickModel ?? undefined,
         effort: pickEffort ?? undefined,
-        ...(branchDraft ? { branch: branchDraft } : "siblingOf" in fork! ? { siblingOf: fork!.siblingOf } : { parentId: fork!.parentId })
+        ...(branchDraft ? { branch: branchDraft.branch } : "siblingOf" in fork! ? { siblingOf: fork!.siblingOf } : { parentId: fork!.parentId })
       };
       setQuestion("");
       setBranchDraft(null);
@@ -502,9 +575,12 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
     setFork(null);
     setBranchDraft(null);
     setFailure(null);
+    setModelNotice(null);
   };
 
   const crumbs = leafId ? breadcrumb(tree.messages, tree.origins, leafId) : [];
+  /** A branch label shows the text the user selected (sent as the question's selection), not the source slice. */
+  const shownQuote = (childId: string, quote: string) => tree.messages.find((m) => m.id === childId)?.meta?.request.selection || quote;
   /** Main thread as shown by default: newest first question, newest answers, no span branches. */
   const mainThreadLeaf = () => defaultLeaf(tree.messages, tree.origins)?.id ?? null;
   const lastAssistantId = [...messages].reverse().find((m) => m.role === "assistant")?.id;
@@ -543,7 +619,7 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
                     className={i === crumbs.length - 1 ? "link active" : "link"}
                     onClick={() => (c.branchId ? switchTo(c.branchId) : setLeafId(mainThreadLeaf()))}
                   >
-                    {c.branchId ? `「${(c.quote ?? "").slice(0, 16)}」` : "主线"}
+                    {c.branchId ? `「${shownQuote(c.branchId, c.quote ?? "").slice(0, 16)}」` : "主线"}
                   </button>
                 </span>
               ))}
@@ -574,7 +650,7 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
               <div className="selection-toolbar answer-bar" role="toolbar" aria-label="回答选区操作" style={{ top: answerBar.top, left: answerBar.left }} onMouseDown={(e) => e.preventDefault()}>
                 <button
                   onClick={() => {
-                    setBranchDraft(answerBar.branch);
+                    setBranchDraft(answerBar.draft);
                     setFork(null);
                     setAnswerBar(null);
                     window.getSelection()?.removeAllRanges();
@@ -644,7 +720,7 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
                                   switchTo(g.origins.at(-1)!.childId);
                                 }}
                               >
-                                「{g.quote.slice(0, 40)}」
+                                「{shownQuote(g.origins.at(-1)!.childId, g.quote).slice(0, 40)}」
                               </button>
                             </li>
                           ))}
@@ -716,17 +792,17 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
               }}
               onOpenSettings={onOpenSettings}
             />
-            {modelNotice && (
-              <div className="model-notice banner" data-testid="task-model-notice" role="status">
-                <span>{modelNotice}</span>
-                <button type="button" className="link" aria-label="关闭提示" onClick={() => setModelNotice(null)}>
-                  ×
+            {shownNotice && (
+              <div className="model-notice" data-testid="task-model-notice" role="status">
+                <span>{shownNotice}</span>
+                <button type="button" className="link" onClick={() => setDismissed((d) => new Set([...d, noticeKey]))}>
+                  知道了
                 </button>
               </div>
             )}
             {branchDraft && (
               <div className="attached" data-testid="branch-draft">
-                <span title={branchDraft.quote}>追问分支：「{branchDraft.quote.slice(0, 40)}」</span>
+                <span title={branchDraft.text}>追问分支：「{branchDraft.text.slice(0, 40)}」</span>
                 <button className="link" onClick={() => setBranchDraft(null)} aria-label="取消分支">
                   ×
                 </button>
@@ -782,7 +858,7 @@ export function AIPanel({ trigger, docId, docTitle, hasWorkspace, vision, captur
               {draft ? (
                 <button onClick={stop}>停止</button>
               ) : (
-                <button className="primary" onClick={send} disabled={!question.trim() || !hasWorkspace}>
+                <button className="primary" onClick={send} disabled={!question.trim() || !hasWorkspace || !configured} data-unconfigured={configured ? undefined : ""}>
                   发送
                 </button>
               )}

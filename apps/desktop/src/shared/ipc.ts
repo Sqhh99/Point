@@ -212,7 +212,10 @@ export interface PointAPI {
       /** false → no key for the active provider; `models` is empty. */
       configured: boolean;
       notice?: string;
-      models: (import("@point/core").ModelSpec & { configured: boolean })[];
+      /** ModelBar's default pick (the Settings model when listed). */
+      defaultModel?: string;
+      /** `custom`: the user's own model id; its vision is the user's declaration. */
+      models: (import("@point/core").ModelSpec & { configured: boolean; custom?: boolean })[];
     }>;
   };
   chat: {

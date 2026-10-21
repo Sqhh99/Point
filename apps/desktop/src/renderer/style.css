@@ -5,11 +5,17 @@
   --bg-elevated: #ffffff;
   --panel: #f3f1ec;
   --surface-2: #ecebe6;
+  --bg-muted: var(--surface-2);
   --border: rgb(0 0 0 / 0.1);
   --line: rgb(0 0 0 / 0.08);
   --hover: rgb(0 0 0 / 0.05);
   --text: #1d1d1f;
   --muted: #6e6e73;
+  --text-disabled: #A8A49A;
+  /* Derived from the current --accent until the v0.3.0 palette lands. */
+  --accent-hover: color-mix(in srgb, var(--accent) 85%, black);
+  --focus-ring: color-mix(in srgb, var(--accent) 40%, transparent);
+  --text-secondary: #6B6860;
   --accent: #2f6feb;
   --on-accent: #ffffff;
   --danger: #cf222e;
@@ -30,11 +36,16 @@
     --bg-elevated: #2a2a2d;
     --panel: #222225;
     --surface-2: #303034;
+    --bg-muted: var(--surface-2);
     --border: rgb(255 255 255 / 0.12);
     --line: rgb(255 255 255 / 0.08);
     --hover: rgb(255 255 255 / 0.06);
     --text: #e8e6e3;
     --muted: #9a9a9f;
+    --text-disabled: rgb(255 255 255 / 0.35);
+    --accent-hover: color-mix(in srgb, var(--accent) 85%, white);
+    --focus-ring: color-mix(in srgb, var(--accent) 40%, transparent);
+    --text-secondary: color-mix(in srgb, var(--muted) 75%, var(--text));
     --accent: #5b8def;
     --danger: #ff6b6b;
     --danger-soft: rgb(255 107 107 / 0.1);
@@ -170,6 +181,8 @@ button.link.active { color: var(--accent); }
 .composer { border-top: 1px solid var(--line); padding: 8px 12px 12px; }
 .composer textarea { width: 100%; resize: none; font: inherit; font-size: 13px; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-elevated); color: inherit; }
 .composer-actions { display: flex; justify-content: flex-end; margin-top: 6px; }
+.composer-actions button.primary[data-unconfigured]:disabled,
+.composer-actions button.primary[data-unconfigured]:disabled:hover { opacity: 1; background: var(--surface-2); border-color: var(--border); color: var(--text-disabled); }
 .attached { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
 .attached span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -259,6 +272,9 @@ button.link.active { color: var(--accent); }
 .statusbar-sep { padding: 0 4px; }
 .statusbar-right { margin-left: auto; display: flex; gap: 12px; min-width: 0; }
 .check { display: flex; align-items: center; gap: 8px; margin: -4px 0 16px; font-size: 13px; color: var(--text); }
+.check-field { display: flex; flex-direction: column; gap: 4px; margin: -4px 0 16px; }
+.check-field .check { margin: 0; }
+.field-readonly { margin: -4px 0 16px; font-size: 13px; color: var(--text-secondary); }
 .capture-missing { display: grid; place-items: center; box-sizing: border-box; background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .attached-thumb .capture-missing { height: 48px; width: 86px; }
 .quote-image.missing { cursor: default; width: fit-content; max-width: 240px; }
@@ -371,7 +387,14 @@ button.link.active { color: var(--accent); }
 .effort-seg button:hover { background: var(--hover); color: var(--text); }
 .effort-seg button.active, .effort-seg button[aria-pressed="true"] { background: var(--bg-elevated); color: var(--accent); font-weight: 600; box-shadow: 0 0 0 1px var(--border); }
 .effort-seg button:disabled { opacity: 0.45; cursor: default; }
-.model-notice { font-size: 12px; color: var(--muted); }
-.model-empty { font-size: 13px; color: var(--muted); }
+/* Light inline notice under ModelBar (not a modal/toast). */
+.model-notice { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--text-secondary); background: var(--bg-muted); border-radius: 6px; padding: 6px 10px; }
+.model-notice button.link { padding: 0; font-size: 12px; color: var(--accent); background: none; }
+.model-notice button.link:hover { color: var(--accent-hover); text-decoration: underline; }
+.model-notice button.link:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.model-empty { font-size: 13px; color: var(--text-secondary); }
+.model-bar button.settings-link { padding: 0; font-size: 13px; color: var(--accent); text-decoration: none; }
+.model-bar button.settings-link:hover { color: var(--accent-hover); text-decoration: underline; }
+.model-bar button.settings-link:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .model-pick select option:checked { background: var(--surface-2); color: var(--text); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }

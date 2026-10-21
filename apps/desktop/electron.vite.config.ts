@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 // Bundle @point/core from source so the app never depends on its dist/ at runtime.
 const alias = {
   "@point/core/tree": resolve(import.meta.dirname, "../../packages/core/src/conversations/tree.ts"),
+  "@point/core/rendered-map": resolve(import.meta.dirname, "../../packages/core/src/conversations/rendered-map.ts"),
   "@point/core/relocate": resolve(import.meta.dirname, "../../packages/core/src/docs/relocate.ts"),
   "@point/core": resolve(import.meta.dirname, "../../packages/core/src/index.ts")
 };

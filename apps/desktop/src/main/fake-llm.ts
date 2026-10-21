@@ -16,6 +16,12 @@ export const FAKE_XSS_ANSWER =
   "```mermaid\nflowchart TD\n  A[\"<img src=z onerror=window.__pwned='mermaid'>\"] --> B[终点]\n" +
   "  click A call window.alert(1)\n  click B \"javascript:window.__pwned='click'\"\n```\n";
 
+/** Returned when the prompt contains FORMAT-PROBE: list items mixing bold, inline code and a link. */
+export const FAKE_FORMAT_ANSWER =
+  "格式探针：\n\n" +
+  "- **粗体要点**：带 `inline_code` 与 [链接文字](https://example.com/docs/page) 的一项\n" +
+  "- 第二项普通文字\n";
+
 export const fakeEnabled = () => process.env.POINT_FAKE_LLM === "1";
 /** The fake model accepts images unless POINT_FAKE_VISION=0 (lets e2e cover the "no vision" path). */
 export const fakeVision = () => process.env.POINT_FAKE_VISION !== "0";
@@ -33,7 +39,7 @@ export class FakeProvider implements LLMProvider {
     const marksAnswer = parts
       ? `**模拟回答**：已收到 ${parts.filter((p) => p.type === "text" && p.text.startsWith("标记 ")).length} 个标记（图片 ${parts.filter((p) => p.type === "image").length} 张）。`
       : null;
-    const answer = marksAnswer ?? (prompt.includes("XSS-PROBE") ? FAKE_XSS_ANSWER : last?.images?.length ? FAKE_IMAGE_ANSWER : FAKE_ANSWER);
+    const answer = marksAnswer ?? (prompt.includes("XSS-PROBE") ? FAKE_XSS_ANSWER : prompt.includes("FORMAT-PROBE") ? FAKE_FORMAT_ANSWER : last?.images?.length ? FAKE_IMAGE_ANSWER : FAKE_ANSWER);
     const chunks = answer.match(/[\s\S]{1,12}/g) ?? [];
     for (const text of chunks) {
       if (opts.signal?.aborted) {

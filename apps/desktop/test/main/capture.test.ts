@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeSender, invoke, state, until } from "./electron-mock.js";
 
 vi.mock("electron", async () => (await import("./electron-mock.js")).electronModule());
@@ -12,6 +12,7 @@ const { IPC } = await import("../../src/shared/ipc.js");
 const ws = await import("../../src/main/workspace.js");
 const capture = await import("../../src/main/capture.js");
 const vision = await import("../../src/main/vision.js");
+const settings = await import("../../src/main/settings.js");
 const { registerIpc } = await import("../../src/main/ipc.js");
 const { registerTasksIpc } = await import("../../src/main/tasks-ipc.js");
 
@@ -173,6 +174,85 @@ describe("tasks with an image (POINT_FAKE_LLM=1)", () => {
     expect(((await invoke(IPC.convList, new FakeSender())) as unknown[]).length).toBe(before);
   });
 
+  it("vision follows the model picked for this run, not the Settings default (flash → v4-pro)", async () => {
+    // Settings default deepseek-flash has vision; ModelBar picked deepseek-v4-pro (ModelSpec.vision=false).
+    const before = ((await invoke(IPC.convList, new FakeSender())) as unknown[]).length;
+    const msgs = (ws.need().db.prepare("SELECT count(*) AS n FROM messages").get() as { n: number }).n;
+    await expect(invoke(IPC.tasksRun, new FakeSender(), { kind: "ask", selection: "", question: "q", image: sha, model: "deepseek-v4-pro" })).rejects.toThrow(/当前模型不支持图片/);
+    await expect(invoke(IPC.tasksRun, new FakeSender(), { kind: "explain", selection: "", image: sha, model: "deepseek-v4-pro" })).rejects.toThrow(/当前模型不支持图片/);
+    expect(((await invoke(IPC.convList, new FakeSender())) as unknown[]).length).toBe(before);
+    expect((ws.need().db.prepare("SELECT count(*) AS n FROM messages").get() as { n: number }).n).toBe(msgs);
+    const listed = (await invoke(IPC.modelsList, new FakeSender())) as { models: { id: string; vision: boolean }[] };
+    expect(listed.models.find((m) => m.id === "deepseek-flash")?.vision).toBe(true);
+    expect(listed.models.find((m) => m.id === "deepseek-v4-pro")?.vision).toBe(false);
+    // And the other way round: a vision model picked for the run is allowed.
+    await expect(invoke(IPC.tasksRun, new FakeSender(), { kind: "ask", selection: "", question: "q", image: sha, model: "deepseek-flash" })).resolves.toBeTruthy();
+  });
+
+  it("IPC bypassing the UI: v4-pro + image on a fresh workspace is refused with 0 conversations and 0 messages", async () => {
+    const fresh = tmp("point-cap-fresh-");
+    ws.openWorkspace(fresh);
+    try {
+      const img = capture.writeCapture(fresh, PNG);
+      await expect(invoke(IPC.tasksRun, new FakeSender(), { kind: "ask", selection: "", question: "q", image: img, model: "deepseek-v4-pro" })).rejects.toThrow(/当前模型不支持图片/);
+      expect((ws.need().db.prepare("SELECT count(*) AS n FROM conversations").get() as { n: number }).n).toBe(0);
+      expect((ws.need().db.prepare("SELECT count(*) AS n FROM messages").get() as { n: number }).n).toBe(0);
+    } finally {
+      ws.openWorkspace(root);
+    }
+  });
+
+  it("a conversation remembered on a text-only model refuses an image even if Settings has vision", async () => {
+    const s = new FakeSender();
+    const r = (await invoke(IPC.tasksRun, s, { kind: "ask", selection: "", question: "q", model: "deepseek-v4-pro" })) as Started;
+    await until(() => s.events.some((e) => (e.payload as { type: string }).type === "done"));
+    await expect(invoke(IPC.tasksRun, new FakeSender(), { kind: "ask", selection: "", question: "q2", image: sha, conversationId: r.conversationId })).rejects.toThrow(/当前模型不支持图片/);
+  });
+
+  describe("capability source: preset table vs. user declaration", () => {
+    const settingsFile = () => join(state.userData, "settings.json");
+    const writeSettings = (v: unknown) => writeFileSync(settingsFile(), JSON.stringify(v));
+    const counts = () => ({
+      convs: (ws.need().db.prepare("SELECT count(*) AS n FROM conversations").get() as { n: number }).n,
+      msgs: (ws.need().db.prepare("SELECT count(*) AS n FROM messages").get() as { n: number }).n
+    });
+    afterEach(() => writeSettings({ activeProvider: "deepseek", providers: {} }));
+
+    it("preset models ignore the user flag: flash+false still sends, v4-pro+true still refuses", async () => {
+      writeSettings({ activeProvider: "deepseek", providers: { deepseek: { baseURL: "https://api.deepseek.com/v1", model: "deepseek-flash", vision: false } } });
+      await expect(invoke(IPC.tasksRun, new FakeSender(), { kind: "ask", selection: "", question: "q", image: sha, model: "deepseek-flash" })).resolves.toBeTruthy();
+      writeSettings({ activeProvider: "deepseek", providers: { deepseek: { baseURL: "https://api.deepseek.com/v1", model: "deepseek-v4-pro", vision: true } } });
+      const before = counts();
+      const err = await invoke(IPC.tasksRun, new FakeSender(), { kind: "ask", selection: "", question: "q", image: sha, model: "deepseek-v4-pro" }).catch((e: Error) => e);
+      expect((err as Error).message).toMatch(/当前模型不支持图片.*换一个支持看图的模型/);
+      expect((err as Error).message).not.toMatch(/勾选/); // presets have no checkbox
+      expect(counts()).toEqual(before);
+    });
+
+    it("custom endpoint + custom model with 声明支持看图 ticked: the image ask goes through on that model", async () => {
+      writeSettings({ activeProvider: "openai", providers: { openai: { baseURL: "https://llm.example.test/v1", model: "my-vl-1", vision: true } } });
+      const listed = (await invoke(IPC.modelsList, new FakeSender())) as { models: { id: string; vision: boolean }[] };
+      expect(listed.models[0]).toMatchObject({ id: "my-vl-1", vision: true });
+      const s = new FakeSender();
+      const r = (await invoke(IPC.tasksRun, s, { kind: "ask", selection: "", question: "图里是什么？", image: sha, model: "my-vl-1" })) as Started;
+      expect(r.userMessage?.meta?.request.image).toBe(sha);
+      await until(() => s.events.some((e) => (e.payload as { type: string }).type === "done"));
+      expect(s.events.some((e) => (e.payload as { type: string }).type === "model-notice")).toBe(false);
+      const row = ws.need().db.prepare("SELECT model FROM conversations WHERE id = ?").get(r.conversationId) as { model: string };
+      expect(row.model).toBe("my-vl-1");
+    });
+
+    it("custom model without the declaration (or unticked) refuses an image, zero writes", async () => {
+      for (const vision of [undefined, false]) {
+        writeSettings({ activeProvider: "openai", providers: { openai: { baseURL: "https://llm.example.test/v1", model: "my-text-1", ...(vision === undefined ? {} : { vision }) } } });
+        const before = counts();
+        await expect(invoke(IPC.tasksRun, new FakeSender(), { kind: "ask", selection: "", question: "q", image: sha, model: "my-text-1" })).rejects.toThrow(/当前模型不支持图片.*声明此模型支持看图/);
+        expect(counts()).toEqual(before);
+      }
+    });
+
+  });
+
   it("text-only model still answers questions without an image", async () => {
     process.env.POINT_FAKE_VISION = "0";
     await expect(invoke(IPC.tasksRun, new FakeSender(), { kind: "ask", selection: "", question: "q" })).resolves.toBeTruthy();
@@ -206,6 +286,16 @@ describe("settings: capabilities.vision", () => {
     expect(v.active.vision).toBe(true); // preset: deepseek-flash has vision
     v = (await invoke(IPC.settingsUpdate, new FakeSender(), { id: "glm", model: "glm-4v-flash", makeActive: true })) as View;
     expect(v.active).toMatchObject({ model: "glm-4v-flash", vision: true });
+  });
+
+  it("settings:update keeps a custom model id and its declaration; a preset id keeps no flag effect", async () => {
+    let v = (await invoke(IPC.settingsUpdate, new FakeSender(), { id: "openai", baseURL: "https://llm.example.test/v1", model: "my-vl-1", vision: true, makeActive: true })) as { active: { model: string; vision: boolean } };
+    expect(v.active).toMatchObject({ model: "my-vl-1", vision: true });
+    v = (await invoke(IPC.settingsUpdate, new FakeSender(), { id: "glm", model: "glm-4-plus", vision: true, makeActive: true })) as typeof v;
+    expect(v.active).toMatchObject({ model: "glm-4-plus", vision: false });
+    expect(settings.view().active.vision).toBe(false);
+    writeFileSync(join(state.userData, "settings.json"), JSON.stringify({ activeProvider: "deepseek", providers: { deepseek: { baseURL: "https://api.deepseek.com/v1", model: "deepseek-v4-pro", vision: true } } }));
+    expect(settings.view().active).toMatchObject({ model: "deepseek-v4-pro", vision: false });
   });
 
   it("chat:start drops any renderer-supplied images", async () => {

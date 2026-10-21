@@ -1,6 +1,6 @@
 import { ipcMain, type WebContents } from "electron";
 import { randomUUID } from "node:crypto";
-import { TASK_LABELS, buildTaskMessages, describeTask, effortOf, modelSpec, parseTaskOutput, providerConfig, type BranchOrigin, type ChatMessage, type TaskKind } from "@point/core";
+import { TASK_LABELS, buildTaskMessages, describeTask, effortOf, modelSpec, parseTaskOutput, providerConfig, type BranchOrigin, type ModelSpec, type ChatMessage, type TaskKind } from "@point/core";
 import { exportAllNotes, exportConversation, exportNote } from "./export.js";
 import { IPC, type TaskEvent, type TaskRequest, type TaskStarted } from "../shared/ipc.js";
 import {
@@ -20,8 +20,8 @@ import {
   setConversationModel,
   threadOf
 } from "./conversations.js";
-import { activeModelId, isConfigured, view as settingsView } from "./settings.js";
-import { fakeEnabled } from "./fake-llm.js";
+import { activeModelId, askSpec, isConfigured, modelFallbackNotice, view as settingsView } from "./settings.js";
+import { fakeEnabled, fakeVision } from "./fake-llm.js";
 import { errInfo, providerFor } from "./ipc.js";
 import { docTitle, need } from "./workspace.js";
 import { assertCaptureSha, captureImage } from "./capture.js";
@@ -127,6 +127,10 @@ function resolveAsk(req: TaskRequest, conversationId: string | undefined): {
   effortWrites?: ReturnType<typeof effortOf> extends infer E ? E extends { writes: infer W } ? W : never : never;
   omitTemperature: boolean;
   notice?: string;
+  /** ModelSpec.vision of the resolved model: the only source for the image gate (UI reads the same field). */
+  vision: boolean;
+  /** The resolved model is the user's custom model (capability declared in Settings). */
+  custom: boolean;
 } {
   // Effort is validated against ModelSpec before any write and without decrypting the API key.
   // Fake LLM still resolves model/effort (and notice) so first-ask memory and UI match production.
@@ -134,28 +138,34 @@ function resolveAsk(req: TaskRequest, conversationId: string | undefined): {
   const remembered = conversationId ? getConversationModel(conversationId) : { model: null, effort: null };
   const wantModel = req.model ?? remembered.model ?? activeModelId();
   const p = providerConfig(active.activeProvider)!;
-  let spec = modelSpec(active.activeProvider, wantModel);
+  // Capability source: preset id → ModelSpec table; the saved custom id on a custom endpoint → the
+  // user's declaration. Anything else (unknown id on a preset endpoint, a removed remembered model)
+  // falls back to defaultModel with a notice; the unknown id is never sent to the vendor.
+  let spec: ModelSpec | undefined = askSpec(wantModel);
   let notice: string | undefined;
   if (!spec) {
     spec = modelSpec(active.activeProvider, p.defaultModel)!;
-    notice = `原模型已不可用，已改用 ${spec.label}`;
+    notice = modelFallbackNotice(active.activeProvider);
   }
+  // POINT_FAKE_VISION=0 is the e2e seam for a text-only fake; it can only narrow the spec, never widen it.
+  const vision = spec.vision && (!fakeEnabled() || fakeVision());
+  const custom = "custom" in spec && spec.custom === true;
   // Explicit effort that the model does not declare → hard reject (no silent ignore).
   if (req.effort !== undefined && req.effort !== null && req.effort !== "") {
     const level = effortOf(spec, req.effort);
     if (!level || level.id !== req.effort) throw new Error(`该模型不支持思考等级「${req.effort}」`);
-    if (fakeEnabled()) return { model: spec.id, effort: level.id, omitTemperature: false, notice };
-    return { model: spec.id, effort: level.id, effortWrites: level.writes, omitTemperature: level.thinking, notice };
+    if (fakeEnabled()) return { model: spec.id, effort: level.id, omitTemperature: false, notice, vision, custom };
+    return { model: spec.id, effort: level.id, effortWrites: level.writes, omitTemperature: level.thinking, notice, vision, custom };
   }
   const wantEffort = remembered.effort ?? spec.defaultEffort;
   if (wantEffort) {
     const level = effortOf(spec, wantEffort);
     if (level) {
-      if (fakeEnabled()) return { model: spec.id, effort: level.id, omitTemperature: false, notice };
-      return { model: spec.id, effort: level.id, effortWrites: level.writes, omitTemperature: level.thinking, notice };
+      if (fakeEnabled()) return { model: spec.id, effort: level.id, omitTemperature: false, notice, vision, custom };
+      return { model: spec.id, effort: level.id, effortWrites: level.writes, omitTemperature: level.thinking, notice, vision, custom };
     }
   }
-  return { model: spec.id, effort: null, omitTemperature: false, notice };
+  return { model: spec.id, effort: null, omitTemperature: false, notice, vision, custom };
 }
 
 async function stream(
@@ -201,19 +211,21 @@ export function registerTasksIpc(): void {
     const ws = need();
     const req = validate(raw);
     // Gate before anything is stored: an image on a text-only model is a clear error, not a silent drop.
-    // Without an image the provider is resolved lazily (a key rejected by the API streams back as an "auth" event).
+    // Without an image the provider client is created lazily (a key rejected by the API streams back as an "auth" event).
     if (req.marks && (req.kind !== "ask" || req.image)) throw new Error("一起问只能和问题一起发送");
     const batch = req.marks ? loadBatch(req.marks, req.docId) : undefined;
     const needsVision = !!req.image || !!batch?.hasImage;
-    const llm = needsVision ? providerFor() : undefined;
-    if (llm) assertVisionAllowed(llm.vision, true);
-    const image = req.image ? captureImage(ws.root, req.image) : undefined;
-    const title = req.docId ? docTitle(req.docId) : undefined;
     let conversationId = req.conversationId && hasConversation(req.conversationId) ? req.conversationId : undefined;
     const regenerate = !!(req.regenerate && conversationId);
     if (req.branch && (req.kind !== "ask" || regenerate)) throw new Error("追问分支只能和问题一起发送");
     // Resolve model/effort before any write: unsupported effort throws with nothing stored.
     const ask = resolveAsk(req, conversationId);
+    // Vision is judged on the model this run will actually use (ModelBar pick / conversation memory),
+    // not the Settings default.
+    assertVisionAllowed(ask.vision, needsVision, ask.custom);
+    const llm = needsVision ? providerFor() : undefined;
+    const image = req.image ? captureImage(ws.root, req.image) : undefined;
+    const title = req.docId ? docTitle(req.docId) : undefined;
     const place = placement(conversationId, { ...req, regenerate });
     const history = place.history;
     // Build first so invalid input (empty selection, missing question) fails before anything is stored.

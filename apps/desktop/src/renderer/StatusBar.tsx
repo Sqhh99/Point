@@ -4,13 +4,13 @@ interface Props {
   workspace: string | null;
   docTitle: string | null;
   model: ActiveModel | null;
-  /** false → active provider has no key: show 未配置, never a model name. */
-  configured: boolean;
+  /** false → active provider has no key: show 未配置, never a model name. null = not loaded yet. */
+  configured: boolean | null;
 }
 
 const baseName = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
 
-/** 24px status bar: where you are on the left, which model answers (and whether it reads images) on the right. */
+/** 24px status bar: where you are on the left; on the right the model picked in ModelBar (the one that answers) and whether it reads images. */
 export function StatusBar({ workspace, docTitle, model, configured }: Props) {
   return (
     <footer className="statusbar" data-testid="statusbar">
@@ -19,7 +19,7 @@ export function StatusBar({ workspace, docTitle, model, configured }: Props) {
         {docTitle && <span className="statusbar-sep">/</span>}
         {docTitle}
       </span>
-      {model && !configured && (
+      {configured === false && (
         <span className="statusbar-right">
           <span className="statusbar-item" data-testid="status-unconfigured">
             未配置

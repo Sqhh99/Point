@@ -21,8 +21,10 @@ export function App() {
   const [trigger, setTrigger] = useState<TaskTrigger | null>(null);
   const [docTitle, setDocTitle] = useState<string | null>(null);
   const [chatWidth, setChatWidth] = useState(() => clampChatWidth(localStorage.getItem("point.chatWidth")));
-  const [model, setModel] = useState<ActiveModel | null>(null);
-  const [configured, setConfigured] = useState(false);
+  const [configured, setConfigured] = useState<boolean | null>(null);
+  // The model picked in ModelBar (name + ModelSpec.vision / custom declaration): status bar and the
+  // region tool read the same value the ask gate uses.
+  const [picked, setPicked] = useState<ActiveModel | null>(null);
   const [capture, setCapture] = useState<(CaptureResult & { seq: number }) | null>(null);
   const [marks, setMarks] = useState<Mark[]>([]);
   const [checked, setChecked] = useState<string[]>([]);
@@ -98,10 +100,9 @@ export function App() {
   const refreshModel = useCallback(() => {
     api.settings.get().then(
       (s) => {
-        setModel(s.active);
         setConfigured(s.configured);
       },
-      () => setModel(null)
+      () => setConfigured(null)
     );
   }, []);
   // Re-read after leaving settings, and whenever main broadcasts settings:changed (save / setKey).
@@ -186,7 +187,7 @@ export function App() {
             onOpenRecent={openRecent}
             onDocLoaded={(d) => setDocTitle(d?.title ?? null)}
             onAction={(kind, sel) => setTrigger((t) => ({ seq: (t?.seq ?? 0) + 1, kind, sel }))}
-            vision={!!model?.vision}
+            vision={!!picked?.vision}
             onCapture={(r) => setCapture((c) => ({ ...r, seq: (c?.seq ?? 0) + 1 }))}
             onCaptureError={setError}
             onMark={addMark}
@@ -202,13 +203,13 @@ export function App() {
         docId={activeId}
         docTitle={docTitle}
         hasWorkspace={!!workspace.path}
-        vision={!!model?.vision}
+        onPick={setPicked}
         capture={capture}
         batch={batch}
         onOpenSettings={() => setView("settings")}
       />
     </div>
-    <StatusBar workspace={workspace.path} docTitle={view === "settings" ? null : docTitle} model={model} configured={configured} />
+    <StatusBar workspace={workspace.path} docTitle={view === "settings" ? null : docTitle} model={picked} configured={configured} />
     </div>
   );
 }

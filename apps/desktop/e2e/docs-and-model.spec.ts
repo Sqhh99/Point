@@ -17,13 +17,35 @@ const launchEnv = (extra: Record<string, string>, drop: string[] = []) => ({
   ...(Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined && e[0] !== "ELECTRON_RENDERER_URL" && !drop.includes(e[0]))) as Record<string, string>),
   ...extra
 });
+// Local Linux only: POINT_E2E_KEYRING=1 routes safeStorage to a gnome-keyring the caller started
+// (see keystore-preload.cjs). CI (win/mac) never sets it.
+const keyring = process.platform === "linux" && process.env.POINT_E2E_KEYRING === "1" ? ["-r", join(import.meta.dirname, "keystore-preload.cjs")] : [];
 const launch = (env: Record<string, string>) =>
-  electron.launch({ args: [...(process.platform === "linux" ? ["--no-sandbox"] : []), join(import.meta.dirname, "..", "out", "main", "index.js")], env });
+  electron.launch({ args: [...keyring, ...(process.platform === "linux" ? ["--no-sandbox"] : []), join(import.meta.dirname, "..", "out", "main", "index.js")], env });
+/**
+ * Key-save cases need OS encryption. On CI (win DPAPI, mac keychain) it must be there, so a missing
+ * store turns the test red; only a local run without a keyring may skip.
+ */
+async function requireEncryption(win: Win): Promise<void> {
+  const encryption = await win.evaluate(async () => (await window.point.settings.get()).encryptionAvailable);
+  if (process.env.CI) expect(encryption, "safeStorage must be available on CI").toBe(true);
+  else test.skip(!encryption, "local run without an OS keyring (set POINT_E2E_KEYRING=1 under gnome-keyring)");
+}
 const stub = (app: ElectronApplication, paths: string[]) =>
   app.evaluate(({ dialog }, filePaths) => {
     dialog.showOpenDialog = (async () => ({ canceled: false, filePaths })) as typeof dialog.showOpenDialog;
   }, paths);
 type Win = Awaited<ReturnType<ElectronApplication["firstWindow"]>>;
+/** Last branch: its source anchor (offsets + slice) and the selection text the branch question carries. */
+const lastBranch = (win: Win) =>
+  win.evaluate(async () => {
+    const [c] = await window.point.conversations.list();
+    const tree = await window.point.conversations.tree(c!.id);
+    const o = tree.origins.at(-1)!;
+    const src = tree.messages.find((m) => m.id === o.sourceId)!;
+    const child = tree.messages.find((m) => m.id === o.childId)!;
+    return { quote: o.quote, slice: src.content.slice(o.start, o.end), selection: child.meta?.request.selection ?? null };
+  });
 async function openWorkspace(app: ElectronApplication, win: Win): Promise<void> {
   await stub(app, [mkdtempSync(join(tmpdir(), "point-ws-"))]);
   await win.getByRole("button", { name: "选择工作区…" }).click();
@@ -86,7 +108,7 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
   test.describe.configure({ mode: "serial" });
   const userData = mkdtempSync(join(tmpdir(), "point-e2e-model-"));
   let app: ElectronApplication;
-  // POINT_FAKE_LLM would pin the status bar to "fake", so this app runs without it. Nothing here
+  // Runs without POINT_FAKE_LLM so the real settings path (keys, configured) is used. Nothing here
   // calls a model: only settings are saved and displayed.
   const start = async () => {
     app = await launch(launchEnv({ POINT_USER_DATA: userData }, ["POINT_FAKE_LLM", "POINT_FAKE_VISION"]));
@@ -130,11 +152,20 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
     await expect(win.locator(".statusbar")).not.toContainText(/deepseek/i);
     await win.screenshot({ path: join(results, "unconfigured-modelbar.png") });
 
+    // Send is disabled up front; main still refuses before any write (called over IPC directly).
     await win.getByPlaceholder(/问点什么/).fill("没有模型时提问");
-    await win.getByRole("button", { name: "发送" }).click();
-    await expect(win.getByText("尚未配置模型：请先在设置里填写 API Key")).toBeVisible();
-    // Refused before any request or write: nothing was stored.
-    expect(await win.evaluate(() => window.point.conversations.list())).toEqual([]);
+    await expect(win.getByRole("button", { name: "发送", exact: true })).toBeDisabled();
+    const refused = await win.evaluate(async () => {
+      const n0 = (await window.point.conversations.list()).length;
+      const e = await window.point.tasks.run({ kind: "ask", selection: "", question: "x" }).then(
+        () => null,
+        (x: Error) => String(x.message)
+      );
+      return { e, n0, n1: (await window.point.conversations.list()).length };
+    });
+    expect(refused.e).toMatch(/尚未配置模型/);
+    expect(refused.n0).toBe(0);
+    expect(refused.n1).toBe(0);
 
     await bar.getByTestId("model-open-settings").click();
     await expect(win.getByRole("heading", { name: "模型设置" })).toBeVisible();
@@ -144,8 +175,7 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
 
   test("saving a key shows that API's models immediately (settings:changed)", async () => {
     const win = await app.firstWindow();
-    const encryption = await win.evaluate(async () => (await window.point.settings.get()).encryptionAvailable);
-    test.skip(!encryption, "safeStorage unavailable: a key cannot be saved on this machine");
+    await requireEncryption(win);
     await save(win, "DeepSeek", "deepseek-flash");
     // Without leaving settings: the status bar follows the broadcast.
     await expect(win.getByTestId("status-model")).toHaveText("deepseek-flash", { timeout: 2000 });
@@ -159,13 +189,16 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
     const list = await win.evaluate(() => window.point.models.list());
     expect(list.configured).toBe(true);
     expect(list.models.map((m) => m.id)).toContain("deepseek-flash");
+    await expect(select).toHaveValue(list.models[0]!.id);
+    // The draft typed while unconfigured is still there; send is now enabled.
+    await expect(win.getByPlaceholder(/问点什么/)).toHaveValue("没有模型时提问");
+    await expect(win.getByRole("button", { name: "发送", exact: true })).toBeEnabled();
     await win.screenshot({ path: join(results, "configured-modelbar.png") });
   });
 
   test("changing provider and model updates the status bar", async () => {
     const win = await app.firstWindow();
-    const encryption = await win.evaluate(async () => (await window.point.settings.get()).encryptionAvailable);
-    test.skip(!encryption, "safeStorage unavailable: keys cannot be saved, so no provider is configured");
+    await requireEncryption(win);
     await win.getByRole("button", { name: "设置" }).click();
     await expect(win.getByRole("heading", { name: "模型设置" })).toBeVisible();
     await expect(win.getByTestId("status-model")).toHaveText("deepseek-flash");
@@ -193,7 +226,7 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
   // Fixed in feat/multi-model: onSaved refreshes the status bar without leaving settings.
   test("status bar follows a save immediately, without leaving settings", async () => {
     const win = await app.firstWindow();
-    test.skip(!(await win.evaluate(async () => (await window.point.settings.get()).encryptionAvailable)), "safeStorage unavailable");
+    await requireEncryption(win);
     await win.getByRole("button", { name: "设置" }).click();
     try {
       await save(win, "OpenAI GPT", "gpt-4.1");
@@ -206,7 +239,7 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
   test("the choice survives a restart, and the form shows it", async () => {
     await app.close();
     const win = await start();
-    test.skip(!(await win.evaluate(async () => (await window.point.settings.get()).encryptionAvailable)), "safeStorage unavailable");
+    await requireEncryption(win);
     await expect(win.getByTestId("status-model")).toHaveText("deepseek-flash");
     await win.getByRole("button", { name: "设置" }).click();
     await expect(win.getByLabel("模型服务")).toHaveValue("deepseek");
@@ -237,6 +270,36 @@ test.describe("model settings (real settings path, no fake LLM)", () => {
       await expect(win.getByText("无法安全保存 API Key")).toBeVisible();
       await expect(win.getByRole("button", { name: "测试连接" })).toBeDisabled();
     }
+  });
+  test("看图 row: preset models show a read-only line from the table; a custom model gets the declaration checkbox", async () => {
+    const win = await app.firstWindow();
+    const heading = win.getByRole("heading", { name: "模型设置" });
+    if (!(await heading.isVisible())) await win.getByRole("button", { name: "设置", exact: true }).click();
+    await win.getByLabel("模型服务").selectOption({ label: "DeepSeek" });
+    const modelInput = win.getByLabel("模型", { exact: true });
+    await modelInput.fill("deepseek-flash");
+    await expect(win.getByTestId("vision-readonly")).toHaveText("看图：支持");
+    await expect(win.getByTestId("vision-toggle")).toHaveCount(0);
+    await modelInput.fill("deepseek-v4-pro");
+    await expect(win.getByTestId("vision-readonly")).toHaveText("看图：不支持");
+    await expect(win.getByTestId("vision-toggle")).toHaveCount(0);
+    await win.screenshot({ path: join(results, "settings-vision-preset.png") });
+    // Preset endpoint: an id outside the table is not a custom model (no declaration; falls back).
+    await modelInput.fill("my-custom-vl");
+    await expect(win.getByTestId("vision-toggle")).toHaveCount(0);
+    await expect(win.getByTestId("model-fallback-hint")).toHaveText("预设服务只能用列表中的模型，保存后将改用 deepseek-flash");
+    await expect(win.getByTestId("vision-readonly")).toHaveText("看图：支持");
+    await win.screenshot({ path: join(results, "settings-vision-preset-unknown.png") });
+    // Custom OpenAI-compatible endpoint: the same id is a custom model with the declaration checkbox.
+    const baseInput = win.getByLabel("Base URL");
+    await baseInput.fill("https://llm.example.test/v1");
+    await expect(win.getByTestId("model-fallback-hint")).toHaveCount(0);
+    await expect(win.getByTestId("vision-readonly")).toHaveCount(0);
+    await expect(win.getByLabel("声明此模型支持看图")).toBeVisible();
+    await expect(win.getByText("由你自行声明，应用会按此判断")).toBeVisible();
+    await win.screenshot({ path: join(results, "settings-vision-custom.png") });
+    await baseInput.fill("https://api.deepseek.com/v1");
+    await modelInput.fill("deepseek-flash");
   });
 });
 
@@ -333,5 +396,242 @@ test.describe("per-conversation model and effort", () => {
       });
     });
     expect(notice).toMatch(/原模型已不可用/);
+  });
+
+  test("region capture follows the ModelBar pick: v4-pro (no vision) disables it even though Settings has flash", async () => {
+    const win = await app.firstWindow();
+    const src = mkdtempSync(join(tmpdir(), "point-src-"));
+    const docx = join(src, "vision.docx");
+    writeFileSync(docx, await makeDocx([{ style: "Heading1", text: "看图测试" }, { text: "正文。" }]));
+    await stub(app, [docx]);
+    await win.getByRole("button", { name: "导入文档" }).click();
+    await expect(win.getByTestId("reader").getByText("看图测试", { exact: true })).toBeVisible();
+    const select = win.getByTestId("model-bar").getByTestId("model-select");
+    const capture = win.getByTestId("capture-button");
+    await select.selectOption("deepseek-flash");
+    await expect(capture).toBeEnabled();
+    await select.selectOption("deepseek-v4-pro");
+    await expect(capture).toBeDisabled();
+    // Status bar follows the ModelBar pick (Settings still has flash).
+    await expect(win.getByTestId("status-model")).toHaveText("deepseek-v4-pro");
+    await expect(win.getByTestId("status-vision")).toHaveText("不支持看图");
+    await expect(win.locator(".statusbar")).not.toContainText(/(?<!不)支持看图/);
+    await expect(capture).toHaveAttribute("title", "当前模型不支持图片");
+    // Same source in the list main gates on.
+    const listed = await win.evaluate(() => window.point.models.list());
+    expect(listed.models.find((m) => m.id === "deepseek-v4-pro")?.vision).toBe(false);
+    await select.selectOption("deepseek-flash");
+    await expect(capture).toBeEnabled();
+    await expect(win.getByTestId("status-model")).toHaveText("deepseek-flash");
+    await expect(win.getByTestId("status-vision")).toHaveText("支持看图");
+
+    // Repro: capture a region while flash is picked, then switch to v4-pro and send → refused, nothing sent.
+    await capture.click();
+    const box = (await win.getByTestId("reader").boundingBox())!;
+    await win.mouse.move(box.x + 20, box.y + 60);
+    await win.mouse.down();
+    await win.mouse.move(box.x + 200, box.y + 140, { steps: 5 });
+    await win.mouse.up();
+    const regionBar = win.locator('[aria-label="选区操作"][data-kind="region"]');
+    await regionBar.getByRole("button", { name: "问 AI" }).click();
+    const thumb = win.getByTestId("attached-image").locator("img");
+    await expect(thumb).toBeVisible();
+    const sha = (await thumb.getAttribute("src"))!.replace("point-capture://", "");
+    await select.selectOption("deepseek-v4-pro");
+    const before = await win.evaluate(async () => {
+      const list = await window.point.conversations.list();
+      let n = 0;
+      for (const c of list) n += (await window.point.conversations.tree(c.id)).messages.length;
+      return { convs: list.length, msgs: n };
+    });
+    await win.getByPlaceholder(/问点什么/).fill("图里是什么？");
+    await win.getByRole("button", { name: "发送", exact: true }).click();
+    await expect(win.getByTestId("chat-error")).toContainText("当前模型不支持图片");
+    await expect(thumb).toBeVisible(); // kept so the user can switch back
+    // Main gates on the same resolved model (IPC directly, bypassing the UI check).
+    const ipc = await win.evaluate(
+      (sha) => window.point.tasks.run({ kind: "ask", selection: "", question: "q", image: sha, model: "deepseek-v4-pro" }).then(() => "sent", (e: Error) => e.message),
+      sha
+    );
+    expect(ipc).toMatch(/当前模型不支持图片/);
+    const after = await win.evaluate(async () => {
+      const list = await window.point.conversations.list();
+      let n = 0;
+      for (const c of list) n += (await window.point.conversations.tree(c.id)).messages.length;
+      return { convs: list.length, msgs: n };
+    });
+    expect(after).toEqual(before);
+    await win.getByRole("button", { name: "移除截图" }).click();
+    await select.selectOption("deepseek-flash");
+  });
+
+  test("selecting formatted (bold) text in an answer offers 追问分支 and stores a span that matches the source", async () => {
+    const win = await app.firstWindow();
+    const answer = win.locator(".msg.assistant").filter({ hasText: "模拟回答" }).first();
+    await expect(answer.locator("strong", { hasText: "模拟回答" })).toBeVisible();
+    // Select across the <strong> boundary: rendered 「模拟回答：这是」, source 「模拟回答**：这是」.
+    await answer.evaluate((el) => {
+      const p = [...el.querySelectorAll(".markdown p")].find((e) => e.querySelector("strong"))!;
+      const strong = p.querySelector("strong")!;
+      const tail = strong.nextSibling!;
+      const range = document.createRange();
+      range.setStart(strong.firstChild!, 0);
+      range.setEnd(tail, 3);
+      const sel = window.getSelection()!;
+      sel.removeAllRanges();
+      sel.addRange(range);
+      el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    });
+    await win.getByRole("toolbar", { name: "回答选区操作" }).getByRole("button", { name: "追问分支" }).click();
+    await expect(win.getByTestId("branch-draft")).toContainText("追问分支：「模拟回答：这是」");
+    await win.getByPlaceholder(/问点什么/).fill("加粗这段是什么意思？");
+    await win.getByRole("button", { name: "发送", exact: true }).click();
+    await expect(win.getByTestId("crumbs")).toContainText("「模拟回答：这是」");
+    const b = await lastBranch(win);
+    expect(b.quote).toBe(b.slice); // anchor only
+    expect(b.selection).toBe("模拟回答：这是"); // what the user saw is what is sent
+  });
+
+  test("list item with bold, inline code and a link: triple-click the whole item, and a partial selection across the link", async () => {
+    const win = await app.firstWindow();
+    const input = win.getByPlaceholder(/问点什么/);
+    await input.fill("FORMAT-PROBE 给我一个带格式的列表");
+    await win.getByRole("button", { name: "发送", exact: true }).click();
+    const answer = win.locator(".msg.assistant").filter({ hasText: "格式探针" }).last();
+    await expect(answer.getByRole("button", { name: "插入笔记" })).toBeVisible({ timeout: 15_000 }); // streaming done
+    const li = answer.locator(".markdown li").filter({ hasText: "粗体要点" });
+    await expect(li.locator("strong")).toHaveText("粗体要点");
+    await expect(li.locator("code")).toHaveText("inline_code");
+    await expect(li.locator("a")).toHaveText("链接文字");
+    const visible = (await li.evaluate((el) => (el as HTMLElement).innerText)).trim();
+    expect(visible).toBe("粗体要点：带 inline_code 与 链接文字 的一项");
+    const bar = win.getByRole("toolbar", { name: "回答选区操作" });
+
+    // 1) Triple-click selects the whole formatted item.
+    await li.locator("strong").click({ clickCount: 3 });
+    await bar.getByRole("button", { name: "追问分支" }).click();
+    await expect(win.getByTestId("branch-draft")).toContainText(`追问分支：「${visible}」`);
+    await input.fill("这一项展开说说");
+    await win.getByRole("button", { name: "发送", exact: true }).click();
+    await expect(win.getByTestId("crumbs")).toContainText(`「${visible.slice(0, 16)}」`);
+    let b = await lastBranch(win);
+    expect(b.selection).toBe(visible);
+    expect(b.quote).toBe(b.slice);
+    expect(b.quote).toBe("粗体要点**：带 `inline_code` 与 [链接文字](https://example.com/docs/page) 的一项");
+    await win.getByTestId("crumbs").getByRole("button", { name: "主线" }).click();
+
+    // 2) Partial selection across the link: 「与 链接文字 的一」 (link text only, URL never part of the text).
+    await li.evaluate((el) => {
+      const a = el.querySelector("a")!;
+      const range = document.createRange();
+      range.setStart(a.previousSibling!, (a.previousSibling as Text).data.indexOf("与"));
+      range.setEnd(a.nextSibling!, 3);
+      const sel = window.getSelection()!;
+      sel.removeAllRanges();
+      sel.addRange(range);
+      el.closest(".msg.assistant")!.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    });
+    const partial = (await win.evaluate(() => window.getSelection()!.toString())).trim();
+    expect(partial).toBe("与 链接文字 的一");
+    await bar.getByRole("button", { name: "追问分支" }).click();
+    await expect(win.getByTestId("branch-draft")).toContainText(`追问分支：「${partial}」`);
+    await input.fill("这个链接是什么？");
+    await win.getByRole("button", { name: "发送", exact: true }).click();
+    await expect(win.getByTestId("crumbs")).toContainText(`「${partial}」`);
+    b = await lastBranch(win);
+    expect(b.selection).toBe(partial);
+    expect(b.quote).toBe(b.slice);
+    expect(b.quote).toBe("与 [链接文字](https://example.com/docs/page) 的一");
+  });
+});
+
+test.describe("preset fallback notice", () => {
+  test.describe.configure({ mode: "serial" });
+  let app: ElectronApplication;
+  test.beforeAll(async () => {
+    // Saved DeepSeek model id that is not in the ModelSpec table, on the preset endpoint.
+    const userData = mkdtempSync(join(tmpdir(), "point-e2e-fallback-"));
+    writeFileSync(
+      join(userData, "settings.json"),
+      JSON.stringify({ activeProvider: "deepseek", providers: { deepseek: { baseURL: "https://api.deepseek.com/v1", model: "deepseek-gone-xyz", vision: true } } })
+    );
+    app = await launch(launchEnv({ POINT_USER_DATA: userData, POINT_FAKE_LLM: "1" }));
+  });
+  test.afterAll(async () => {
+    await app?.close();
+  });
+
+  test("light notice under ModelBar; 知道了 hides it for this conversation; new conversation / reconfigure show it again", async () => {
+    const win = await app.firstWindow();
+    await openWorkspace(app, win);
+    const notice = win.getByTestId("task-model-notice");
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText("原模型已不可用，已改用 deepseek-flash");
+    // Fell back: ModelBar runs the provider default, the unknown id is not listed.
+    const select = win.getByTestId("model-bar").getByTestId("model-select");
+    await expect(select).toHaveValue("deepseek-flash");
+    await expect(select.locator('option[value="deepseek-gone-xyz"]')).toHaveCount(0);
+    // Inline (follows ModelBar in the composer), design variables only.
+    const style = await notice.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      const root = getComputedStyle(document.documentElement);
+      const probe = (v: string) => {
+        const d = document.createElement("div");
+        d.style.color = `var(${v})`;
+        document.body.appendChild(d);
+        const c = getComputedStyle(d).color;
+        d.remove();
+        return c;
+      };
+      const btn = getComputedStyle(el.querySelector("button")!);
+      return {
+        position: cs.position,
+        prevIsModelBar: el.previousElementSibling?.getAttribute("data-testid") === "model-bar",
+        bg: cs.backgroundColor,
+        bgVar: (() => {
+          const d = document.createElement("div");
+          d.style.background = "var(--bg-muted)";
+          document.body.appendChild(d);
+          const c = getComputedStyle(d).backgroundColor;
+          d.remove();
+          return c;
+        })(),
+        color: cs.color,
+        secondary: probe("--text-secondary"),
+        link: btn.color,
+        accent: probe("--accent"),
+        hasBgMuted: root.getPropertyValue("--bg-muted").trim() !== ""
+      };
+    });
+    expect(style.position).not.toBe("fixed");
+    expect(style.prevIsModelBar).toBe(true);
+    expect(style.hasBgMuted).toBe(true);
+    expect(style.bg).toBe(style.bgVar);
+    expect(style.color).toBe(style.secondary);
+    expect(style.link).toBe(style.accent);
+    await win.locator(".composer").screenshot({ path: join(results, "model-fallback-notice.png") });
+    await win.emulateMedia({ colorScheme: "dark" });
+    await win.locator(".composer").screenshot({ path: join(results, "model-fallback-notice-dark.png") });
+    await win.emulateMedia({ colorScheme: "light" });
+
+    await notice.getByRole("button", { name: "知道了" }).click();
+    await expect(notice).toHaveCount(0);
+    // Once per conversation: asking (which creates the conversation) does not bring it back.
+    await win.getByPlaceholder(/问点什么/).fill("回退后提问");
+    await win.getByRole("button", { name: "发送" }).click();
+    await expect(win.locator(".msg.assistant").getByText("模拟回答")).toBeVisible({ timeout: 15_000 });
+    await expect(notice).toHaveCount(0);
+    const stored = await win.evaluate(async () => (await window.point.conversations.list())[0]?.model ?? null);
+    expect(stored).toBe("deepseek-flash");
+    // Another conversation: shown again.
+    await win.getByRole("button", { name: "新对话" }).click();
+    await expect(notice).toBeVisible();
+    await notice.getByRole("button", { name: "知道了" }).click();
+    await expect(notice).toHaveCount(0);
+    // Reconfigure (settings:changed) while the saved id is still unknown: shown again.
+    await win.evaluate(async () => {
+      await window.point.settings.update({ id: "deepseek", baseURL: "https://api.deepseek.com/v1" });
+    });
+    await expect(notice).toBeVisible();
   });
 });

@@ -92,3 +92,4 @@ export {
   type RegionAnchor,
   type TextAnchor
 } from "./marks/index.js";
+export * from "./conversations/rendered-map.js";
