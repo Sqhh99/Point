@@ -7,7 +7,7 @@ import { Reader } from "./Reader";
 import { Settings } from "./Settings";
 import { StatusBar } from "./StatusBar";
 import { TitleBar } from "./TitleBar";
-import { clampChatWidth, deskVars, isToggleLibraryKey, openShortcutOf } from "./layout";
+import { clampChatWidth, deskVars, readChatPref, isToggleLibraryKey, openShortcutOf } from "./layout";
 
 const api = window.point;
 
@@ -20,7 +20,11 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [trigger, setTrigger] = useState<TaskTrigger | null>(null);
   const [docTitle, setDocTitle] = useState<string | null>(null);
-  const [chatWidth, setChatWidth] = useState(() => clampChatWidth(localStorage.getItem("point.chatWidth")));
+  // point.chatWidth is the user's dragged preference, written only when a drag ends. What is shown is
+  // that preference clamped to the current window (reader ≥ READER_MIN, chat ≥ CHAT_MIN); resizing never
+  // writes back, so enlarging the window again restores the preferred width.
+  const [chatPref, setChatPref] = useState(() => readChatPref(localStorage.getItem("point.chatWidth")));
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const [configured, setConfigured] = useState<boolean | null>(null);
   // The model picked in ModelBar (name + ModelSpec.vision / custom declaration): status bar and the
   // region tool read the same value the ask gate uses.
@@ -49,13 +53,12 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // The window (or the library) changed: the chat gives way first so the reader keeps READER_MIN.
   useEffect(() => {
-    const fit = () => setChatWidth((w) => clampChatWidth(w, { width: window.innerWidth, libraryOpen }));
-    fit();
-    window.addEventListener("resize", fit);
-    return () => window.removeEventListener("resize", fit);
-  }, [libraryOpen]);
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const chatWidth = clampChatWidth(chatPref, { width: viewportWidth, libraryOpen });
 
   const startResize = (e: React.PointerEvent) => {
     drag.current = { x: e.clientX, w: chatWidth };
@@ -63,11 +66,11 @@ export function App() {
   };
   const onResize = (e: React.PointerEvent) => {
     if (!drag.current) return;
-    setChatWidth(clampChatWidth(drag.current.w + drag.current.x - e.clientX, { width: window.innerWidth, libraryOpen }));
+    setChatPref(clampChatWidth(drag.current.w + drag.current.x - e.clientX, { width: window.innerWidth, libraryOpen }));
   };
   const endResize = () => {
     drag.current = null;
-    localStorage.setItem("point.chatWidth", String(chatWidth));
+    localStorage.setItem("point.chatWidth", String(chatPref));
   };
 
   const refresh = useCallback(async () => {

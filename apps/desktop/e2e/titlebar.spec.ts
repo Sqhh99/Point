@@ -240,3 +240,59 @@ test("title bar at narrow widths: no wrapping, 打开 ▾ collapses to icon + �
     bw.setMinimumSize(w!, h!);
   }, [minW, minH]);
 });
+
+// The dragged chat width is a preference: shrinking the window clamps only what is shown (reader ≥ 360,
+// chat ≥ 320), and enlarging it again restores the preference; point.chatWidth is written only on drag end.
+test("splitter: chat width 600 at full size survives shrinking to the minimum and re-enlarging; storage stays 600", async () => {
+  const win = await app.firstWindow();
+  const full = async () => {
+    const want = await app.evaluate(({ BrowserWindow, screen }) => {
+      const w = BrowserWindow.getAllWindows()[0]!;
+      w.maximize();
+      if (!w.isMaximized()) w.setBounds(screen.getDisplayMatching(w.getBounds()).workArea);
+      return w.getContentSize()[0]!;
+    });
+    await expect.poll(() => win.evaluate(() => innerWidth), { timeout: 5_000 }).toBe(want);
+  };
+  const panes = () =>
+    win.evaluate(() => ({
+      reader: document.querySelector("main.center")!.getBoundingClientRect().width,
+      chat: document.querySelector(".ai-panel")!.getBoundingClientRect().width,
+      stored: localStorage.getItem("point.chatWidth"),
+      overflow: document.querySelector(".desk")!.scrollWidth - document.querySelector(".desk")!.clientWidth
+    }));
+  await full();
+  // Real mouse drag on the splitter until the chat is 600px wide.
+  const sep = win.getByRole("separator", { name: "调整对话面板宽度" });
+  const box = (await sep.boundingBox())!;
+  const before = await panes();
+  const x0 = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  await win.mouse.move(x0, y);
+  await win.mouse.down();
+  await win.mouse.move(x0 - (600 - before.chat), y, { steps: 8 });
+  await win.mouse.up();
+  await expect.poll(async () => (await panes()).chat).toBe(600);
+  expect((await panes()).stored).toBe("600");
+  // Shrink to the minimum: both minimums hold, nothing overflows, storage untouched.
+  const [minW, minH] = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.getMinimumSize());
+  await app.evaluate(({ BrowserWindow }, [w, h]) => {
+    const bw = BrowserWindow.getAllWindows()[0]!;
+    bw.unmaximize();
+    bw.setSize(w!, h!);
+  }, [minW, minH]);
+  await expect.poll(() => win.evaluate(() => innerWidth)).toBe(minW);
+  const small = await panes();
+  expect(small.reader).toBeGreaterThanOrEqual(360);
+  expect(small.chat).toBeGreaterThanOrEqual(320);
+  expect(small.overflow).toBeLessThanOrEqual(0);
+  expect(small.stored).toBe("600");
+  // Asking for less than the minimum is refused by the window.
+  await app.evaluate(({ BrowserWindow }, [w, h]) => BrowserWindow.getAllWindows()[0]!.setSize(w! - 50, h!), [minW, minH]);
+  await win.waitForTimeout(200);
+  expect(await win.evaluate(() => innerWidth)).toBe(minW);
+  // Re-enlarge: the preferred 600 comes back.
+  await full();
+  await expect.poll(async () => (await panes()).chat).toBe(600);
+  expect((await panes()).stored).toBe("600");
+});

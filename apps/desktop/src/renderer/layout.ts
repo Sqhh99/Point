@@ -18,17 +18,22 @@ export const deskVars = (chatWidth: number) =>
 const DECIMAL = /^\s*[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?\s*$/i;
 
 /**
- * Clamp a chat panel width into [CHAT_MIN, CHAT_MAX]; anything non-numeric falls back to the default.
- * With the desk width (and whether the library is open), the upper bound also leaves the reader
- * READER_MIN: the splitter can't squeeze the reader, and a window resize re-clamps the chat first.
+ * Clamp a chat panel width; anything non-numeric falls back to the default.
+ * With the desk width (and whether the library is open): chat ≥ CHAT_MIN and reader ≥ READER_MIN, used
+ * on drag, on window resize / library toggle, and when reading the persisted point.chatWidth.
  * CHAT_MIN wins if both can't hold (only below the window minimum, which main forbids).
  */
 export function clampChatWidth(v: unknown, desk?: { width: number; libraryOpen: boolean }): number {
   const n = typeof v === "string" && DECIMAL.test(v) ? Number(v) : typeof v === "number" ? v : NaN;
   const base = Number.isFinite(n) ? n : CHAT_DEFAULT;
-  const room = desk ? desk.width - (desk.libraryOpen ? LIBRARY_WIDTH : LIBRARY_COLLAPSED_WIDTH) - SPLITTER_WIDTH - READER_MIN : Infinity;
-  return Math.round(Math.max(CHAT_MIN, Math.min(CHAT_MAX, room, base)));
+  // With a desk the only upper bound is the room left after the reader's minimum (no fixed maximum);
+  // without one (no layout yet) the stored value is kept within [CHAT_MIN, CHAT_MAX].
+  const upper = desk ? desk.width - (desk.libraryOpen ? LIBRARY_WIDTH : LIBRARY_COLLAPSED_WIDTH) - SPLITTER_WIDTH - READER_MIN : CHAT_MAX;
+  return Math.round(Math.max(CHAT_MIN, Math.min(upper, base)));
 }
+
+/** The stored preference as a number (≥ CHAT_MIN, no maximum; the window decides what is shown). */
+export const readChatPref = (v: unknown): number => clampChatWidth(v, { width: Infinity, libraryOpen: true });
 
 /** True only for ⌘\ on macOS or Ctrl+\ elsewhere; the other platform's modifier and key auto-repeat never toggle. */
 export function isToggleLibraryKey(
