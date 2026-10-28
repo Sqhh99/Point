@@ -38,7 +38,7 @@ v0.2.3 第二步。不改版本号，不打 tag。
 - e2e：
   - `pdf-embedded-fonts.spec.ts`：去掉 known-issue 注解，硬断言恢复为 `within1px >= 0.90`（100/125/150/200%）。分母仍是第 1 页全部词，仍要求 measured === total 且 total >= 30，`PDF-EMBEDDED-DRIFT` 日志保留。
   - `pdf-embedded-fonts.spec.ts` 新增两个用例：
-    - 选区保护：100% 下从 “techniques” 开始拖，分别拖到段末短行右侧的空白和页底。断言拖动时层有 `.selecting`，`.endOfContent` 跟进到所在行；选区不含 “each sounding”（页末）和 “Tidal reduction”（后面的段落），也不超出拖过的行；pointerup 后 `.selecting` 去掉，`.endOfContent` 回到层末尾。
+    - 选区保护：125% 下把 “techniques” 滚到视口上方，从它开始拖，分别拖到段末短行右侧的空白和正文下方的空白纸面（页内、视口内）。断言拖动时层有 `.selecting`，`.endOfContent` 跟进到所在行；选区不含 “each sounding”（页末）和 “Tidal reduction”（后面的段落），也不超出拖过的行；pointerup 后 `.selecting` 去掉，`.endOfContent` 回到层末尾。
     - 关掉保护再跑，选区会跳到 “…improved accuracy.”，用例失败。
     - 200% 跨段选择截图。
   - `pdf-text-layer.spec.ts`：
@@ -85,13 +85,22 @@ v0.2.3 第二步。不改版本号，不打 tag。
 - `pdf-embedded-fonts.spec.ts` 选区着色断言：
   - 原断言是中线采样里着色像素数 `> 500`。macOS 得 478、Windows 得 479，Linux 得 541。
   - 原因：这是采样数量问题，不是渲染 bug。中线行只占行宽约 14%，能采到多少“干净纸面”像素取决于各平台的字形抗锯齿。用 Windows CI 截图在同样几何下估算，全区域的着色比例为 0.478，Linux 为 0.493，只低约 3%。
-  - 新断言按面积成比例：在选中的内部行框内（逐设备像素，四边各内缩 2px），统计“干净纸面且被着色”的像素占行框面积的比例，要求 `>= 0.35`。Linux：125% 为 0.479（37044 / 77289），200% 为 0.625（54216 / 86729）。macOS / Windows 的实际值见 CI 日志中的 `PDF-SELECTION-TINT`。
+  - 新断言按面积成比例：在选中的内部行框内（逐设备像素，四边各内缩 2px），统计“干净纸面且被着色”的像素占行框面积的比例，要求 `>= 0.35`。实测（125% / 200%）：Linux 0.479（37044 / 77289）/ 0.625（54216 / 86729），macOS CI 0.467 / 0.601，Windows CI 0.46 / 0.613（见 CI 日志 `PDF-SELECTION-TINT`）。
   - 反向验证：把 `::selection` 设成透明后，比例为 0，用例失败。旧的 `> 500` 在这种情况下反而会通过（它只数干净纸面，不看是否着色）。
   - 中线颜色、`darker` 和行间空隙检查不变；`within1px >= 0.90` 不变。
 - `smoke.spec.ts:672` 在 Windows 上点 “标记” 时报 “element was detached”：
   - 不是选区跟踪导致工具条重渲染：`trackSelection` 不会收起选区，也不会重挂工具条。
   - 原因是测试竞态：点 “恢复 100%” 后约 45ms，`selectIn` 就选中了第 2 页上一档缩放的旧 span。重建完成后 `replaceChildren` 把它们换掉，选区收起，工具条关闭，按钮随之卸载。main 上就有同样的写法，本 PR 多了一次 operator list 的 await，窗口变大了。本地把点击和选择放进同一个 evaluate 可以稳定复现。
   - 修复：`PdfView.tsx` 在页面 effect 的 cleanup 里去掉 `--scale-factor`，标记旧层已过期（它只用作就绪标记）。测试在选择前等待第 2 页 `.pdf-text` 的 `--scale-factor` 等于 `data-scale`。本地 smoke 16/16 通过。
+- 第二轮 CI：macOS e2e 的 `pdf-embedded-fonts.spec.ts:360`（拖到页底）失败，报 `.selecting` 为 false。之前这条在 macOS 上没跑到过（前面 147 失败后串行跳过）。
+  - 不是产品 bug。macOS runner 的窗口只有约 680px 高，比 100% 的页面矮，`main.center` 可以纵向滚动。
+  - 原因 1：这种情况下，在 100% 用 Playwright（CDP）合成的鼠标拖动，Chromium 不扩展选区，插入点跟着鼠标走，选区一直是空的。关掉选区保护也一样；用 xdotool 发真实 X 输入就能正常选中。所以 macOS 上 “行间空白” 那一步其实也是空选区，只是没被断言抓住。
+  - 原因 2：页底目标 y≈1184 在视口外。真实输入拖到那里会拖出窗口，带着自动滚动选中整个界面。
+  - 修复（只改测试）：
+    - 改在 125% 下测，和 147 的拖动同一档缩放，各平台都能正常拖。
+    - 先把 “techniques” 滚到视口上方；“页底” 改成 “正文下方”，取 `min(页底 − 30, 视口底 − 20)`，并断言它在最后一行下方 20px 以外。
+    - 新增断言：选区必须以 “techniques” 开头，空选区不再能蒙混通过。
+  - 本地验证：正常窗口和 1800×680 的短窗口都通过，两个目标的选区都是 “techniques”。去掉 `.endOfContent` 跟进（保护失效）后，两种窗口都失败，选区跳到整段 “…in the survey.”。
 
 ## 版本号
 不升版本。这是 v0.2.3 的一步，版本号和 tag 另行处理。

@@ -359,18 +359,30 @@ const wordBox = (win: Win, w: string, nth = 0) =>
 
 test("dragging from a word into a line gap or below the text keeps the selection local (.endOfContent, .selecting)", async () => {
   const win = await app.firstWindow();
-  await setZoom(win, 100);
+  // 125 %, not 100 %: on a window shorter than the page (macOS CI, ~680 px) a Playwright (CDP) mouse drag at 100 % leaves the
+  // selection collapsed at the pointer in Chromium even with the guard off; real X input selects fine there. 125 % is the zoom
+  // the 147 drags use and drags normally on every runner.
+  await setZoom(win, 125);
+  const center = win.locator("main.center");
+  const vis = (await center.boundingBox())!;
+  const bar = (await win.getByTestId("reader-bar").boundingBox())!;
+  const viewTop = bar.y + bar.height, viewBottom = vis.y + vis.height - 16;
+  const s0 = (await wordBox(win, "techniques"))!;
+  await center.evaluate((e, dy) => (e.scrollTop += dy), Math.floor(s0.t - viewTop - 40));
+  await win.waitForTimeout(150);
   const start = (await wordBox(win, "techniques"))!;
   const short = (await wordBox(win, "survey."))!; // last line of paragraph 1: empty paper to its right
   const page = (await page1(win).boundingBox())!;
   const lastLine = await page1(win).evaluate((el) => Math.max(...[...el.querySelectorAll<HTMLElement>(".pdf-line > span")].map((s) => s.getBoundingClientRect().bottom)));
   expect(start && short).toBeTruthy();
   const gapX = page.x + page.width - 60;
+  // Below the text, on the page and inside the visible scroller (the page bottom is off-screen on short windows).
+  const belowY = Math.min(page.y + page.height - 30, viewBottom - 20);
   expect(gapX > short.r + 40, "empty paper right of the paragraph's short last line").toBe(true);
-  expect(page.y + page.height - 30 > lastLine + 20, "empty paper below the last text line").toBe(true);
+  expect(start.t >= viewTop && belowY > lastLine + 20, "empty paper below the last text line, in view").toBe(true);
   const targets = [
     { name: "line gap", x: gapX, y: (short.t + short.b) / 2, maxBottom: short.b + 2 },
-    { name: "page bottom", x: page.x + page.width / 2, y: page.y + page.height - 30, maxBottom: Infinity }
+    { name: "below the text", x: page.x + page.width / 2, y: belowY, maxBottom: Infinity }
   ];
   for (const tg of targets) {
     await win.evaluate(() => getSelection()!.removeAllRanges());
@@ -393,6 +405,7 @@ test("dragging from a word into a line gap or below the text keeps the selection
     });
     const after = await page1(win).evaluate((el) => ({ selecting: el.querySelector(".pdf-text")!.classList.contains("selecting"), endLast: el.querySelector(".pdf-text")!.lastElementChild?.classList.contains("endOfContent") }));
     console.log(`PDF-SELECTION-LOCAL ${JSON.stringify({ target: tg.name, during, text: sel.text, bottom: sel.bottom })}`);
+    expect(sel.text, `${tg.name}: the drag selected from the start word`).toMatch(/^techniques\b/);
     expect(during.selecting, `${tg.name}: layer is .selecting while dragging`).toBe(true);
     expect(during.endInLine, `${tg.name}: .endOfContent follows the selection end into its line`).toBe(true);
     expect(sel.text, `${tg.name}: selection did not jump to the end of the layer`).not.toContain("each sounding");
