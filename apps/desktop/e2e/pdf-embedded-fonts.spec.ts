@@ -1,8 +1,9 @@
 import { test, expect, _electron as electron, type ElectronApplication } from "@playwright/test";
-import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodePng } from "./png";
+import { buildPageTextGeom, type PdfPageForGeom, type TjWordBox } from "../src/renderer/viewers/pdf-tj-geom";
 
 // Requires `pnpm build` first. Embedded-font, justified multi-paragraph PDF (fixtures/pdf/hydro-serif.pdf,
 // Nimbus Roman subset): text-layer glyph boxes vs canvas glyphs at 100/125/150/200 %, and selection
@@ -199,6 +200,29 @@ test("embedded-font justified PDF: layer glyphs vs canvas glyphs, and selection 
   await checkSelection(win, 200, "survey.");
 });
 
+/** Tint threshold: the lowest ratio measured on the three platforms (Windows CI 125 % 0.619) minus a 0.10 margin, floored. */
+const TINT_MIN = 0.51;
+let geomWords: Promise<TjWordBox[]> | undefined;
+/** PageTextGeom.words of the fixture's page 1, built in Node with the app's pdf.js. */
+async function selectedGeomWords(endWord: string) {
+  geomWords ??= (async () => {
+    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const worker = await import("pdfjs-dist/legacy/build/pdf.worker.mjs");
+    (globalThis as { pdfjsWorker?: unknown }).pdfjsWorker ??= worker;
+    const doc = await pdfjs.getDocument({ data: new Uint8Array(readFileSync(join(FIXTURES, "hydro-serif.pdf"))), verbosity: 0, isEvalSupported: false }).promise;
+    try {
+      return (await buildPageTextGeom((await doc.getPage(1)) as unknown as PdfPageForGeom)).words;
+    } finally {
+      await doc.destroy();
+    }
+  })();
+  const all = await geomWords;
+  // The selection runs from the second "Depth" (the paragraph, not the heading) to endWord.
+  const a = all.findIndex((w, i) => w.text === "Depth" && all.slice(0, i).some((x) => x.text === "Depth"));
+  const z = all.findIndex((w, i) => i > a && w.text === endWord);
+  return a >= 0 && z > a ? all.slice(a, z + 1) : [];
+}
+
 async function checkSelection(win: Win, z: number, endWord: string) {
   await setZoom(win, z);
   const center = win.locator("main.center");
@@ -286,23 +310,30 @@ async function checkSelection(win: Win, z: number, endWord: string) {
     }
   }
   tints.sort((a, b) => a - b);
-  // Painted selection, proportional to the selected area: of the device pixels inside the inner selected
-  // lines' boxes, the share that is clear paper and carries the tint. The mid-row sample count above is ~14 % of
-  // a line's width and depends on glyph antialiasing (125 %: Linux 541, Windows 479, macOS 478), so its absolute
-  // size is not asserted. The ratio is 0 when no selection is painted; Linux measures 0.48 (125 %) and 0.63 (200 %).
+  // Painted selection, proportional to the selected text: device pixels of clear paper that carry the tint,
+  // inside the selected lines' boxes (first and last line included), over the selected words' area from the
+  // page's own geometry (PageTextGeom.words of the same pdf.js build, PageRect at 100 %): Σ w·h × k² × dpr², k =
+  // data-scale / (96/72) = zoom / 100. The ratio is independent of the platform's glyph antialiasing count and
+  // of the window size; it is 0 when no selection is painted.
+  // Measured (tinted / Σ word area, 91 words at 125 %, 47 at 200 %, dpr 1): Linux (xvfb) 125 % 0.638, 200 % 0.773;
+  // Windows CI 125 % 0.619, 200 % 0.760; macOS CI 125 % 0.626, 200 % 0.748 (run 40757035570).
+  // Threshold = min (0.619) − margin 0.10 = 0.519, floored to 0.51. With the ::selection tint off the ratio is ~0.
   const dpr = W / clip.width;
-  let area = 0, clear = 0, tinted = 0;
-  for (const ln of lines.slice(1, -1))
-    for (let y = Math.ceil((ln.t - clip.y) * dpr) + 2; y < Math.floor((ln.b - clip.y) * dpr) - 2; y++)
-      for (let x = Math.ceil((ln.l - clip.x) * dpr) + 2; x < Math.floor((ln.r - clip.x) * dpr) - 2; x++) {
-        area++;
+  const k = Number(await page1(win).getAttribute("data-scale")) / (96 / 72);
+  const words = await selectedGeomWords(endWord);
+  const wordArea = words.reduce((a, w) => a + w.rect.w * w.rect.h, 0) * k * k * dpr * dpr;
+  let tinted = 0;
+  for (const ln of lines)
+    for (let y = Math.ceil((ln.t - clip.y) * dpr); y < Math.floor((ln.b - clip.y) * dpr); y++)
+      for (let x = Math.ceil((ln.l - clip.x) * dpr); x < Math.floor((ln.r - clip.x) * dpr); x++) {
         if (!clearPaper(x, y)) continue;
-        clear++;
         const c = px(selected, x, y), p = px(plain, x, y);
         if (Math.abs(c[0]! - p[0]!) + Math.abs(c[1]! - p[1]!) + Math.abs(c[2]! - p[2]!) >= 15) tinted++;
       }
-  console.log("PDF-SELECTION-TINT", JSON.stringify({ z, dpr, midSamples: tints.length, area, clear, tinted, tintedOfArea: +(tinted / area).toFixed(3), tintedOfClear: +(tinted / clear).toFixed(4) }));
-  expect(tinted / area, `${z}%: tinted clear paper / selected line area (${tinted} / ${area})`).toBeGreaterThanOrEqual(0.35);
+  const ratio = tinted / wordArea;
+  console.log("PDF-SELECTION-TINT", JSON.stringify({ platform: process.platform, z, dpr, k, words: words.length, midSamples: tints.length, tinted, wordArea: Math.round(wordArea), tintedOfWordArea: +ratio.toFixed(3) }));
+  expect(words.length, `${z}%: selected words found in PageTextGeom`).toBeGreaterThanOrEqual(30);
+  expect(ratio, `${z}%: tinted clear paper / selected words' geom area (${tinted} / ${Math.round(wordArea)})`).toBeGreaterThanOrEqual(TINT_MIN);
   const median = tints[tints.length >> 1]!;
   const tint = chans.map((c) => c.sort((x, y) => x - y)[c.length >> 1]!);
   // Light theme: --accent at the layer's 25 % over white paper.
@@ -380,22 +411,31 @@ test("dragging from a word into a line gap or below the text keeps the selection
   const belowY = Math.min(page.y + page.height - 30, viewBottom - 20);
   expect(gapX > short.r + 40, "empty paper right of the paragraph's short last line").toBe(true);
   expect(start.t >= viewTop && belowY > lastLine + 20, "empty paper below the last text line, in view").toBe(true);
+  const last = (await wordBox(win, "sounding."))!; // last word of the page ("each sounding.")
+  expect(last && last.b < viewBottom, "last word in view").toBeTruthy();
+  // Each drag walks through the text to its last word (so the selection really grows to it), then leaves the text for
+  // empty paper: the selection must end at that word, not jump to the end of the layer or to a later paragraph.
   const targets = [
-    { name: "line gap", x: gapX, y: (short.t + short.b) / 2, maxBottom: short.b + 2 },
-    { name: "below the text", x: page.x + page.width / 2, y: belowY, maxBottom: Infinity }
+    { name: "line gap", via: short, word: "survey.", x: gapX, y: (short.t + short.b) / 2, end: /in the survey\.$/, maxBottom: short.b + 2, notAfter: "During the last decade" },
+    { name: "below the text", via: last, word: "sounding.", x: page.x + page.width / 2, y: belowY, end: /total propagated uncertainty of each sounding\.$/, maxBottom: last.b + 2, notAfter: null }
   ];
   for (const tg of targets) {
     await win.evaluate(() => getSelection()!.removeAllRanges());
+    // The previous drag's selection bar sits above its start word: wait until it closed, or the mousedown lands on it.
+    await expect(win.getByRole("toolbar", { name: "选区操作" })).toBeHidden();
     const sx = start.l + 2, sy = (start.t + start.b) / 2;
     await win.mouse.move(sx, sy);
     await win.mouse.down();
     await win.mouse.move(sx + 10, sy, { steps: 2 });
-    await win.mouse.move(tg.x, tg.y, { steps: 1 });
+    await win.mouse.move(tg.via.r - 2, (tg.via.t + tg.via.b) / 2, { steps: 20 });
+    await win.mouse.move(tg.x, tg.y, { steps: 6 });
     await win.waitForTimeout(100);
-    const during = await page1(win).evaluate((el) => {
+    const during = await page1(win).evaluate((el, word) => {
       const end = el.querySelector<HTMLElement>(".pdf-text .endOfContent");
-      return { selecting: el.querySelector(".pdf-text")!.classList.contains("selecting"), endInLine: !!end?.parentElement?.classList.contains("pdf-line") };
-    });
+      let line = end?.previousElementSibling;
+      if (line?.tagName === "BR") line = line.previousElementSibling; // the line's own <br>
+      return { selecting: el.querySelector(".pdf-text")!.classList.contains("selecting"), endAtLine: !!line?.classList.contains("pdf-line") && line.textContent!.trim().endsWith(word) };
+    }, tg.word);
     await win.mouse.up();
     await win.waitForTimeout(150);
     const sel = await win.evaluate(() => {
@@ -404,12 +444,12 @@ test("dragging from a word into a line gap or below the text keeps the selection
       return { text: s.toString().replace(/\s+/g, " ").trim(), bottom: Math.max(0, ...rects.map((r) => r.bottom)) };
     });
     const after = await page1(win).evaluate((el) => ({ selecting: el.querySelector(".pdf-text")!.classList.contains("selecting"), endLast: el.querySelector(".pdf-text")!.lastElementChild?.classList.contains("endOfContent") }));
-    console.log(`PDF-SELECTION-LOCAL ${JSON.stringify({ target: tg.name, during, text: sel.text, bottom: sel.bottom })}`);
+    console.log(`PDF-SELECTION-LOCAL ${JSON.stringify({ target: tg.name, during, words: sel.text.split(" ").length, head: sel.text.slice(0, 40), tail: sel.text.slice(-40), bottom: Math.round(sel.bottom), maxBottom: Math.round(tg.maxBottom) })}`);
     expect(sel.text, `${tg.name}: the drag selected from the start word`).toMatch(/^techniques\b/);
+    expect(sel.text, `${tg.name}: the selection grew to the target's word and ends there`).toMatch(tg.end);
     expect(during.selecting, `${tg.name}: layer is .selecting while dragging`).toBe(true);
-    expect(during.endInLine, `${tg.name}: .endOfContent follows the selection end into its line`).toBe(true);
-    expect(sel.text, `${tg.name}: selection did not jump to the end of the layer`).not.toContain("each sounding");
-    expect(sel.text, `${tg.name}: selection did not jump to a later paragraph`).not.toContain("Tidal reduction");
+    expect(during.endAtLine, `${tg.name}: .endOfContent moved next to the selection end's line, not left at the layer end`).toBe(true);
+    if (tg.notAfter) expect(sel.text, `${tg.name}: selection did not jump to a later paragraph or the end of the layer`).not.toContain(tg.notAfter);
     expect(sel.bottom, `${tg.name}: selection stays on the lines the drag crossed`).toBeLessThanOrEqual(tg.maxBottom);
     expect(after, `${tg.name}: .selecting off and .endOfContent back at the layer end after pointerup`).toEqual({ selecting: false, endLast: true });
   }

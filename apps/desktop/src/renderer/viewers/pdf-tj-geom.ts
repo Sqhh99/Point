@@ -429,17 +429,28 @@ export function runsToLines(runs: TjGlyphRun[]): TjLineRun[][] {
 }
 
 /**
- * Merge per-word rects (one per leaf span from `Range.getClientRects()`) into one box per text line, so the
- * SelectionOverlay draws `PageRect`s "one per text line" without darker overlaps. Two rects share a line when
- * their vertical ranges overlap by at least half the shorter height; a line box is the union of its rects.
- * Order: top to bottom, then left to right.
+ * One function for every text-mark rect list: new marks before they are stored (`Reader.pdfAnchor`), stored marks
+ * (including legacy per-word ones, merged on read, never migrated) before `.mark-rect` draws them, and the
+ * SelectionOverlay. Steps:
+ * 1. Drop a rect that lies inside another (1px tolerance): legacy marks stored `Range.getClientRects()` with each
+ *    fully selected span's element box and its text box, so the two stacked into a darker band.
+ * 2. Merge two rects into one when their tops and their heights each differ by <= 1px and the horizontal gap
+ *    between them is under one font size. `PageRect` has no font size, so the smaller rect height stands in for it
+ *    (the text box height is the font's ascent + descent, about 1.1–1.2 em, so the limit is a little over 1 em).
+ *    A superscript or a different-size run stays a separate rect; one inside its line's box is then dropped by
+ *    step 1 again, one that sticks out stays. Columns further apart than one font size stay separate.
+ * Rects keep their true geometry: boxes of consecutive lines may overlap by a few px (line pitch < box height);
+ * the draw layer (opaque boxes under one container opacity) keeps the overlap from tinting twice.
+ * Output order: top to bottom, then left to right. The input is not modified.
  */
 export function mergeLineRects(rects: readonly PageRect[]): PageRect[] {
+  const inside = (a: PageRect, b: PageRect) => a !== b && a.x >= b.x - 1 && a.y >= b.y - 1 && a.x + a.w <= b.x + b.w + 1 && a.y + a.h <= b.y + b.h + 1;
+  const dropContained = (rs: PageRect[]) => rs.filter((a, i) => !rs.some((b, j) => inside(a, b) && !(inside(b, a) && j > i)));
   const lines: PageRect[] = [];
-  for (const r of [...rects].sort((a, b) => a.y - b.y || a.x - b.x)) {
-    const line = lines.find((l) => Math.min(l.y + l.h, r.y + r.h) - Math.max(l.y, r.y) >= Math.min(l.h, r.h) / 2);
+  for (const r of dropContained(rects.map((r) => ({ ...r }))).sort((a, b) => a.x - b.x || a.y - b.y)) {
+    const line = lines.find((l) => Math.abs(l.y - r.y) <= 1 && Math.abs(l.h - r.h) <= 1 && r.x - (l.x + l.w) < Math.min(l.h, r.h) && l.x - (r.x + r.w) < Math.min(l.h, r.h));
     if (!line) {
-      lines.push({ ...r });
+      lines.push(r);
       continue;
     }
     const x1 = Math.max(line.x + line.w, r.x + r.w), y1 = Math.max(line.y + line.h, r.y + r.h);
@@ -448,5 +459,19 @@ export function mergeLineRects(rects: readonly PageRect[]): PageRect[] {
     line.w = x1 - line.x;
     line.h = y1 - line.y;
   }
-  return lines.sort((a, b) => a.y - b.y || a.x - b.x);
+  const out = dropContained(lines).sort((a, b) => a.y - b.y || a.x - b.x);
+  return out;
+}
+
+/**
+ * At most `max` rects (the stored mark's limit) without losing any of the selection: when there are more, the
+ * rects from the `max`-th on are unioned into the last one (their bounding box), so the mark still reaches the
+ * selection's last line. Expects `mergeLineRects` output (one rect per line, top to bottom).
+ */
+export function capLineRects(rects: readonly PageRect[], max: number): PageRect[] {
+  if (rects.length <= max) return rects.slice();
+  const tail = rects.slice(max - 1);
+  const x0 = Math.min(...tail.map((r) => r.x)), y0 = Math.min(...tail.map((r) => r.y));
+  const x1 = Math.max(...tail.map((r) => r.x + r.w)), y1 = Math.max(...tail.map((r) => r.y + r.h));
+  return [...rects.slice(0, max - 1), { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }];
 }

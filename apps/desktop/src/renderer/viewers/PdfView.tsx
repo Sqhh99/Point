@@ -136,12 +136,25 @@ function Page({ doc, n, scale, size, marks, rects, selection }: { doc: PDFDocume
     });
   }, [marks, done]);
 
+  // Stored marks (legacy per-word ones too) merged on read: one box per line.
+  const lineRects = mergeLineRects(rects);
   return (
     <div className="pdf-page" ref={wrap} data-page={n} data-scale={scale} data-testid="pdf-page" style={{ width: Math.floor(size[0] * scale), height: Math.floor(size[1] * scale) }}>
       <canvas ref={canvas} aria-hidden />
-      {rects.map((r, i) => (
-        <div key={i} className="mark-rect" data-testid="mark-rect" style={{ left: r.x * scale / BASE, top: r.y * scale / BASE, width: r.w * scale / BASE, height: r.h * scale / BASE }} />
-      ))}
+      {lineRects.length > 0 && (
+        <>
+          <div className="mark-rects">
+            {lineRects.map((r, i) => (
+              <div key={i} className="mark-rect" data-testid="mark-rect" style={{ left: r.x * scale / BASE, top: r.y * scale / BASE, width: r.w * scale / BASE, height: r.h * scale / BASE }} />
+            ))}
+          </div>
+          <div className="mark-lines">
+            {lineRects.map((r, i) => (
+              <div key={i} className="mark-line" style={{ left: r.x * scale / BASE, top: (r.y + r.h) * scale / BASE - 2, width: r.w * scale / BASE, height: 2 }} />
+            ))}
+          </div>
+        </>
+      )}
       {selection && selection.rects.length > 0 && <SelectionOverlay rects={mergeLineRects(selection.rects)} scale={scale} mode={selection.mode} />}
       <div className="textLayer pdf-text" ref={text} />
     </div>
@@ -367,10 +380,12 @@ function renderTextLayer(layer: HTMLElement, lines: TjLineRun[][], viewport: Pag
 
 /**
  * pdf.js TextLayer's selection guard (4.10 `#enableGlobalSelectionListener` / `#bindMouse`), for this span layer.
- * Each layer ends with a `.endOfContent` div; while selecting (`.selecting`) it covers the whole layer under the
- * spans. In Chromium it is moved right after the selection's moving end, so dragging into a line gap or below the
- * text hits it and the selection stays where it was instead of jumping to the end of the layer. Inside a
- * `.pdf-line` it is offset back to the layer's origin so it still covers the whole layer.
+ * Each layer ends with a `.endOfContent` div; while selecting (`.selecting`) it covers the layer under the spans,
+ * down to the lowest text line. It is moved to the layer's top level right after the moving end's `.pdf-line` (and
+ * that line's `<br>`), so dragging into a line gap hits it and the selection stays at that line instead of jumping
+ * to a later paragraph. Below the last line it does not cover: there Chromium's own hit on the layer ends the
+ * selection at the layer's last text, which is the right end. (Covering that area too made Chromium map the point to
+ * an arbitrary earlier span: the selection collapsed.)
  */
 const selectionLayers = new Map<HTMLElement, HTMLDivElement>();
 let selectionListening = false;
@@ -380,6 +395,15 @@ function resetSelectionLayer(end: HTMLDivElement, layer: HTMLElement) {
   layer.append(end);
   Object.assign(end.style, { left: "", top: "", width: "", height: "" });
   layer.classList.remove("selecting");
+}
+
+/** Bottom of the layer's lowest text line, in layer px: below it the guard must not cover the layer (see trackSelection). */
+function textBottom(layer: HTMLElement): number {
+  const box = layer.getBoundingClientRect();
+  const k = box.height / (layer.clientHeight || 1) || 1;
+  let bottom = box.top;
+  for (const s of layer.querySelectorAll<HTMLElement>(".pdf-line > span")) bottom = Math.max(bottom, s.getBoundingClientRect().bottom);
+  return Math.ceil((bottom - box.top) / k);
 }
 
 function trackSelection(layer: HTMLElement) {
@@ -412,6 +436,13 @@ function trackSelection(layer: HTMLElement) {
     const modifyStart = !!prevRange && (range.compareBoundaryPoints(Range.END_TO_END, prevRange) === 0 || range.compareBoundaryPoints(Range.START_TO_END, prevRange) === 0);
     let anchor: Node | null = modifyStart ? range.startContainer : range.endContainer;
     if (anchor.nodeType === Node.TEXT_NODE) anchor = anchor.parentNode;
+    else if (anchor instanceof HTMLElement && selectionLayers.has(anchor)) {
+      // Pointer on the layer itself (below the guard): the end is a child index; take the node before it, past the guard.
+      const kids = anchor.childNodes, i = modifyStart ? range.startOffset : range.endOffset - 1;
+      let n: Node | null = kids[Math.min(Math.max(i, 0), kids.length - 1)] ?? null;
+      if (n === selectionLayers.get(anchor)) n = modifyStart ? n.nextSibling : n.previousSibling;
+      if (n) anchor = n;
+    }
     if (anchor && !modifyStart && range.endOffset === 0) {
       do {
         while (anchor && !anchor.previousSibling) anchor = anchor.parentNode;
@@ -419,12 +450,15 @@ function trackSelection(layer: HTMLElement) {
       } while (anchor && !anchor.childNodes.length);
     }
     prevRange = range.cloneRange();
+    // Next to the moving end's line, at the layer's top level (not inside the .pdf-line).
+    if (anchor instanceof Element && anchor !== anchor.closest(".pdf-text")) anchor = anchor.closest(".pdf-line") ?? anchor;
+    if (!modifyStart && anchor instanceof Element && anchor.classList.contains("pdf-line") && anchor.nextElementSibling?.tagName === "BR") anchor = anchor.nextElementSibling;
     const parent = anchor?.parentElement;
     const layer = parent?.closest<HTMLElement>(".pdf-text");
     const end = layer && selectionLayers.get(layer);
     if (!anchor || !parent || !layer || !end || anchor === end) return;
     const off = parent === layer ? { x: 0, y: 0 } : { x: parent.offsetLeft, y: parent.offsetTop };
-    Object.assign(end.style, { left: `${-off.x}px`, top: `${-off.y}px`, width: `${layer.clientWidth}px`, height: `${layer.clientHeight}px` });
+    Object.assign(end.style, { left: `${-off.x}px`, top: `${-off.y}px`, width: `${layer.clientWidth}px`, height: `${textBottom(layer)}px` });
     parent.insertBefore(end, modifyStart ? anchor : anchor.nextSibling);
   });
 }

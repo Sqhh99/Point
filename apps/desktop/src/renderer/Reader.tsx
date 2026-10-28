@@ -11,6 +11,7 @@ import { isViewBlockId, relocateBlock } from "@point/core/relocate";
 import { DocError } from "./viewers/DocError";
 import { DocxView } from "./viewers/DocxView";
 import { PdfView, type PdfState } from "./viewers/PdfView";
+import { capLineRects, mergeLineRects } from "./viewers/pdf-tj-geom";
 import { ReaderBar } from "./viewers/ReaderBar";
 import { SheetGrid, SheetTabs } from "./viewers/SheetView";
 
@@ -73,18 +74,40 @@ function contextOf(range: Range): string {
     .join("\n\n");
 }
 
-/** PDF selections also record where they sit on the page (rects) and ~32 chars of text either side. */
+/** Text boxes of the selected characters, one per text node. `Range.getClientRects()` would also return the border
+ *  box of every fully selected word span, which differs from the text box in top and height. */
+function textBoxes(range: Range): DOMRect[] {
+  const root = range.commonAncestorContainer;
+  if (root.nodeType === Node.TEXT_NODE) return Array.from(range.getClientRects());
+  const out: DOMRect[] = [];
+  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+    if (!range.intersectsNode(n)) continue;
+    const sub = document.createRange();
+    sub.selectNodeContents(n);
+    if (n === range.startContainer) sub.setStart(n, range.startOffset);
+    if (n === range.endContainer) sub.setEnd(n, range.endOffset);
+    out.push(...Array.from(sub.getClientRects()));
+  }
+  return out;
+}
+
+/** PDF selections also record where they sit on the page (rects, one per line after mergeLineRects) and ~32 chars
+ *  of text either side. */
 function pdfAnchor(range: Range, text: string): Pick<SelectionInfo, "prefix" | "suffix" | "rects"> {
   const el = range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement;
   const page = el?.closest<HTMLElement>(".pdf-page");
   if (!page) return {};
   const box = page.getBoundingClientRect();
   const k = Number(page.dataset.scale) / (96 / 72);
-  const rects = Array.from(range.getClientRects())
-    .filter((r) => r.width > 0.5 && r.height > 0.5 && r.right > box.left && r.left < box.right && r.bottom > box.top && r.top < box.bottom)
-    .slice(0, 64)
-    .map((r) => ({ x: (r.left - box.left) / k, y: (r.top - box.top) / k, w: r.width / k, h: r.height / k }))
-    .map((r) => ({ x: Math.max(0, r.x), y: Math.max(0, r.y), w: r.w, h: r.h }));
+  // Merge to one rect per line first, then cap at MARK_LIMITS.rects (64): lines past the 63rd are unioned into
+  // the last rect, never dropped.
+  const rects = capLineRects(mergeLineRects(
+    textBoxes(range)
+      .filter((r) => r.width > 0.5 && r.height > 0.5 && r.right > box.left && r.left < box.right && r.bottom > box.top && r.top < box.bottom)
+      .map((r) => ({ x: (r.left - box.left) / k, y: (r.top - box.top) / k, w: r.width / k, h: r.height / k }))
+      .map((r) => ({ x: Math.max(0, r.x), y: Math.max(0, r.y), w: r.w, h: r.h }))
+  ), 64);
   const flat = (page.querySelector(".textLayer")?.textContent ?? "").replace(/\s+/g, " ");
   const q = text.replace(/\s+/g, " ");
   const i = flat.indexOf(q);

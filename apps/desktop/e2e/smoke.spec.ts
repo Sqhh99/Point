@@ -691,7 +691,20 @@ test("PDF, Word and Excel open in their original look with one shared bar, marks
     await stubOpenDialog([p]);
     await win.getByRole("button", { name: "导入文档" }).click();
   };
-  const markColor = (loc: ReturnType<typeof win.locator>) => loc.evaluate((e) => getComputedStyle(e).backgroundColor);
+  // The colour a mark paints: its background, under its container's opacity (PDF .mark-rect boxes are opaque
+  // --accent inside one 12 % .mark-rects group, so overlapping line boxes do not tint twice).
+  const markColor = (loc: ReturnType<typeof win.locator>) =>
+    loc.evaluate((e) => {
+      const bg = getComputedStyle(e).backgroundColor;
+      const op = Number(getComputedStyle(e.parentElement!).opacity);
+      if (op === 1) return bg;
+      const probe = document.createElement("div");
+      probe.style.background = `color-mix(in srgb, ${bg} ${op * 100}%, transparent)`;
+      document.body.append(probe);
+      const c = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return c;
+    });
   const colors: string[] = [];
 
   // --- PDF: real page canvases, page switcher, zoom, text-layer selection → mark with rects
@@ -709,14 +722,37 @@ test("PDF, Word and Excel open in their original look with one shared bar, marks
   await bar.getByRole("button", { name: "恢复 100%" }).click();
   await expect(bar.getByRole("button", { name: "恢复 100%" })).toBeDisabled();
   await expect(bar.getByTestId("capture-button")).toBeVisible();
-  // Zoom rebuilds the text layers. Until page 2's layer is rebuilt for the current scale (--scale-factor equals
-  // data-scale), its spans are the previous zoom's: selecting them works, but the rebuild then replaces them,
-  // the selection collapses and the bar closes under the click (Windows CI, "element was detached").
+  // After 恢复 100% PdfView re-anchors the scroll so the middle of page 2 (the page we were on) is under the middle of
+  // the view (scrollTop 1213 here): page 2's first line, "Viewer page two", is then above the visible reader. The
+  // selection bar sits above the selection, clamped to the window top (y 0, measured 39/40 runs; -1 in the other), so
+  // Playwright scrolls the 标记 button into view, the reader scrolls, and the bar closes on that scroll (Reader
+  // onScroll): "element was detached" (Windows CI, 1/20 locally). A user selects text they can see, so do that: wait
+  // for page 2's layer at the new scale, bring the line to the middle of the view, let the scroll (and any layer
+  // rebuild it causes) settle (300 ms without a scroll or a DOM change on page 2), then select.
   await expect
     .poll(() => reader.locator('[data-page="2"]').evaluate((el) => (el.querySelector<HTMLElement>(".pdf-text")?.style.getPropertyValue("--scale-factor") ?? "") === el.getAttribute("data-scale")))
     .toBe(true);
+  await reader.locator('[data-page="2"]').evaluate(
+    (page) =>
+      new Promise<void>((done) => {
+        const scroller = page.closest(".reader-doc")!.parentElement!;
+        let timer = setTimeout(finish, 300);
+        const again = () => (clearTimeout(timer), (timer = setTimeout(finish, 300)));
+        const mo = new MutationObserver(again);
+        mo.observe(page, { childList: true, subtree: true });
+        scroller.addEventListener("scroll", again, { passive: true });
+        function finish() {
+          mo.disconnect();
+          scroller.removeEventListener("scroll", again);
+          done();
+        }
+        [...page.querySelectorAll(".pdf-text span")].find((e) => e.textContent?.includes("Viewer page two"))!.scrollIntoView({ block: "center" });
+      })
+  );
   await selectIn(win, '[data-page="2"] .pdf-text span', "Viewer page two");
   await expect(toolbar).toBeVisible();
+  const [tb, view] = await Promise.all([toolbar.boundingBox(), reader.evaluate((e) => e.parentElement!.getBoundingClientRect().toJSON() as DOMRect)]);
+  expect(tb!.y >= view.top && tb!.y + tb!.height <= view.bottom, "selection bar inside the visible reader").toBe(true);
   await toolbar.getByRole("button", { name: "标记" }).click();
   const marks = win.getByTestId("marks").getByTestId("mark-item");
   await expect(marks).toHaveCount(1);
