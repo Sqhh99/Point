@@ -101,6 +101,15 @@ v0.2.3 第二步。不改版本号，不打 tag。
     - 先把 “techniques” 滚到视口上方；“页底” 改成 “正文下方”，取 `min(页底 − 30, 视口底 − 20)`，并断言它在最后一行下方 20px 以外。
     - 新增断言：选区必须以 “techniques” 开头，空选区不再能蒙混通过。
   - 本地验证：正常窗口和 1800×680 的短窗口都通过，两个目标的选区都是 “techniques”。去掉 `.endOfContent` 跟进（保护失效）后，两种窗口都失败，选区跳到整段 “…in the survey.”。
+- 评审（45932c4 之后）：点击文字标记时，确认闪烁画成了每个词一个框（例如 12 个），相邻词的框重叠处颜色更深。
+  - 原因：span 层每个词一个叶子 span，`Range.getClientRects()` 因此按词返回矩形，标记存下的 rects 也是按词的。`PageRect` 的约定是“每行一个”。
+  - 修复：`pdf-tj-geom.ts` 新增 `mergeLineRects`。纵向范围重叠至少为较矮者一半的矩形算同一行，取并集（left..right、top..bottom）。`PdfView.tsx` 把 rects 交给 `SelectionOverlay` 前先合并。已存的标记不改，跳转行为不变。
+  - 单测：`pdf-tj-geom.test.ts` 覆盖词框重叠、上标、只相交 2px 的相邻两行（不合并）、空输入和单个矩形，并确认不改动输入。
+  - e2e：`region-selection.spec.ts` 的文字标记改为选整行，并断言确认框只有 1 个。修复前是 16 个，用例失败；修复后通过。
+
+| 确认闪烁（浅色） | 确认闪烁（深色） |
+|---|---|
+| ![confirm light](https://raw.githubusercontent.com/Sqhh99/Point/975e39e552b40b9a322148e0892a11f65eff8944/docs/assets/pr/2026-10-28-pdf-span-text-confirm-light.png) | ![confirm dark](https://raw.githubusercontent.com/Sqhh99/Point/975e39e552b40b9a322148e0892a11f65eff8944/docs/assets/pr/2026-10-28-pdf-span-text-confirm-dark.png) |
 
 ## 版本号
 不升版本。这是 v0.2.3 的一步，版本号和 tag 另行处理。
@@ -108,7 +117,7 @@ v0.2.3 第二步。不改版本号，不打 tag。
 ## 如何测试
 - [x] `pnpm lint`
 - [x] `pnpm typecheck`
-- [x] `pnpm test`：core 211 通过；main 787 通过、14 跳过
+- [x] `pnpm test`：core 211 通过；main 789 通过、14 跳过
 - [x] e2e（Linux + xvfb，`apps/desktop`：`pnpm build && POINT_E2E_KEYRING=1 xvfb-run -a -s "-screen 0 2400x1700x24" pnpm exec playwright test`）：47/47 通过
   - `POINT_E2E_KEYRING=1` 配合本地临时的 safeStorage 桩（没有提交）。不设时 `region-selection.spec.ts` 会因本机没有系统钥匙串（`系统加密不可用`）失败，相关用例跳过；之前记录的“40 通过、6 跳过、1 失败”就是这个原因，与本改动无关。
 - [ ] CI（Windows / macOS）

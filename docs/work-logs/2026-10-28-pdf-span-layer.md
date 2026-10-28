@@ -37,11 +37,12 @@
 1. 选区着色断言 `> 500` 在 macOS（478）和 Windows（479）失败。这是中线采样数量随平台抗锯齿变化，不是渲染 bug（Windows 截图估算的全区域着色比例 0.478，Linux 0.493）。改成按面积成比例：内部行框里干净纸面且着色的像素 / 行框面积 `>= 0.35`；实测（125% / 200%）：Linux 0.479 / 0.625，macOS 0.467 / 0.601，Windows 0.46 / 0.613。`::selection` 设成透明时比例为 0，用例失败。
 2. smoke “标记” 在 Windows 上 detach：测试在缩放重建前选中了旧层 span，重建后选区收起，工具条关闭。不是选区跟踪引起的重渲染。`PdfView.tsx` 的 cleanup 去掉 `--scale-factor` 标记旧层过期；测试等 `--scale-factor` 等于 `data-scale` 后再选。
 3. 第二轮 CI：macOS e2e 的拖到页底用例失败。macOS 窗口约 680px 高，100% 下页面可滚动，Playwright 合成拖动在这种情况下不扩展选区（关掉保护也一样，真实 X 输入正常），而且页底目标在视口外。测试改成 125%、先滚动、目标取正文下方的视口内空白，并断言选区以 “techniques” 开头。短窗口和正常窗口都通过；保护失效时都失败。
-4. 改动的文件：`apps/desktop/src/renderer/viewers/PdfView.tsx`、`apps/desktop/e2e/pdf-embedded-fonts.spec.ts`、`apps/desktop/e2e/smoke.spec.ts`，以及本日志和 PR 记录。
+4. 评审：确认闪烁按词画框，重叠处更深。新增 `mergeLineRects`（纵向重叠 ≥ 较矮者一半算同一行，取并集），`PdfView.tsx` 交给 `SelectionOverlay` 前合并；已存标记和跳转不变。单测覆盖重叠、上标和相邻行。e2e 选整行后确认框从 16 个变为 1 个。截图：`docs/assets/pr/2026-10-28-pdf-span-text-confirm-{light,dark}.png`。
+5. 改动的文件：`apps/desktop/src/renderer/viewers/PdfView.tsx`、`apps/desktop/e2e/pdf-embedded-fonts.spec.ts`、`apps/desktop/e2e/smoke.spec.ts`、`apps/desktop/src/renderer/viewers/pdf-tj-geom.ts`、`apps/desktop/test/main/pdf-tj-geom.test.ts`、`apps/desktop/e2e/region-selection.spec.ts`、两张确认闪烁截图，以及本日志和 PR 记录。
 
 ## 验证
 - within1px：旧 0.494 / 0.455 / 0.298 / 0.264 → 新 **0.955 / 0.938 / 0.938 / 0.938**（178/178）。
-- lint、typecheck 通过。单测：core 211 通过；main 787 通过、14 跳过。
+- lint、typecheck 通过。单测：core 211 通过；main 789 通过、14 跳过。
 - e2e（CI 修复后重跑）：47/47 通过（`POINT_E2E_KEYRING=1`，配合本地 safeStorage 桩，没有提交）。之前的“40 通过、6 跳过、1 失败”是本机没有钥匙串造成的。
 - 截图：`docs/assets/pr/2026-10-28-pdf-span-selection-{light,dark}.png`，以及 `docs/assets/pr/2026-10-28-pdf-span-selection-200-cross-{light,dark}.png`。
 
