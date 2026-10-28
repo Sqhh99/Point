@@ -33,10 +33,15 @@
 6. 200% 跨段截图（浅色 + 深色），经过最差的词 “confidence”（dx −11px）。
 7. 上标 `5th` / `2nd` 的选区空隙记为已知问题。
 
+## CI 修复（第一轮 CI 后）
+1. 选区着色断言 `> 500` 在 macOS（478）和 Windows（479）失败。这是中线采样数量随平台抗锯齿变化，不是渲染 bug（Windows 截图估算的全区域着色比例 0.478，Linux 0.493）。改成按面积成比例：内部行框里干净纸面且着色的像素 / 行框面积 `>= 0.35`；Linux 为 0.479（125%）和 0.625（200%）。`::selection` 设成透明时比例为 0，用例失败。
+2. smoke “标记” 在 Windows 上 detach：测试在缩放重建前选中了旧层 span，重建后选区收起，工具条关闭。不是选区跟踪引起的重渲染。`PdfView.tsx` 的 cleanup 去掉 `--scale-factor` 标记旧层过期；测试等 `--scale-factor` 等于 `data-scale` 后再选。
+3. 改动的文件：`apps/desktop/src/renderer/viewers/PdfView.tsx`、`apps/desktop/e2e/pdf-embedded-fonts.spec.ts`、`apps/desktop/e2e/smoke.spec.ts`，以及本日志和 PR 记录。
+
 ## 验证
 - within1px：旧 0.494 / 0.455 / 0.298 / 0.264 → 新 **0.955 / 0.938 / 0.938 / 0.938**（178/178）。
 - lint、typecheck 通过。单测：core 211 通过；main 787 通过、14 跳过。
-- e2e（评审修改后重跑）：40 通过、6 跳过、1 失败。失败的是 region-selection，原因是本机没有钥匙串；本地换 safeStorage 桩并设置 `POINT_E2E_KEYRING=1` 后通过，都没有提交。
+- e2e（CI 修复后重跑）：47/47 通过（`POINT_E2E_KEYRING=1`，配合本地 safeStorage 桩，没有提交）。之前的“40 通过、6 跳过、1 失败”是本机没有钥匙串造成的。
 - 截图：`docs/assets/pr/2026-10-28-pdf-span-selection-{light,dark}.png`，以及 `docs/assets/pr/2026-10-28-pdf-span-selection-200-cross-{light,dark}.png`。
 
 ## 遗留事项

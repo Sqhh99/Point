@@ -117,6 +117,9 @@ function Page({ doc, n, scale, size, marks, rects, selection }: { doc: PDFDocume
     return () => {
       live = false;
       task?.cancel();
+      // The spans stay until the rebuild replaces them; dropping the scale marks them as superseded
+      // (a selection made in them now is lost when the new layer lands).
+      t.style.removeProperty("--scale-factor");
       selectionLayers.delete(t);
     };
   }, [near, doc, n, scale]);

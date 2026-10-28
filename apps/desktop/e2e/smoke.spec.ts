@@ -709,7 +709,12 @@ test("PDF, Word and Excel open in their original look with one shared bar, marks
   await bar.getByRole("button", { name: "恢复 100%" }).click();
   await expect(bar.getByRole("button", { name: "恢复 100%" })).toBeDisabled();
   await expect(bar.getByTestId("capture-button")).toBeVisible();
-  // Zoom remounts pages; wait until page 2's text layer is back before selecting (same selector the CI uses).
+  // Zoom rebuilds the text layers. Until page 2's layer is rebuilt for the current scale (--scale-factor equals
+  // data-scale), its spans are the previous zoom's: selecting them works, but the rebuild then replaces them,
+  // the selection collapses and the bar closes under the click (Windows CI, "element was detached").
+  await expect
+    .poll(() => reader.locator('[data-page="2"]').evaluate((el) => (el.querySelector<HTMLElement>(".pdf-text")?.style.getPropertyValue("--scale-factor") ?? "") === el.getAttribute("data-scale")))
+    .toBe(true);
   await selectIn(win, '[data-page="2"] .pdf-text span', "Viewer page two");
   await expect(toolbar).toBeVisible();
   await toolbar.getByRole("button", { name: "标记" }).click();

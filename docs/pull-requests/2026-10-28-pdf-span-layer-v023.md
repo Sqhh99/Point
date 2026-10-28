@@ -81,6 +81,18 @@ v0.2.3 第二步。不改版本号，不打 tag。
 - [x] 测试
 - [x] 文档
 
+## CI 修复（第一轮 CI 后）
+- `pdf-embedded-fonts.spec.ts` 选区着色断言：
+  - 原断言是中线采样里着色像素数 `> 500`。macOS 得 478、Windows 得 479，Linux 得 541。
+  - 原因：这是采样数量问题，不是渲染 bug。中线行只占行宽约 14%，能采到多少“干净纸面”像素取决于各平台的字形抗锯齿。用 Windows CI 截图在同样几何下估算，全区域的着色比例为 0.478，Linux 为 0.493，只低约 3%。
+  - 新断言按面积成比例：在选中的内部行框内（逐设备像素，四边各内缩 2px），统计“干净纸面且被着色”的像素占行框面积的比例，要求 `>= 0.35`。Linux：125% 为 0.479（37044 / 77289），200% 为 0.625（54216 / 86729）。macOS / Windows 的实际值见 CI 日志中的 `PDF-SELECTION-TINT`。
+  - 反向验证：把 `::selection` 设成透明后，比例为 0，用例失败。旧的 `> 500` 在这种情况下反而会通过（它只数干净纸面，不看是否着色）。
+  - 中线颜色、`darker` 和行间空隙检查不变；`within1px >= 0.90` 不变。
+- `smoke.spec.ts:672` 在 Windows 上点 “标记” 时报 “element was detached”：
+  - 不是选区跟踪导致工具条重渲染：`trackSelection` 不会收起选区，也不会重挂工具条。
+  - 原因是测试竞态：点 “恢复 100%” 后约 45ms，`selectIn` 就选中了第 2 页上一档缩放的旧 span。重建完成后 `replaceChildren` 把它们换掉，选区收起，工具条关闭，按钮随之卸载。main 上就有同样的写法，本 PR 多了一次 operator list 的 await，窗口变大了。本地把点击和选择放进同一个 evaluate 可以稳定复现。
+  - 修复：`PdfView.tsx` 在页面 effect 的 cleanup 里去掉 `--scale-factor`，标记旧层已过期（它只用作就绪标记）。测试在选择前等待第 2 页 `.pdf-text` 的 `--scale-factor` 等于 `data-scale`。本地 smoke 16/16 通过。
+
 ## 版本号
 不升版本。这是 v0.2.3 的一步，版本号和 tag 另行处理。
 
@@ -88,9 +100,8 @@ v0.2.3 第二步。不改版本号，不打 tag。
 - [x] `pnpm lint`
 - [x] `pnpm typecheck`
 - [x] `pnpm test`：core 211 通过；main 787 通过、14 跳过
-- [x] e2e（Linux + xvfb，`apps/desktop`：`pnpm build && xvfb-run -a -s "-screen 0 2400x1700x24" pnpm exec playwright test`）：40 通过、6 跳过、1 失败
-  - 失败的是 `region-selection.spec.ts`，原因是本机没有系统钥匙串（`系统加密不可用`），与本改动无关。
-  - 本地临时换成 safeStorage 桩，并设置 `POINT_E2E_KEYRING=1`（都没有提交）后，该用例通过。
+- [x] e2e（Linux + xvfb，`apps/desktop`：`pnpm build && POINT_E2E_KEYRING=1 xvfb-run -a -s "-screen 0 2400x1700x24" pnpm exec playwright test`）：47/47 通过
+  - `POINT_E2E_KEYRING=1` 配合本地临时的 safeStorage 桩（没有提交）。不设时 `region-selection.spec.ts` 会因本机没有系统钥匙串（`系统加密不可用`）失败，相关用例跳过；之前记录的“40 通过、6 跳过、1 失败”就是这个原因，与本改动无关。
 - [ ] CI（Windows / macOS）
 
 ## 检查项

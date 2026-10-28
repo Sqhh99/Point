@@ -286,7 +286,23 @@ async function checkSelection(win: Win, z: number, endWord: string) {
     }
   }
   tints.sort((a, b) => a - b);
-  expect(tints.length).toBeGreaterThan(500);
+  // Painted selection, proportional to the selected area: of the device pixels inside the inner selected
+  // lines' boxes, the share that is clear paper and carries the tint. The mid-row sample count above is ~14 % of
+  // a line's width and depends on glyph antialiasing (125 %: Linux 541, Windows 479, macOS 478), so its absolute
+  // size is not asserted. The ratio is 0 when no selection is painted; Linux measures 0.48 (125 %) and 0.63 (200 %).
+  const dpr = W / clip.width;
+  let area = 0, clear = 0, tinted = 0;
+  for (const ln of lines.slice(1, -1))
+    for (let y = Math.ceil((ln.t - clip.y) * dpr) + 2; y < Math.floor((ln.b - clip.y) * dpr) - 2; y++)
+      for (let x = Math.ceil((ln.l - clip.x) * dpr) + 2; x < Math.floor((ln.r - clip.x) * dpr) - 2; x++) {
+        area++;
+        if (!clearPaper(x, y)) continue;
+        clear++;
+        const c = px(selected, x, y), p = px(plain, x, y);
+        if (Math.abs(c[0]! - p[0]!) + Math.abs(c[1]! - p[1]!) + Math.abs(c[2]! - p[2]!) >= 15) tinted++;
+      }
+  console.log("PDF-SELECTION-TINT", JSON.stringify({ z, dpr, midSamples: tints.length, area, clear, tinted, tintedOfArea: +(tinted / area).toFixed(3), tintedOfClear: +(tinted / clear).toFixed(4) }));
+  expect(tinted / area, `${z}%: tinted clear paper / selected line area (${tinted} / ${area})`).toBeGreaterThanOrEqual(0.35);
   const median = tints[tints.length >> 1]!;
   const tint = chans.map((c) => c.sort((x, y) => x - y)[c.length >> 1]!);
   // Light theme: --accent at the layer's 25 % over white paper.
