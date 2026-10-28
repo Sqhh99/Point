@@ -108,6 +108,7 @@ function Page({ doc, n, scale, size, marks, rects, selection }: { doc: PDFDocume
         const family = (name: string) => `${document.fonts.check(`10px "${name}"`) ? `"${name}", ` : ""}${families.get(name) ?? "sans-serif"}`;
         renderTextLayer(t, runsToLines(geom.runs), viewport, family);
         closeLineGaps(t);
+        trackSelection(t);
         if (live) setDone((d) => d + 1);
       } catch (e) {
         if ((e as { name?: string }).name !== "RenderingCancelledException") console.warn("pdf page", n, e);
@@ -116,6 +117,7 @@ function Page({ doc, n, scale, size, marks, rects, selection }: { doc: PDFDocume
     return () => {
       live = false;
       task?.cancel();
+      selectionLayers.delete(t);
     };
   }, [near, doc, n, scale]);
 
@@ -334,7 +336,9 @@ function renderTextLayer(layer: HTMLElement, lines: TjLineRun[][], viewport: Pag
       ctx.font = `${size}px ${fam}`;
       const w = ctx.measureText(r.str).width;
       const adv = (r.advance ?? 0) * viewport.scale;
-      return { r, fam, size, lh, left: x, top: y - asc * size, right: x + adv, bottom: y - asc * size + lh * size, sx: w > 0 && adv > 0 ? adv / w : 1, space: ctx.measureText(" ").width };
+      // No advance or nothing measurable (empty / unsupported glyphs): no stretch rather than NaN or Infinity.
+      const sx = w > 0 && adv > 0 && Number.isFinite(adv / w) ? adv / w : 1;
+      return { r, fam, size, lh, left: x, top: y - asc * size, right: x + adv, bottom: y - asc * size + lh * size, sx, space: ctx.measureText(" ").width };
     });
     const left = Math.min(...runs.map((x) => x.left));
     const top = Math.min(...runs.map((x) => x.top));
@@ -344,16 +348,82 @@ function renderTextLayer(layer: HTMLElement, lines: TjLineRun[][], viewport: Pag
     runs.forEach((x, i) => {
       const s = document.createElement("span");
       s.textContent = x.r.space ? `${x.r.str} ` : x.r.str;
-      Object.assign(s.style, { left: `${x.left - left}px`, top: `${x.top - top}px`, fontSize: `${x.size}px`, fontFamily: x.fam, lineHeight: String(x.lh), transform: `scaleX(${x.sx})` });
+      // scaleX from the left edge, so the run keeps its PDF x (style.css sets it too; explicit here).
+      Object.assign(s.style, { left: `${x.left - left}px`, top: `${x.top - top}px`, fontSize: `${x.size}px`, fontFamily: x.fam, lineHeight: String(x.lh), transform: `scaleX(${x.sx})`, transformOrigin: "0 0" });
       // The word space reaches the next word, so a selection has no holes in justified lines.
       const next = runs[i + 1];
-      if (x.r.space && next) s.style.wordSpacing = `${(next.left - x.right) / x.sx - x.space}px`;
+      // Never negative: a negative word-spacing would pull the next word's hit area over this one.
+      if (x.r.space && next) s.style.wordSpacing = `${Math.max(0, (next.left - x.right) / x.sx - x.space)}px`;
       el.append(s);
     });
     frag.append(el, document.createElement("br"));
   }
   probe.remove();
   layer.append(frag);
+}
+
+/**
+ * pdf.js TextLayer's selection guard (4.10 `#enableGlobalSelectionListener` / `#bindMouse`), for this span layer.
+ * Each layer ends with a `.endOfContent` div; while selecting (`.selecting`) it covers the whole layer under the
+ * spans. In Chromium it is moved right after the selection's moving end, so dragging into a line gap or below the
+ * text hits it and the selection stays where it was instead of jumping to the end of the layer. Inside a
+ * `.pdf-line` it is offset back to the layer's origin so it still covers the whole layer.
+ */
+const selectionLayers = new Map<HTMLElement, HTMLDivElement>();
+let selectionListening = false;
+let prevRange: Range | null = null;
+
+function resetSelectionLayer(end: HTMLDivElement, layer: HTMLElement) {
+  layer.append(end);
+  Object.assign(end.style, { left: "", top: "", width: "", height: "" });
+  layer.classList.remove("selecting");
+}
+
+function trackSelection(layer: HTMLElement) {
+  const end = document.createElement("div");
+  end.className = "endOfContent";
+  layer.append(end);
+  selectionLayers.set(layer, end);
+  layer.onpointerdown = () => layer.classList.add("selecting");
+  if (selectionListening) return;
+  selectionListening = true;
+  let pointerDown = false;
+  const resetAll = () => selectionLayers.forEach(resetSelectionLayer);
+  document.addEventListener("pointerdown", () => (pointerDown = true));
+  document.addEventListener("pointerup", () => ((pointerDown = false), resetAll()));
+  window.addEventListener("blur", () => ((pointerDown = false), resetAll()));
+  document.addEventListener("keyup", () => !pointerDown && resetAll());
+  document.addEventListener("selectionchange", () => {
+    const sel = document.getSelection();
+    if (!sel || sel.rangeCount === 0) return resetAll();
+    const active = new Set<HTMLElement>();
+    for (let i = 0; i < sel.rangeCount; i++) {
+      const r = sel.getRangeAt(i);
+      for (const l of selectionLayers.keys()) if (r.intersectsNode(l)) active.add(l);
+    }
+    for (const [l, end] of selectionLayers) {
+      if (active.has(l)) l.classList.add("selecting");
+      else resetSelectionLayer(end, l);
+    }
+    const range = sel.getRangeAt(0);
+    const modifyStart = !!prevRange && (range.compareBoundaryPoints(Range.END_TO_END, prevRange) === 0 || range.compareBoundaryPoints(Range.START_TO_END, prevRange) === 0);
+    let anchor: Node | null = modifyStart ? range.startContainer : range.endContainer;
+    if (anchor.nodeType === Node.TEXT_NODE) anchor = anchor.parentNode;
+    if (anchor && !modifyStart && range.endOffset === 0) {
+      do {
+        while (anchor && !anchor.previousSibling) anchor = anchor.parentNode;
+        anchor = anchor?.previousSibling ?? null;
+      } while (anchor && !anchor.childNodes.length);
+    }
+    prevRange = range.cloneRange();
+    const parent = anchor?.parentElement;
+    const layer = parent?.closest<HTMLElement>(".pdf-text");
+    const end = layer && selectionLayers.get(layer);
+    if (!anchor || !parent || !layer || !end || anchor === end) return;
+    const off = parent === layer ? { x: 0, y: 0 } : { x: parent.offsetLeft, y: parent.offsetTop };
+    Object.assign(end.style, { left: `${-off.x}px`, top: `${-off.y}px`, width: `${layer.clientWidth}px`, height: `${layer.clientHeight}px` });
+    parent.insertBefore(end, modifyStart ? anchor : anchor.nextSibling);
+  });
 }
 
 /**

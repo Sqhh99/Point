@@ -317,3 +317,116 @@ async function checkSelection(win: Win, z: number, endWord: string) {
   expect(gapRows, `${z}%: rows of untinted paper between selected lines`).toEqual([]);
 }
 
+
+/** Client box of the nth occurrence of `w` in page 1's text layer. */
+const wordBox = (win: Win, w: string, nth = 0) =>
+  page1(win).evaluate(
+    (el, [w, nth]) => {
+      let k = 0;
+      for (const s of el.querySelectorAll<HTMLElement>(".pdf-line > span")) {
+        const t = s.firstChild as Text | null;
+        if (!t || t.nodeType !== 3) continue;
+        let i = -1;
+        while ((i = t.data.indexOf(w as string, i + 1)) >= 0)
+          if (k++ === nth) {
+            const r = document.createRange();
+            r.setStart(t, i);
+            r.setEnd(t, i + (w as string).length);
+            const b = r.getBoundingClientRect();
+            return { l: b.left, r: b.right, t: b.top, b: b.bottom };
+          }
+      }
+      return null;
+    },
+    [w, nth] as const
+  );
+
+test("dragging from a word into a line gap or below the text keeps the selection local (.endOfContent, .selecting)", async () => {
+  const win = await app.firstWindow();
+  await setZoom(win, 100);
+  const start = (await wordBox(win, "techniques"))!;
+  const short = (await wordBox(win, "survey."))!; // last line of paragraph 1: empty paper to its right
+  const page = (await page1(win).boundingBox())!;
+  const lastLine = await page1(win).evaluate((el) => Math.max(...[...el.querySelectorAll<HTMLElement>(".pdf-line > span")].map((s) => s.getBoundingClientRect().bottom)));
+  expect(start && short).toBeTruthy();
+  const gapX = page.x + page.width - 60;
+  expect(gapX > short.r + 40, "empty paper right of the paragraph's short last line").toBe(true);
+  expect(page.y + page.height - 30 > lastLine + 20, "empty paper below the last text line").toBe(true);
+  const targets = [
+    { name: "line gap", x: gapX, y: (short.t + short.b) / 2, maxBottom: short.b + 2 },
+    { name: "page bottom", x: page.x + page.width / 2, y: page.y + page.height - 30, maxBottom: Infinity }
+  ];
+  for (const tg of targets) {
+    await win.evaluate(() => getSelection()!.removeAllRanges());
+    const sx = start.l + 2, sy = (start.t + start.b) / 2;
+    await win.mouse.move(sx, sy);
+    await win.mouse.down();
+    await win.mouse.move(sx + 10, sy, { steps: 2 });
+    await win.mouse.move(tg.x, tg.y, { steps: 1 });
+    await win.waitForTimeout(100);
+    const during = await page1(win).evaluate((el) => {
+      const end = el.querySelector<HTMLElement>(".pdf-text .endOfContent");
+      return { selecting: el.querySelector(".pdf-text")!.classList.contains("selecting"), endInLine: !!end?.parentElement?.classList.contains("pdf-line") };
+    });
+    await win.mouse.up();
+    await win.waitForTimeout(150);
+    const sel = await win.evaluate(() => {
+      const s = getSelection()!;
+      const rects = s.rangeCount ? [...s.getRangeAt(0).getClientRects()].filter((r) => r.width > 1) : [];
+      return { text: s.toString().replace(/\s+/g, " ").trim(), bottom: Math.max(0, ...rects.map((r) => r.bottom)) };
+    });
+    const after = await page1(win).evaluate((el) => ({ selecting: el.querySelector(".pdf-text")!.classList.contains("selecting"), endLast: el.querySelector(".pdf-text")!.lastElementChild?.classList.contains("endOfContent") }));
+    console.log(`PDF-SELECTION-LOCAL ${JSON.stringify({ target: tg.name, during, text: sel.text, bottom: sel.bottom })}`);
+    expect(during.selecting, `${tg.name}: layer is .selecting while dragging`).toBe(true);
+    expect(during.endInLine, `${tg.name}: .endOfContent follows the selection end into its line`).toBe(true);
+    expect(sel.text, `${tg.name}: selection did not jump to the end of the layer`).not.toContain("each sounding");
+    expect(sel.text, `${tg.name}: selection did not jump to a later paragraph`).not.toContain("Tidal reduction");
+    expect(sel.bottom, `${tg.name}: selection stays on the lines the drag crossed`).toBeLessThanOrEqual(tg.maxBottom);
+    expect(after, `${tg.name}: .selecting off and .endOfContent back at the layer end after pointerup`).toEqual({ selecting: false, endLast: true });
+  }
+  await win.evaluate(() => getSelection()!.removeAllRanges());
+});
+
+test("200 % selection across paragraphs, framing the worst-drift word (screenshots)", async () => {
+  const win = await app.firstWindow();
+  await setZoom(win, 200);
+  const center = win.locator("main.center");
+  const vis = (await center.boundingBox())!;
+  const bar = (await win.getByTestId("reader-bar").boundingBox())!;
+  const view = { x: vis.x, y: bar.y + bar.height, width: vis.width - 16, height: vis.y + vis.height - 16 - (bar.y + bar.height) };
+  // Page's left edge in view as far as it fits (at 200 % the page is about as wide as the view), the passage a few lines down.
+  const a0 = (await wordBox(win, "According"))!;
+  const pg0 = (await page1(win).boundingBox())!;
+  await center.evaluate((e, [dx, dy]) => ((e.scrollLeft += dx!), (e.scrollTop += dy!)), [Math.floor(pg0.x - view.x - 24), Math.floor(a0.t - view.y - 160)]);
+  await win.waitForTimeout(150);
+  // Paragraph 1 line 2 (with the "5th" superscript) through the worst-drift word ("confidence" at 200 %) into
+  // paragraph 2 line 2 (with "2nd").
+  const a = (await wordBox(win, "According"))!;
+  const z = (await wordBox(win, "moving"))!;
+  const sx = a.l + 1, sy = (a.t + a.b) / 2, ex = z.r - 1, ey = (z.t + z.b) / 2;
+  await win.mouse.move(sx, sy);
+  await win.mouse.down();
+  for (let i = 1; i <= 16; i++) await win.mouse.move(sx + ((ex - sx) * i) / 16, sy + ((ey - sy) * i) / 16);
+  await win.mouse.up();
+  await win.waitForTimeout(300);
+  const text = (await win.evaluate(() => getSelection()!.toString())).replace(/\s+/g, " ").trim();
+  expect(text.startsWith("According")).toBe(true);
+  expect(text).toContain("confidence");
+  expect(text.endsWith("moving")).toBe(true);
+  const r = await win.evaluate(() => {
+    const rs = [...getSelection()!.getRangeAt(0).getClientRects()].filter((x) => x.width > 1);
+    return { l: Math.min(...rs.map((x) => x.left)), r: Math.max(...rs.map((x) => x.right)), t: Math.min(...rs.map((x) => x.top)), b: Math.max(...rs.map((x) => x.bottom)) };
+  });
+  // Frame: from the page's left edge and one line above the selection (with the selection bar) to just past it.
+  // The paper is white in both themes; the dark shot shows the dark selection bar over the same --accent selection.
+  const pg = (await page1(win).boundingBox())!;
+  const x0 = Math.max(view.x, pg.x - 24), y0 = Math.max(view.y, r.t - 90);
+  const clip = { x: x0, y: y0, width: Math.min(view.x + view.width, r.r + 24) - x0, height: Math.min(view.y + view.height, r.b + 24) - y0 };
+  mkdirSync(shots, { recursive: true });
+  await win.screenshot({ path: join(shots, `pdf-embedded-selection-200-cross-${process.platform}.png`), clip });
+  await win.emulateMedia({ colorScheme: "dark" });
+  await win.waitForTimeout(150);
+  await win.screenshot({ path: join(shots, `pdf-embedded-selection-200-cross-${process.platform}-dark.png`), clip });
+  await win.emulateMedia({ colorScheme: "light" });
+  await win.evaluate(() => getSelection()!.removeAllRanges());
+});

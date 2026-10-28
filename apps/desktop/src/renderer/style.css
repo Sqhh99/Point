@@ -434,8 +434,12 @@ button.link.active { color: var(--accent); }
 .pdf-text span, .pdf-text br { position: absolute; white-space: pre; color: transparent; transform-origin: 0% 0%; cursor: text; }
 .pdf-text > :not(.markedContent), .pdf-text .markedContent span:not(.markedContent) { z-index: 1; }
 .pdf-text span.markedContent { top: 0; height: 0; }
+/* Line wrappers of the span layer: no stacking context and no hit area of their own, so the word spans and
+   .endOfContent (moved into a line while selecting) share the layer's stacking context, as in pdf.js. */
+.pdf-text .pdf-line { z-index: auto; pointer-events: none; }
+.pdf-text .pdf-line > span { z-index: 1; pointer-events: auto; }
 .pdf-text span[role="img"] { user-select: none; cursor: default; }
-.pdf-text .endOfContent { display: block; position: absolute; inset: 100% 0 0; z-index: 0; cursor: default; user-select: none; }
+.pdf-text .endOfContent { display: block; position: absolute; inset: 100% 0 0; z-index: 0; cursor: default; user-select: none; pointer-events: auto; }
 .pdf-text.selecting .endOfContent { top: 0; }
 .pdf-text ::selection { background: var(--accent); color: transparent; }
 .pdf-text br::selection { background: transparent; }
