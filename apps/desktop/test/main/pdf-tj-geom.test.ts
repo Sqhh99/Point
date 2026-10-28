@@ -8,6 +8,7 @@ import {
   PDFJS_4_10_TEXT_OPS,
   PDF_CSS_BASE,
   buildPageTextGeom,
+  mergeLineRects,
   runsToLines,
   walkRuns,
   type PageTextGeom,
@@ -267,3 +268,34 @@ function wordXcorr(
   }
   return { dx: -best.dx, dy: -best.dy };
 }
+
+describe("mergeLineRects", () => {
+  it("merges per-word rects into one box per line (overlapping words, superscript), keeps adjacent lines apart", () => {
+    // Two lines whose boxes touch by 2px (237–256 and 254–274), words overlap by 1px, a superscript run sits high on line 1.
+    const line1 = [
+      { x: 716, y: 237, w: 40, h: 19 },
+      { x: 755, y: 237, w: 60, h: 19 },
+      { x: 814, y: 237.5, w: 30, h: 18.5 },
+      { x: 1234, y: 238, w: 6, h: 11 }, // "th" superscript
+      { x: 1248, y: 237, w: 73, h: 19 }
+    ];
+    const line2 = [
+      { x: 716, y: 254, w: 80, h: 20 },
+      { x: 795, y: 254, w: 50, h: 20 },
+      { x: 844, y: 254, w: 70, h: 20 }
+    ];
+    const input = [...line2, ...line1].reverse();
+    const copy = structuredClone(input);
+    const merged = mergeLineRects(input);
+    expect(merged).toEqual([
+      { x: 716, y: 237, w: 605, h: 19 },
+      { x: 716, y: 254, w: 198, h: 20 }
+    ]);
+    expect(input).toEqual(copy);
+  });
+
+  it("keeps a single rect and an empty list as they are", () => {
+    expect(mergeLineRects([])).toEqual([]);
+    expect(mergeLineRects([{ x: 1, y: 2, w: 3, h: 4 }])).toEqual([{ x: 1, y: 2, w: 3, h: 4 }]);
+  });
+});

@@ -427,3 +427,26 @@ export function runsToLines(runs: TjGlyphRun[]): TjLineRun[][] {
   if (line.length) lines.push(line);
   return lines;
 }
+
+/**
+ * Merge per-word rects (one per leaf span from `Range.getClientRects()`) into one box per text line, so the
+ * SelectionOverlay draws `PageRect`s "one per text line" without darker overlaps. Two rects share a line when
+ * their vertical ranges overlap by at least half the shorter height; a line box is the union of its rects.
+ * Order: top to bottom, then left to right.
+ */
+export function mergeLineRects(rects: readonly PageRect[]): PageRect[] {
+  const lines: PageRect[] = [];
+  for (const r of [...rects].sort((a, b) => a.y - b.y || a.x - b.x)) {
+    const line = lines.find((l) => Math.min(l.y + l.h, r.y + r.h) - Math.max(l.y, r.y) >= Math.min(l.h, r.h) / 2);
+    if (!line) {
+      lines.push({ ...r });
+      continue;
+    }
+    const x1 = Math.max(line.x + line.w, r.x + r.w), y1 = Math.max(line.y + line.h, r.y + r.h);
+    line.x = Math.min(line.x, r.x);
+    line.y = Math.min(line.y, r.y);
+    line.w = x1 - line.x;
+    line.h = y1 - line.y;
+  }
+  return lines.sort((a, b) => a.y - b.y || a.x - b.x);
+}

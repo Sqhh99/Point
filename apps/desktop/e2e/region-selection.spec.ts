@@ -75,16 +75,17 @@ test("pending dashed overlay after capture; confirm flash on mark click (region 
   const regionItem = win.getByTestId("marks").getByTestId("mark-item").first();
   await expect(regionItem.locator("img")).toBeVisible();
 
-  // Text mark with rects on the same page.
-  await reader.locator('[data-page="1"] .pdf-line > span').first().evaluate((el) => {
-    const t = el.firstChild as Text;
+  // Text mark with rects on the same page: the whole first line (one leaf span per word → one rect per word).
+  await reader.locator('[data-page="1"] .pdf-line').first().evaluate((line) => {
+    const words = [...line.querySelectorAll<HTMLElement>("span")].filter((s) => s.firstChild?.nodeType === Node.TEXT_NODE);
+    const last = words.at(-1)!.firstChild as Text;
     const r = document.createRange();
-    r.setStart(t, 0);
-    r.setEnd(t, Math.min(12, t.data.length));
+    r.setStart(words[0]!.firstChild!, 0);
+    r.setEnd(last, last.data.length);
     const s = window.getSelection()!;
     s.removeAllRanges();
     s.addRange(r);
-    el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    line.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
   });
   const textBar = win.locator('[aria-label="选区操作"][data-kind="text"]');
   await expect(textBar).toBeVisible({ timeout: 5_000 });
@@ -109,7 +110,10 @@ test("pending dashed overlay after capture; confirm flash on mark click (region 
   // Click text mark → confirm highlight (same overlay component).
   const textItem = win.getByTestId("marks").getByTestId("mark-item").nth(1);
   await textItem.locator(".mark-body").click();
-  await expect(win.locator('[data-testid="selection-overlay"][data-mode="confirm"]').first()).toBeVisible();
+  const textConfirm = win.locator('[data-testid="selection-overlay"][data-mode="confirm"]');
+  await expect(textConfirm.first()).toBeVisible();
+  // One box per text line (merged from the per-word rects), not one per word.
+  expect(await textConfirm.count(), "text mark on one line → one confirm box").toBe(1);
   await win.screenshot({ path: join(shots, `text-confirm-${process.platform}.png`) });
   await win.emulateMedia({ colorScheme: "dark" });
   await win.waitForTimeout(120);

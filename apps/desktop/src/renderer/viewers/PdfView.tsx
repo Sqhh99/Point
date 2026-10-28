@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { PageRect } from "@point/core";
 import { SelectionOverlay, type OverlayMode } from "../SelectionOverlay";
 import { BundledCMaps, BundledStandardFonts } from "./pdf-assets";
-import { buildPageTextGeom, runsToLines, type PdfPageForGeom, type TjLineRun } from "./pdf-tj-geom";
+import { buildPageTextGeom, mergeLineRects, runsToLines, type PdfPageForGeom, type TjLineRun } from "./pdf-tj-geom";
 import type { PDFDocumentProxy, PageViewport, RenderTask } from "pdfjs-dist/legacy/build/pdf.mjs";
 
 type Pdfjs = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -142,7 +142,7 @@ function Page({ doc, n, scale, size, marks, rects, selection }: { doc: PDFDocume
       {rects.map((r, i) => (
         <div key={i} className="mark-rect" data-testid="mark-rect" style={{ left: r.x * scale / BASE, top: r.y * scale / BASE, width: r.w * scale / BASE, height: r.h * scale / BASE }} />
       ))}
-      {selection && selection.rects.length > 0 && <SelectionOverlay rects={selection.rects} scale={scale} mode={selection.mode} />}
+      {selection && selection.rects.length > 0 && <SelectionOverlay rects={mergeLineRects(selection.rects)} scale={scale} mode={selection.mode} />}
       <div className="textLayer pdf-text" ref={text} />
     </div>
   );
