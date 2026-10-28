@@ -76,7 +76,7 @@ test("pending dashed overlay after capture; confirm flash on mark click (region 
   await expect(regionItem.locator("img")).toBeVisible();
 
   // Text mark with rects on the same page.
-  await reader.locator('[data-page="1"] .pdf-text span').first().evaluate((el) => {
+  await reader.locator('[data-page="1"] .pdf-line > span').first().evaluate((el) => {
     const t = el.firstChild as Text;
     const r = document.createRange();
     r.setStart(t, 0);

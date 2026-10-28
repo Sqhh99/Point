@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makePdf } from "../../../packages/core/test/fixtures/make";
 
-// Requires `pnpm build` first. pdf.js text layer must hug the canvas glyphs at every zoom.
+// Requires `pnpm build` first. The text layer must hug the canvas glyphs at every zoom.
 const results = join(import.meta.dirname, "..", "test-results");
 const LINES = [
   "Depth determination is a fundamental task for a hydrographer, which requires specific",
@@ -56,7 +56,8 @@ test("PDF text layer: spans line up with the canvas glyphs at 100% and 125%, sel
       const cr = c.getBoundingClientRect();
       const d = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
       const k = c.width / cr.width;
-      const spans = [...layer.querySelectorAll<HTMLElement>("span")].filter((s) => s.textContent!.trim());
+      // One `.pdf-line` per text line; its box spans its word spans.
+      const spans = [...layer.querySelectorAll<HTMLElement>(".pdf-line")].filter((s) => s.textContent!.trim());
       return {
         lang: layer.getAttribute("lang"),
         docScroll: document.scrollingElement!.scrollHeight - document.scrollingElement!.clientHeight,

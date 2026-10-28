@@ -8,7 +8,10 @@ import {
   PDFJS_4_10_TEXT_OPS,
   PDF_CSS_BASE,
   buildPageTextGeom,
+  runsToLines,
+  walkRuns,
   type PageTextGeom,
+  type TjGlyphRun,
   type TjWordBox
 } from "../../src/renderer/viewers/pdf-tj-geom";
 
@@ -146,6 +149,30 @@ describe("buildPageTextGeom (hydro-serif)", () => {
     } finally {
       await doc.destroy();
     }
+  });
+});
+
+describe("walkRuns / runsToLines", () => {
+  const O = PDFJS_4_10_TEXT_OPS;
+  const fonts = { get: () => ({ ascent: 0.75, fontMatrix: [0.001, 0, 0, 0.001, 0, 0] }) };
+  const g = (s: string) => [...s].map((unicode) => ({ unicode, width: 500, isSpace: unicode === " " }));
+
+  it("scales size, ascent and advance by the text matrix (`1 Tf` + `12 0 0 12 x y Tm`)", () => {
+    const runs = walkRuns([O.beginText, O.setFont, O.setTextMatrix, O.showText], [[], ["F1", 1], [12, 0, 0, 12, 100, 700], [g("ab")]], fonts);
+    expect(runs).toEqual([{ str: "ab", x: 100, y: 700, fontName: "F1", fontSize: 12, ascent: 9, advance: 12 }]);
+  });
+
+  it("groups runs into lines, merges pieces of a word and marks word spaces", () => {
+    const run = (str: string, x: number, y: number, advance: number): TjGlyphRun => ({ str, x, y, fontName: "F1", fontSize: 10, ascent: 7.5, advance });
+    const lines = runsToLines([run("Dep", 10, 700, 15), run("th", 25.2, 700, 10), run(" ", 35.2, 700, 2.5), run("is", 37.7, 700, 10), run("next", 10, 688, 20)]);
+    expect(lines.map((l) => l.map((r) => [r.str, r.space]))).toEqual([
+      [
+        ["Depth", true],
+        ["is", false]
+      ],
+      [["next", false]]
+    ]);
+    expect(lines[0]![0]!.advance).toBeCloseTo(25.2);
   });
 });
 

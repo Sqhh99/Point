@@ -1,6 +1,6 @@
 /**
  * Rebuild PDF text geometry from the operator list (TJ / showText offsets).
- * Pure helpers next to PdfView — not in packages/core. Does not touch the TextLayer UI.
+ * Pure helpers next to PdfView — not in packages/core. PdfView builds its text layer spans from these runs.
  *
  * Pin: pdf.js 4.10.38 OPS ids below. Ascents come from commonObjs font metrics (FontFaceObject),
  * not from getTextContent styles.
@@ -188,16 +188,20 @@ export function walkRuns(fnArray: number[], argsArray: unknown[], objs: PdfFontO
       }
       const tx = x + pieceStartLocal * hScale;
       const ty = y + textRise;
-      const [ux, uy] = apply(ctm, ...apply(textMatrix, tx, ty));
-      const ascent = fm.ascent > 0 ? fm.ascent * fontSize : 0.8 * fontSize;
+      const m = mul(ctm, textMatrix);
+      const [ux, uy] = apply(m, tx, ty);
+      // Tf size and widths are in text space; Tm/CTM may scale them (e.g. `1 Tf` + `12 0 0 12 x y Tm`).
+      const sx = Math.hypot(m[0], m[1]);
+      const sy = Math.hypot(m[2], m[3]);
+      const size = fontSize * sy;
       runs.push({
         str: piece,
         x: ux,
         y: uy,
         fontName,
-        fontSize,
-        ascent,
-        advance: pieceAdvance * Math.abs(hScale)
+        fontSize: size,
+        ascent: (fm.ascent > 0 ? fm.ascent : 0.8) * size,
+        advance: pieceAdvance * Math.abs(hScale) * sx
       });
       piece = "";
       pieceAdvance = 0;
@@ -387,4 +391,39 @@ export function runsToWords(runs: TjGlyphRun[], viewport: Viewport): TjWordBox[]
     i = j;
   }
   return words;
+}
+
+/** One run of a text line, with whether a word space follows it (a gap the PDF drew as advance, not a glyph). */
+export type TjLineRun = TjGlyphRun & { space: boolean };
+
+/**
+ * Group runs (content order) into lines: same baseline, moving forward. A gap wider than 0.15 em between two
+ * runs is a word space (same threshold as runsToWords); pieces of one word are merged. Upright text only.
+ */
+export function runsToLines(runs: TjGlyphRun[]): TjLineRun[][] {
+  const lines: TjLineRun[][] = [];
+  let line: TjLineRun[] = [];
+  let right = 0;
+  for (const r of runs) {
+    if (!r.str || /^\s+$/.test(r.str)) continue;
+    const prev = line.at(-1);
+    const sameLine = prev && Math.abs(r.y - prev.y) < Math.max(0.5, prev.fontSize * 0.05) && r.x > right - prev.fontSize * 0.5;
+    if (prev && !sameLine) {
+      lines.push(line);
+      line = [];
+    } else if (prev) {
+      prev.space = r.x - right > Math.max(prev.fontSize, r.fontSize) * 0.15;
+      // Pieces of one word (split by a kerning adjustment) become one run spanning all of them.
+      if (!prev.space && r.fontName === prev.fontName && Math.abs(r.fontSize - prev.fontSize) < 0.01) {
+        prev.str += r.str;
+        right = r.x + (r.advance ?? 0);
+        prev.advance = right - prev.x;
+        continue;
+      }
+    }
+    line.push({ ...r, space: false });
+    right = r.x + (r.advance ?? 0);
+  }
+  if (line.length) lines.push(line);
+  return lines;
 }

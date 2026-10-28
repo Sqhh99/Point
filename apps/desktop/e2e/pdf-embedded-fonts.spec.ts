@@ -145,7 +145,6 @@ async function measureTile(win: Win, clip: { x: number; y: number; width: number
 }
 
 test("embedded-font justified PDF: layer glyphs vs canvas glyphs, and selection without ghosting, stripes or line gaps", async () => {
-  test.info().annotations.push({ type: "known-issue", description: "embedded-font drift, v0.2.3" });
   const win = await app.firstWindow();
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setBounds({ x: 0, y: 0, width: 2200, height: 1500 }));
   mkdirSync(shots, { recursive: true });
@@ -173,7 +172,7 @@ test("embedded-font justified PDF: layer glyphs vs canvas glyphs, and selection 
     // Denominator: every word of the page's text layer, wherever it is on the page (scrolled scan above).
     expect(d.total, `${z}%: text layer has words (a missing layer must not pass as 0/0)`).toBeGreaterThanOrEqual(30);
     expect(d.words, `${z}%: every word of the page's text layer was measured`).toBe(d.total);
-    expect(d.within1px, `${z}%: share of words within 1px of the canvas glyphs`).toBeGreaterThanOrEqual(0.2);
+    expect(d.within1px, `${z}%: share of words within 1px of the canvas glyphs`).toBeGreaterThanOrEqual(0.9);
   }
 
   // --- Selection: drawn the upstream way inside the PDF only.
