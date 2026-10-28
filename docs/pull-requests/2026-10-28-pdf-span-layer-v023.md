@@ -18,9 +18,11 @@ v0.2.3 第二步。不改版本号，不打 tag。
 - 选区保护（评审后补上，和 pdf.js 4.10 TextLayer 的做法一致）：
   - 每个 `.pdf-text` 末尾加一个 `.endOfContent` div。
   - 在层上 pointerdown 时加 `.selecting`；document 的 pointerup、窗口 blur、keyup 时去掉。selectionchange 时，选区涉及的层加 `.selecting`。
-  - selectionchange 时把 `.endOfContent` 移到选区活动端的后面。如果移进 `.pdf-line`，就用负的 left/top 把它拉回层的原点，仍然盖住整层。
+  - selectionchange 时把 `.endOfContent` 放到选区活动端所在 `.pdf-line`（及该行的 `<br>`）的后面，位于层的顶层，不进 `.pdf-line`。
+  - `.selecting` 时它从层顶盖到最后一行文字的底边（`textBottom`），不盖最后一行以下的纸面。最后一行以下由 Chromium 自己命中层，选区止于层的最后一段文字，这正是期望的终点；之前盖满整层时，Chromium 会把这里的点映射到前面某个任意的 span，选区塌掉。
+  - 指针落在层本身时，选区端点是子节点索引：取索引前一个节点，跳过 `.endOfContent` 自身。
   - `style.css`：`.pdf-line` 不建层叠上下文，也不接收指针（`z-index: auto; pointer-events: none`）。词 span 是 `z-index: 1; pointer-events: auto`，`.endOfContent` 是 `pointer-events: auto`。这样词 span 和 `.endOfContent` 在同一个层叠上下文里，和 pdf.js 一样。
-  - 结果：从段中拖到行间空白或页底时，选区停在原处，不会跳到层的末尾。
+  - 结果：拖到行间空白时选区停在该行，不会跳到后面的段落；拖到正文下方时选区止于页面最后一个词。
 - 健壮性：
   - 没有 advance 或实测宽度为 0 时，`sx = 1`，不会出现 NaN / Infinity。
   - 负的 `word-spacing` 截为 0。
@@ -38,8 +40,10 @@ v0.2.3 第二步。不改版本号，不打 tag。
 - e2e：
   - `pdf-embedded-fonts.spec.ts`：去掉 known-issue 注解，硬断言恢复为 `within1px >= 0.90`（100/125/150/200%）。分母仍是第 1 页全部词，仍要求 measured === total 且 total >= 30，`PDF-EMBEDDED-DRIFT` 日志保留。
   - `pdf-embedded-fonts.spec.ts` 新增两个用例：
-    - 选区保护：125% 下把 “techniques” 滚到视口上方，从它开始拖，分别拖到段末短行右侧的空白和正文下方的空白纸面（页内、视口内）。断言拖动时层有 `.selecting`，`.endOfContent` 跟进到所在行；选区不含 “each sounding”（页末）和 “Tidal reduction”（后面的段落），也不超出拖过的行；pointerup 后 `.selecting` 去掉，`.endOfContent` 回到层末尾。
-    - 关掉保护再跑，选区会跳到 “…improved accuracy.”，用例失败。
+    - 选区保护：125% 下把 “techniques” 滚到视口上方，从它开始拖。每次拖动先沿文字走到目标行的最后一个词（让选区真的长到那里），再离开文字进入空白：段末短行右侧的空白（目标词 “survey.”），以及正文下方的空白纸面（目标词，页面最后一个词 “sounding.”）。
+    - 断言：选区以 “techniques” 开头，并以目标词结尾（`/in the survey\.$/`、`/…each sounding\.$/`）；选区底边不超出目标行 2px；拖动时层有 `.selecting`，`.endOfContent` 紧跟在以目标词结尾的 `.pdf-line`（及其 `<br>`）之后；pointerup 后 `.selecting` 去掉，`.endOfContent` 回到层末尾。
+    - 本地：行间空白 32 个词，底边 275 ≤ 276；正文下方 160 个词，以 “each sounding.” 结尾，底边 530 ≤ 532。
+    - 关掉保护（不调用 `trackSelection`）再跑：行间空白那次选区跳到 “…echo sounder calibration.”（120 个词，底边 452 > 276），用例失败。
     - 200% 跨段选择截图。
   - `pdf-text-layer.spec.ts`：
     - 改为逐个 `.pdf-line > span` 词测量。每个词用 Range 取非空白文字的框，和画布上按 0.2em 间隙切出的墨迹词比较左右边缘，避免逐词漂移被整行框掩盖。
@@ -85,13 +89,23 @@ v0.2.3 第二步。不改版本号，不打 tag。
 - `pdf-embedded-fonts.spec.ts` 选区着色断言：
   - 原断言是中线采样里着色像素数 `> 500`。macOS 得 478、Windows 得 479，Linux 得 541。
   - 原因：这是采样数量问题，不是渲染 bug。中线行只占行宽约 14%，能采到多少“干净纸面”像素取决于各平台的字形抗锯齿。用 Windows CI 截图在同样几何下估算，全区域的着色比例为 0.478，Linux 为 0.493，只低约 3%。
-  - 新断言按面积成比例：在选中的内部行框内（逐设备像素，四边各内缩 2px），统计“干净纸面且被着色”的像素占行框面积的比例，要求 `>= 0.35`。实测（125% / 200%）：Linux 0.479（37044 / 77289）/ 0.625（54216 / 86729），macOS CI 0.467 / 0.601，Windows CI 0.46 / 0.613（见 CI 日志 `PDF-SELECTION-TINT`）。
-  - 反向验证：把 `::selection` 设成透明后，比例为 0，用例失败。旧的 `> 500` 在这种情况下反而会通过（它只数干净纸面，不看是否着色）。
+  - 新断言按选中文字成比例：选中行框内（含首末行）“干净纸面且被着色”的设备像素，除以选中词的几何面积。词面积取自同一份 pdf.js 在 Node 里算出的 `PageTextGeom.words`（PageRect，100%），乘 k²·dpr²（k = 缩放 / 100）。比例与平台抗锯齿和窗口大小无关；没有着色时为 0。
+  - 实测（tinted / 词面积；125% 91 个词，200% 47 个词；CI run 40757035570）：
+
+    | 平台 | 125% | 200% |
+    |---|---|---|
+    | Linux（xvfb） | 0.638 | 0.773 |
+    | Windows CI | 0.619 | 0.760 |
+    | macOS CI | 0.626 | 0.748 |
+
+  - 门槛 `TINT_MIN = 0.51`：三平台最小值 0.619 − 余量 0.10 = 0.519，向下取整到 0.51。代码里有同样的注释。
+  - 反向验证（CI run 40757997339，把 `::selection` 着色关掉）：macOS（job 123061980493）0.008，Windows（job 123061980914）0.007，两者都 < 0.51，用例失败。旧的 `> 500` 在这种情况下反而会通过（它只数干净纸面，不看是否着色）。
   - 中线颜色、`darker` 和行间空隙检查不变；`within1px >= 0.90` 不变。
 - `smoke.spec.ts:672` 在 Windows 上点 “标记” 时报 “element was detached”：
   - 不是选区跟踪导致工具条重渲染：`trackSelection` 不会收起选区，也不会重挂工具条。
   - 原因是测试竞态：点 “恢复 100%” 后约 45ms，`selectIn` 就选中了第 2 页上一档缩放的旧 span。重建完成后 `replaceChildren` 把它们换掉，选区收起，工具条关闭，按钮随之卸载。main 上就有同样的写法，本 PR 多了一次 operator list 的 await，窗口变大了。本地把点击和选择放进同一个 evaluate 可以稳定复现。
   - 修复：`PdfView.tsx` 在页面 effect 的 cleanup 里去掉 `--scale-factor`，标记旧层已过期（它只用作就绪标记）。测试在选择前等待第 2 页 `.pdf-text` 的 `--scale-factor` 等于 `data-scale`。本地 smoke 16/16 通过。
+  - 这一步不够：之后 Windows CI `--repeat-each=10` 仍是 9/10，本地 20 次重复也有 1 次失败（340 个用例中 1 个）。真正的根因见下文 “smoke:672 根因”。
 - 第二轮 CI：macOS e2e 的 `pdf-embedded-fonts.spec.ts:360`（拖到页底）失败，报 `.selecting` 为 false。之前这条在 macOS 上没跑到过（前面 147 失败后串行跳过）。
   - 不是产品 bug。macOS runner 的窗口只有约 680px 高，比 100% 的页面矮，`main.center` 可以纵向滚动。
   - 原因 1：这种情况下，在 100% 用 Playwright（CDP）合成的鼠标拖动，Chromium 不扩展选区，插入点跟着鼠标走，选区一直是空的。关掉选区保护也一样；用 xdotool 发真实 X 输入就能正常选中。所以 macOS 上 “行间空白” 那一步其实也是空选区，只是没被断言抓住。
@@ -102,14 +116,72 @@ v0.2.3 第二步。不改版本号，不打 tag。
     - 新增断言：选区必须以 “techniques” 开头，空选区不再能蒙混通过。
   - 本地验证：正常窗口和 1800×680 的短窗口都通过，两个目标的选区都是 “techniques”。去掉 `.endOfContent` 跟进（保护失效）后，两种窗口都失败，选区跳到整段 “…in the survey.”。
 - 评审（45932c4 之后）：点击文字标记时，确认闪烁画成了每个词一个框（例如 12 个），相邻词的框重叠处颜色更深。
-  - 原因：span 层每个词一个叶子 span，`Range.getClientRects()` 因此按词返回矩形，标记存下的 rects 也是按词的。`PageRect` 的约定是“每行一个”。
-  - 修复：`pdf-tj-geom.ts` 新增 `mergeLineRects`。纵向范围重叠至少为较矮者一半的矩形算同一行，取并集（left..right、top..bottom）。`PdfView.tsx` 把 rects 交给 `SelectionOverlay` 前先合并。已存的标记不改，跳转行为不变。
-  - 单测：`pdf-tj-geom.test.ts` 覆盖词框重叠、上标、只相交 2px 的相邻两行（不合并）、空输入和单个矩形，并确认不改动输入。
-  - e2e：`region-selection.spec.ts` 的文字标记改为选整行，并断言确认框只有 1 个。修复前是 16 个，用例失败；修复后通过。
+  - 原因：span 层每个词一个叶子 span，`Range.getClientRects()` 因此按词返回矩形，标记存下的 rects 也是按词的。`PageRect` 的约定是“每行一个”。第一版 `mergeLineRects`（纵向重叠 ≥ 较矮者一半就合并）在评审中被替换，规则见下一节。
+
+## 每行一个矩形、确认闪烁无缝（评审第二、三轮）
+
+### 合并规则（`pdf-tj-geom.ts` 的 `mergeLineRects`）
+新标记存储前（`Reader.pdfAnchor`）、已存标记绘制前、`SelectionOverlay` 绘制前，都用同一个函数：
+1. 去掉落在另一个矩形里面的矩形（容差 1px）。旧标记存的是 `Range.getClientRects()`，每个整选的 span 既有元素框又有文字框，两者叠成更深的色带。
+2. 两个矩形的 **top 相差 ≤ 1px、height 相差 ≤ 1px，且水平间距 < 1 个字号** 时合并为并集。`PageRect` 没有字号，用较矮者的高度代替（文字框高 = ascent + descent，约 1.1–1.2em，所以限值略大于 1em）。
+   - 上标、不同字号的 run 不合并；落在本行框内的会被第 1 步去掉，突出行框的保留。
+   - 两栏之间间距大于 1 个字号，不合并。
+3. 矩形保持真实几何，不裁剪。相邻行的框会重叠几 px（行距 < 框高），由绘制层保证重叠处不重复着色（见下）。
+
+`Reader.tsx` 取选区矩形时改用 `textBoxes(range)`：逐个文本节点取文字框，不再取整选 span 的元素框（元素框与文字框的 top 和高度不同）。
+
+### 上限 64：先合并，再把第 64 行起并入最后一个矩形
+`capLineRects(mergeLineRects(...), 64)`：超过 64 行时，第 64 行及之后的行取并集，成为最后一个矩形，不丢行，标记仍覆盖到选区最后一行。
+
+### 旧标记：读取时合并
+已存的按词矩形不迁移、不改存储；`PdfView.tsx` 绘制前 `mergeLineRects(rects)`，每行一个持久高亮框。
+
+### 缝隙在绘制层修复
+- 双色（行间更深的一条缝）的原因：每个框各自带半透明背景，相邻行的框重叠 1.4px（100%）/ 2.8px（200%），重叠处着色两次。
+- 修复只在绘制层：
+  - `SelectionOverlay` 的框都放在一个容器里。确认框是不透明的 `--accent`，容器统一带透明度 0.25（含动画；`prefers-reduced-motion` 下直接 0.25）。
+  - 持久高亮同理：`.mark-rect` 是不透明 `--accent`，放在透明度 0.12 的 `.mark-rects` 容器里；每行 2px 的 `--accent` 下划线放在上面单独的 `.mark-lines` 层。
+  - 没有写死颜色；矩形本身不裁剪。
+
+### 单测（`test/main/pdf-tj-geom.test.ts`）
+- 同一行、间距小于 1 个字号的词合并为每行一个框。
+- 上标单独保留，除非落在本行框内。
+- 两栏间距大于 1 个字号时不合并。
+- top 相差 3px 的两个框保持两个，不合并成更高的并集。
+- 旧标记中落在 span 元素框里的文字框被去掉。
+- `capLineRects`：不超过上限时不变；**80 行**选区，第 64–80 行并入最后一个矩形而不是丢掉。
+
+### e2e（`region-selection.spec.ts`）
+- 选 1 / 3 / 12 行：存储的行带数 === `[1, 3, 12]`，存储的矩形数 === `[1, 3, 13]`。12 行那条多出的 1 个是第 6 行末尾的上标 “th”，它突出行框，按规则单独保留。页面上持久高亮框 13 个（12 行各一个 + 上标）。
+- 重启应用后：行带数仍为 `[1, 3, 12]`，矩形数不变，每行一个持久框。
+- 12 行确认闪烁的缝隙检查，100% / 200% × 浅色 / 深色：取前三个相互接触的行框，按像素行取众数颜色，行内与行界处的颜色差都 ≤ 3（每通道）。测量前等行框在两帧之间不再移动，截图后再量一次，必须相同（点击标记后的跳转会滚动阅读区）。
+
+| 缩放 / 主题 | 行内 RGB | 行界 RGB | 重叠（px） | 最大差 |
+|---|---|---|---|---|
+| 100% 浅色 | 202,218,249 | 202,218,249 | 1.39 / 1.41 | 0 / 0 |
+| 100% 深色 | 213,226,250 | 213,226,250 | 1.39 / 1.41 | 0 / 0 |
+| 200% 浅色 | 202,218,249 | 202,218,249 | 2.8 / 2.8 | 0 / 0 |
+| 200% 深色 | 213,226,250 | 213,226,250 | 2.8 / 2.8 | 0 / 0 |
+
+（Linux，dpr 1，日志 `TEXT-CONFIRM-SEAM`。纸面两种主题下都是白色，所以深色下 `--accent` 不同、着色也不同。）
+
+截图（×4 最近邻放大，固定在提交 463494f）：
+
+| | 浅色 | 深色 |
+|---|---|---|
+| 100% | ![100 light](https://raw.githubusercontent.com/Sqhh99/Point/463494fed79b732723a061b6ece802d2e38d6a32/docs/assets/pr/2026-10-28-pdf-span-text-confirm-lines-100-light-x4.png) | ![100 dark](https://raw.githubusercontent.com/Sqhh99/Point/463494fed79b732723a061b6ece802d2e38d6a32/docs/assets/pr/2026-10-28-pdf-span-text-confirm-lines-100-dark-x4.png) |
+| 200% | ![200 light](https://raw.githubusercontent.com/Sqhh99/Point/463494fed79b732723a061b6ece802d2e38d6a32/docs/assets/pr/2026-10-28-pdf-span-text-confirm-lines-200-light-x4.png) | ![200 dark](https://raw.githubusercontent.com/Sqhh99/Point/463494fed79b732723a061b6ece802d2e38d6a32/docs/assets/pr/2026-10-28-pdf-span-text-confirm-lines-200-dark-x4.png) |
 
 | 确认闪烁（浅色） | 确认闪烁（深色） |
 |---|---|
-| ![confirm light](https://raw.githubusercontent.com/Sqhh99/Point/975e39e552b40b9a322148e0892a11f65eff8944/docs/assets/pr/2026-10-28-pdf-span-text-confirm-light.png) | ![confirm dark](https://raw.githubusercontent.com/Sqhh99/Point/975e39e552b40b9a322148e0892a11f65eff8944/docs/assets/pr/2026-10-28-pdf-span-text-confirm-dark.png) |
+| ![confirm light](https://raw.githubusercontent.com/Sqhh99/Point/463494fed79b732723a061b6ece802d2e38d6a32/docs/assets/pr/2026-10-28-pdf-span-text-confirm-light.png) | ![confirm dark](https://raw.githubusercontent.com/Sqhh99/Point/463494fed79b732723a061b6ece802d2e38d6a32/docs/assets/pr/2026-10-28-pdf-span-text-confirm-dark.png) |
+
+## smoke:672 根因
+- 点 “恢复 100%” 后，`PdfView` 重新锚定滚动位置，让第 2 页（当前页）的中部对准视图中部（这里 scrollTop 1213）。第 2 页第一行 “Viewer page two” 因此在可见阅读区上方（滚动区顶部 y=36）。
+- 选择条在选区上方，被夹到窗口顶部：插桩记录 40 次中 39 次 y ∈ [0, 36]，1 次 y ∈ [−1, 35]。
+- Playwright 点击 “标记” 前把按钮滚动到可见，阅读区随之滚动，`Reader` 的 onScroll 关闭选择条，按钮卸载：“element was detached”。
+- 修复（只改测试，用户只会选看得见的文字）：等第 2 页 `--scale-factor` 等于 `data-scale`；把 “Viewer page two” 所在的 span 滚到视图中部；等 300ms 内第 2 页既无滚动也无 DOM 变化；再选择。新增断言：选择条在可见阅读区之内。
+- 验证：修复前本地 20 次重复 340 个用例中失败 1 个；只加静止等待时 40 次重复失败 2 个；最终修复本地 40 次重复 680/680 通过。Windows CI `--repeat-each=10`：见 “如何测试”。
 
 ## 版本号
 不升版本。这是 v0.2.3 的一步，版本号和 tag 另行处理。
@@ -117,8 +189,8 @@ v0.2.3 第二步。不改版本号，不打 tag。
 ## 如何测试
 - [x] `pnpm lint`
 - [x] `pnpm typecheck`
-- [x] `pnpm test`：core 211 通过；main 789 通过、14 跳过
-- [x] e2e（Linux + xvfb，`apps/desktop`：`pnpm build && POINT_E2E_KEYRING=1 xvfb-run -a -s "-screen 0 2400x1700x24" pnpm exec playwright test`）：47/47 通过
+- [x] `pnpm test`：core 211 通过；main 795 通过、14 跳过
+- [x] e2e（Linux + xvfb，`apps/desktop`：`pnpm build && POINT_E2E_KEYRING=1 xvfb-run -a -s "-screen 0 2400x1700x24" pnpm exec playwright test`）：49/49 通过（`region-selection.spec.ts` 单独 `--repeat-each=10`：30/30）
   - `POINT_E2E_KEYRING=1` 配合本地临时的 safeStorage 桩（没有提交）。不设时 `region-selection.spec.ts` 会因本机没有系统钥匙串（`系统加密不可用`）失败，相关用例跳过；之前记录的“40 通过、6 跳过、1 失败”就是这个原因，与本改动无关。
 - [ ] CI（Windows / macOS）
 
