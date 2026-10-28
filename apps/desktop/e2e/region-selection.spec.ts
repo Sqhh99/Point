@@ -266,13 +266,16 @@ async function selectLines(win: Win, i0: number, i1: number) {
   );
 }
 
-const rowMode = (img: ReturnType<typeof decodePng>, y: number, x0: number, x1: number) => {
+/** Commonest colour of pixel row y over [x0, x1); with `paper`, only of the pixels that are clear white paper there. */
+const rowMode = (img: ReturnType<typeof decodePng>, y: number, x0: number, x1: number, paper?: ReturnType<typeof decodePng>) => {
   const count = new Map<string, number>();
   for (let x = x0; x < x1; x++) {
     const i = (y * img.width + x) * 4;
+    if (paper && !(paper.data[i] === 255 && paper.data[i + 1] === 255 && paper.data[i + 2] === 255)) continue;
     const key = `${img.data[i]},${img.data[i + 1]},${img.data[i + 2]}`;
     count.set(key, (count.get(key) ?? 0) + 1);
   }
+  if (count.size === 0) throw new Error(`pixel row ${y}: no clear paper to measure`);
   return [...count.entries()].sort((a, b) => b[1] - a[1])[0]![0].split(",").map(Number);
 };
 
@@ -304,6 +307,14 @@ async function checkLineSeams(win: Win, z: number, theme: "light" | "dark") {
   const png = await win.screenshot({ clip, scale: "device" });
   expect(JSON.stringify((await boxRects()).sort((a, b) => a.y - b.y)), "boxes did not move during the screenshot").toBe(JSON.stringify(all));
   writeFileSync(join(shots, `text-confirm-lines-${z}-${process.platform}${theme === "dark" ? "-dark" : ""}.png`), png);
+  // The same clip once the flash is gone: its clear white paper pixels are where the background is measured. Glyph
+  // ink is not background, and on a row through dense text (macOS 200 %: more ink than paper on the baseline row) the
+  // row's commonest colour would be the ink.
+  const scrollTop = () => win.locator("main.center").evaluate((el) => el.scrollTop);
+  const top0 = await scrollTop();
+  await expect(win.locator('[data-testid="selection-overlay"][data-mode="confirm"]')).toHaveCount(0, { timeout: 3_000 });
+  const plain = decodePng(await win.screenshot({ clip, scale: "device" }));
+  expect(await scrollTop(), "the page did not scroll between the two screenshots").toBe(top0);
   const img = decodePng(png);
   const dpr = img.width / clip.width;
   const px = (v: number, o: number) => (v - o) * dpr;
@@ -313,10 +324,10 @@ async function checkLineSeams(win: Win, z: number, theme: "light" | "dark") {
   for (let i = 0; i < 3; i++) {
     const b = boxes[i]!, prev = boxes[i - 1], next = boxes[i + 1];
     const top = prev ? Math.max(b.y, prev.y + prev.height) : b.y, bottom = next ? Math.min(b.y + b.height, next.y) : b.y + b.height;
-    for (let y = Math.ceil(px(top, clip.y)) + 1; y < Math.floor(px(bottom, clip.y)) - 1; y++) inside.push(rowMode(img, y, cx0, cx1));
+    for (let y = Math.ceil(px(top, clip.y)) + 1; y < Math.floor(px(bottom, clip.y)) - 1; y++) inside.push(rowMode(img, y, cx0, cx1, plain));
     if (next) {
       overlaps.push(+(b.y + b.height - next.y).toFixed(2));
-      for (let y = Math.ceil(px(next.y, clip.y)); y < Math.floor(px(b.y + b.height, clip.y)); y++) seam.push(rowMode(img, y, cx0, cx1));
+      for (let y = Math.ceil(px(next.y, clip.y)); y < Math.floor(px(b.y + b.height, clip.y)); y++) seam.push(rowMode(img, y, cx0, cx1, plain));
     }
   }
   const counts = (rows: number[][]) => [...rows.reduce((m, r) => m.set(r.join(","), (m.get(r.join(",")) ?? 0) + 1), new Map<string, number>())].sort((a, b) => b[1] - a[1]);
