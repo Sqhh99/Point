@@ -441,7 +441,7 @@ button.link.active { color: var(--accent); }
 .pdf-text span[role="img"] { user-select: none; cursor: default; }
 .pdf-text .endOfContent { display: block; position: absolute; inset: 100% 0 0; z-index: 0; cursor: default; user-select: none; pointer-events: auto; }
 .pdf-text.selecting .endOfContent { top: 0; }
-.pdf-text ::selection { background: var(--accent); color: transparent; }
+.pdf-text ::selection { background: transparent; color: transparent; } /* COUNTER-PROOF: tint off */
 .pdf-text br::selection { background: transparent; }
 /* pdf.js appends its measuring canvas to <body>; it must take no space (else the window itself scrolls). */
 .hiddenCanvasElement { position: absolute; top: 0; left: 0; width: 0; height: 0; display: none; }

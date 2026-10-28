@@ -193,15 +193,15 @@ test("embedded-font justified PDF: layer glyphs vs canvas glyphs, and selection 
   expect(style.spanOpacity).toBe("1");
   expect(style.spanColor).toBe("rgba(0, 0, 0, 0)");
   expect(style.selColor, "selected layer glyphs stay transparent (no ghosting)").toBe("rgba(0, 0, 0, 0)");
-  expect(style.selBg, "solid --accent selection (the layer applies the 25%)").toBe(style.accent);
+  expect.soft(style.selBg, "COUNTER-PROOF soft: solid --accent selection (the layer applies the 25%)").toBe(style.accent);
 
   // 125 %: the first two paragraphs; 200 %: the first paragraph (it has to fit the macOS runner's view).
   await checkSelection(win, 125, "accuracy.");
   await checkSelection(win, 200, "survey.");
 });
 
-/** Tint threshold: the lowest ratio measured on the three platforms (macOS CI 0.683) minus a 0.08 margin. */
-const TINT_MIN = 0.5; // TEMP measurement branch
+/** Tint threshold: the lowest ratio measured on the three platforms (Windows CI 125 % 0.619) minus a 0.10 margin, floored. */
+const TINT_MIN = 0.51;
 let geomWords: Promise<TjWordBox[]> | undefined;
 /** PageTextGeom.words of the fixture's page 1, built in Node with the app's pdf.js. */
 async function selectedGeomWords(endWord: string) {
@@ -315,8 +315,9 @@ async function checkSelection(win: Win, z: number, endWord: string) {
   // page's own geometry (PageTextGeom.words of the same pdf.js build, PageRect at 100 %): Σ w·h × k² × dpr², k =
   // data-scale / (96/72) = zoom / 100. The ratio is independent of the platform's glyph antialiasing count and
   // of the window size; it is 0 when no selection is painted.
-  // Measured (tinted / Σ word area): Linux 125 % 0.703, 200 % 0.716; Windows CI 125 % 0.688, 200 % 0.707;
-  // macOS CI 125 % 0.683, 200 % 0.700 (run 40760339660). Threshold = min (0.683) − margin 0.08 = 0.60.
+  // Measured (tinted / Σ word area, 91 words at 125 %, 47 at 200 %, dpr 1): Linux (xvfb) 125 % 0.638, 200 % 0.773;
+  // Windows CI 125 % 0.619, 200 % 0.760; macOS CI 125 % 0.626, 200 % 0.748 (run 40757035570).
+  // Threshold = min (0.619) − margin 0.10 = 0.519, floored to 0.51. With the ::selection tint off the ratio is ~0.
   const dpr = W / clip.width;
   const k = Number(await page1(win).getAttribute("data-scale")) / (96 / 72);
   const words = await selectedGeomWords(endWord);

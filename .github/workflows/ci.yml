@@ -1,13 +1,13 @@
 name: CI
 
-# TEMPORARY branch for PR #78 (not merged): measure the tint ratio on Windows/macOS and repeat smoke 10x on Windows.
+# TEMPORARY branch for PR #78 (not merged): counter-proof: ::selection tint disabled, the tint assertion must fail on Windows/macOS.
 on:
   push:
     branches: ["tmp/**"]
 
 jobs:
   e2e:
-    name: e2e-measure (${{ matrix.os }})
+    name: e2e-counterproof (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -27,15 +27,11 @@ jobs:
       - run: pnpm build
       - name: tint + region specs
         working-directory: apps/desktop
-        run: pnpm exec playwright test e2e/pdf-embedded-fonts.spec.ts e2e/region-selection.spec.ts --retries=0 --reporter=list
-      - name: smoke --repeat-each=10 (Windows)
-        if: runner.os == 'Windows' && always()
-        working-directory: apps/desktop
-        run: pnpm exec playwright test e2e/smoke.spec.ts --repeat-each=10 --retries=0 --reporter=list
+        run: pnpm exec playwright test e2e/pdf-embedded-fonts.spec.ts -g "layer glyphs vs canvas glyphs" --retries=0 --reporter=list
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: measure-${{ matrix.os }}
+          name: counterproof-${{ matrix.os }}
           path: apps/desktop/test-results
           retention-days: 3
           if-no-files-found: ignore
