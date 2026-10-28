@@ -139,7 +139,7 @@ function Page({ doc, n, scale, size, marks, rects, selection }: { doc: PDFDocume
   return (
     <div className="pdf-page" ref={wrap} data-page={n} data-scale={scale} data-testid="pdf-page" style={{ width: Math.floor(size[0] * scale), height: Math.floor(size[1] * scale) }}>
       <canvas ref={canvas} aria-hidden />
-      {rects.map((r, i) => (
+      {mergeLineRects(rects).map((r, i) => (
         <div key={i} className="mark-rect" data-testid="mark-rect" style={{ left: r.x * scale / BASE, top: r.y * scale / BASE, width: r.w * scale / BASE, height: r.h * scale / BASE }} />
       ))}
       {selection && selection.rects.length > 0 && <SelectionOverlay rects={mergeLineRects(selection.rects)} scale={scale} mode={selection.mode} />}

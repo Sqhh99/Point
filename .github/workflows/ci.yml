@@ -1,42 +1,13 @@
 name: CI
 
+# TEMPORARY branch for PR #78 (not merged): measure the tint ratio on Windows/macOS and repeat smoke 10x on Windows.
 on:
-  pull_request:
   push:
-    branches: [main]
-
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+    branches: ["tmp/**"]
 
 jobs:
-  check:
-    name: check (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      # node-gyp 9 (better-sqlite3 rebuild) imports distutils, removed in Python 3.12.
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm lint
-      - run: pnpm typecheck
-      - run: pnpm test
-      - run: pnpm build
-
   e2e:
-    name: e2e (${{ matrix.os }})
-    needs: check
+    name: e2e-measure (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -44,7 +15,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      # node-gyp 9 (better-sqlite3 rebuild) imports distutils, removed in Python 3.12.
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -55,58 +25,17 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - run: pnpm e2e
-      - name: Upload e2e trace and screenshots on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-results-${{ matrix.os }}
-          path: apps/desktop/test-results
-          retention-days: 14
-          if-no-files-found: ignore
-      - name: Upload e2e screenshots
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-screenshots-${{ matrix.os }}
-          path: apps/desktop/test-results/screenshots
-          retention-days: 14
-          if-no-files-found: ignore
-
-  package:
-    name: package (${{ matrix.os }})
-    needs: check
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      # node-gyp 9 (better-sqlite3 rebuild) imports distutils, removed in Python 3.12.
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - name: Ensure Inno Setup 6
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
-      - run: pnpm --filter @point/desktop run package
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
-      # Native-module gate: each installer/app has a better_sqlite3.node of the right arch,
-      # and the native-arch build launches and opens a SQLite DB.
-      - run: pnpm --filter @point/desktop run verify:package
+      - name: tint + region specs
+        working-directory: apps/desktop
+        run: pnpm exec playwright test e2e/pdf-embedded-fonts.spec.ts e2e/region-selection.spec.ts --retries=0 --reporter=list
+      - name: smoke --repeat-each=10 (Windows)
+        if: runner.os == 'Windows' && always()
+        working-directory: apps/desktop
+        run: pnpm exec playwright test e2e/smoke.spec.ts --repeat-each=10 --retries=0 --reporter=list
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: point-${{ matrix.os }}
-          path: |
-            apps/desktop/release/*-setup.exe
-            apps/desktop/release/*.dmg
-          retention-days: 7
+          name: measure-${{ matrix.os }}
+          path: apps/desktop/test-results
+          retention-days: 3
+          if-no-files-found: ignore

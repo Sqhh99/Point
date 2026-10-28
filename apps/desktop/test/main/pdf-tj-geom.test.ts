@@ -270,28 +270,67 @@ function wordXcorr(
 }
 
 describe("mergeLineRects", () => {
-  it("merges per-word rects into one box per line (overlapping words, superscript), keeps adjacent lines apart", () => {
-    // Two lines whose boxes touch by 2px (237–256 and 254–274), words overlap by 1px, a superscript run sits high on line 1.
+  // Rect height (≈ 1.1–1.2 em) stands in for the font size: same top and height within 1px and a gap under one
+  // height merge.
+  it("merges same-line words whose gap is under one font size into one box per line", () => {
     const line1 = [
       { x: 716, y: 237, w: 40, h: 19 },
-      { x: 755, y: 237, w: 60, h: 19 },
-      { x: 814, y: 237.5, w: 30, h: 18.5 },
-      { x: 1234, y: 238, w: 6, h: 11 }, // "th" superscript
-      { x: 1248, y: 237, w: 73, h: 19 }
+      { x: 755, y: 237, w: 60, h: 19 }, // overlaps by 1px
+      { x: 819, y: 237.5, w: 30, h: 18.5 }, // 4px gap, top +0.5, height −0.5
+      { x: 867, y: 238, w: 50, h: 19 } // 18px gap < 19
     ];
     const line2 = [
       { x: 716, y: 254, w: 80, h: 20 },
-      { x: 795, y: 254, w: 50, h: 20 },
-      { x: 844, y: 254, w: 70, h: 20 }
+      { x: 800, y: 254, w: 50, h: 20 }
     ];
     const input = [...line2, ...line1].reverse();
     const copy = structuredClone(input);
-    const merged = mergeLineRects(input);
-    expect(merged).toEqual([
-      { x: 716, y: 237, w: 605, h: 19 },
-      { x: 716, y: 254, w: 198, h: 20 }
+    expect(mergeLineRects(input)).toEqual([
+      // Line 1 spans 237–257 and line 2 254–274: both are cut at the middle of the 3px overlap (255.5).
+      { x: 716, y: 237, w: 201, h: 18.5 },
+      { x: 716, y: 255.5, w: 134, h: 18.5 }
     ]);
     expect(input).toEqual(copy);
+  });
+
+  it("keeps a superscript separate unless it lies inside its line's box", () => {
+    const words = [
+      { x: 716, y: 237, w: 100, h: 19 },
+      { x: 822, y: 237, w: 60, h: 19 }
+    ];
+    // "th" reaching above the line top: different top and height, so it stays a rect of its own.
+    expect(mergeLineRects([...words, { x: 882, y: 233, w: 8, h: 11 }])).toEqual([
+      { x: 882, y: 233, w: 8, h: 11 },
+      { x: 716, y: 237, w: 166, h: 19 }
+    ]);
+    // "th" inside the merged box: not merged by the rule, then dropped as contained (no darker spot).
+    expect(mergeLineRects([...words, { x: 816, y: 238, w: 6, h: 11 }])).toEqual([{ x: 716, y: 237, w: 166, h: 19 }]);
+  });
+
+  it("does not merge two columns whose gap is wider than one font size", () => {
+    const left = [
+      { x: 72, y: 300, w: 120, h: 14 },
+      { x: 196, y: 300, w: 80, h: 14 }
+    ];
+    const right = [
+      { x: 306, y: 300, w: 90, h: 14 }, // 30px gap > 14
+      { x: 399, y: 300, w: 100, h: 14 }
+    ];
+    expect(mergeLineRects([...right, ...left])).toEqual([
+      { x: 72, y: 300, w: 204, h: 14 },
+      { x: 306, y: 300, w: 193, h: 14 }
+    ]);
+  });
+
+  it("drops text boxes that legacy marks stored inside their span's element box", () => {
+    // Legacy Range.getClientRects(): element box (116–131) and text box (119–128) of the same word.
+    const legacy = [
+      { x: 10, y: 116, w: 40, h: 15 },
+      { x: 10, y: 119, w: 40, h: 9 },
+      { x: 54, y: 116, w: 30, h: 15 },
+      { x: 54, y: 119, w: 30, h: 9 }
+    ];
+    expect(mergeLineRects(legacy)).toEqual([{ x: 10, y: 116, w: 74, h: 15 }]);
   });
 
   it("keeps a single rect and an empty list as they are", () => {

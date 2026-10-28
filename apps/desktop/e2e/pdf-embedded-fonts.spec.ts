@@ -1,8 +1,9 @@
 import { test, expect, _electron as electron, type ElectronApplication } from "@playwright/test";
-import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodePng } from "./png";
+import { buildPageTextGeom, type PdfPageForGeom, type TjWordBox } from "../src/renderer/viewers/pdf-tj-geom";
 
 // Requires `pnpm build` first. Embedded-font, justified multi-paragraph PDF (fixtures/pdf/hydro-serif.pdf,
 // Nimbus Roman subset): text-layer glyph boxes vs canvas glyphs at 100/125/150/200 %, and selection
@@ -199,6 +200,29 @@ test("embedded-font justified PDF: layer glyphs vs canvas glyphs, and selection 
   await checkSelection(win, 200, "survey.");
 });
 
+/** Tint threshold: the lowest ratio measured on the three platforms (macOS CI 0.683) minus a 0.08 margin. */
+const TINT_MIN = 0.5; // TEMP measurement branch
+let geomWords: Promise<TjWordBox[]> | undefined;
+/** PageTextGeom.words of the fixture's page 1, built in Node with the app's pdf.js. */
+async function selectedGeomWords(endWord: string) {
+  geomWords ??= (async () => {
+    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const worker = await import("pdfjs-dist/legacy/build/pdf.worker.mjs");
+    (globalThis as { pdfjsWorker?: unknown }).pdfjsWorker ??= worker;
+    const doc = await pdfjs.getDocument({ data: new Uint8Array(readFileSync(join(FIXTURES, "hydro-serif.pdf"))), verbosity: 0, isEvalSupported: false }).promise;
+    try {
+      return (await buildPageTextGeom((await doc.getPage(1)) as unknown as PdfPageForGeom)).words;
+    } finally {
+      await doc.destroy();
+    }
+  })();
+  const all = await geomWords;
+  // The selection runs from the second "Depth" (the paragraph, not the heading) to endWord.
+  const a = all.findIndex((w, i) => w.text === "Depth" && all.slice(0, i).some((x) => x.text === "Depth"));
+  const z = all.findIndex((w, i) => i > a && w.text === endWord);
+  return a >= 0 && z > a ? all.slice(a, z + 1) : [];
+}
+
 async function checkSelection(win: Win, z: number, endWord: string) {
   await setZoom(win, z);
   const center = win.locator("main.center");
@@ -286,23 +310,29 @@ async function checkSelection(win: Win, z: number, endWord: string) {
     }
   }
   tints.sort((a, b) => a - b);
-  // Painted selection, proportional to the selected area: of the device pixels inside the inner selected
-  // lines' boxes, the share that is clear paper and carries the tint. The mid-row sample count above is ~14 % of
-  // a line's width and depends on glyph antialiasing (125 %: Linux 541, Windows 479, macOS 478), so its absolute
-  // size is not asserted. The ratio is 0 when no selection is painted; Linux measures 0.48 (125 %) and 0.63 (200 %).
+  // Painted selection, proportional to the selected text: device pixels of clear paper that carry the tint,
+  // inside the selected lines' boxes (first and last line included), over the selected words' area from the
+  // page's own geometry (PageTextGeom.words of the same pdf.js build, PageRect at 100 %): Σ w·h × k² × dpr², k =
+  // data-scale / (96/72) = zoom / 100. The ratio is independent of the platform's glyph antialiasing count and
+  // of the window size; it is 0 when no selection is painted.
+  // Measured (tinted / Σ word area): Linux 125 % 0.703, 200 % 0.716; Windows CI 125 % 0.688, 200 % 0.707;
+  // macOS CI 125 % 0.683, 200 % 0.700 (run 40760339660). Threshold = min (0.683) − margin 0.08 = 0.60.
   const dpr = W / clip.width;
-  let area = 0, clear = 0, tinted = 0;
-  for (const ln of lines.slice(1, -1))
-    for (let y = Math.ceil((ln.t - clip.y) * dpr) + 2; y < Math.floor((ln.b - clip.y) * dpr) - 2; y++)
-      for (let x = Math.ceil((ln.l - clip.x) * dpr) + 2; x < Math.floor((ln.r - clip.x) * dpr) - 2; x++) {
-        area++;
+  const k = Number(await page1(win).getAttribute("data-scale")) / (96 / 72);
+  const words = await selectedGeomWords(endWord);
+  const wordArea = words.reduce((a, w) => a + w.rect.w * w.rect.h, 0) * k * k * dpr * dpr;
+  let tinted = 0;
+  for (const ln of lines)
+    for (let y = Math.ceil((ln.t - clip.y) * dpr); y < Math.floor((ln.b - clip.y) * dpr); y++)
+      for (let x = Math.ceil((ln.l - clip.x) * dpr); x < Math.floor((ln.r - clip.x) * dpr); x++) {
         if (!clearPaper(x, y)) continue;
-        clear++;
         const c = px(selected, x, y), p = px(plain, x, y);
         if (Math.abs(c[0]! - p[0]!) + Math.abs(c[1]! - p[1]!) + Math.abs(c[2]! - p[2]!) >= 15) tinted++;
       }
-  console.log("PDF-SELECTION-TINT", JSON.stringify({ z, dpr, midSamples: tints.length, area, clear, tinted, tintedOfArea: +(tinted / area).toFixed(3), tintedOfClear: +(tinted / clear).toFixed(4) }));
-  expect(tinted / area, `${z}%: tinted clear paper / selected line area (${tinted} / ${area})`).toBeGreaterThanOrEqual(0.35);
+  const ratio = tinted / wordArea;
+  console.log("PDF-SELECTION-TINT", JSON.stringify({ platform: process.platform, z, dpr, k, words: words.length, midSamples: tints.length, tinted, wordArea: Math.round(wordArea), tintedOfWordArea: +ratio.toFixed(3) }));
+  expect(words.length, `${z}%: selected words found in PageTextGeom`).toBeGreaterThanOrEqual(30);
+  expect(ratio, `${z}%: tinted clear paper / selected words' geom area (${tinted} / ${Math.round(wordArea)})`).toBeGreaterThanOrEqual(TINT_MIN);
   const median = tints[tints.length >> 1]!;
   const tint = chans.map((c) => c.sort((x, y) => x - y)[c.length >> 1]!);
   // Light theme: --accent at the layer's 25 % over white paper.
