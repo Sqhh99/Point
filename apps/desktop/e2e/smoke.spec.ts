@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeDocx, makePdf, makeXlsx } from "../../../packages/core/test/fixtures/make";
+import { clickOnBar } from "./bar";
 
 // Requires `pnpm build` first: launches the built main entry (out/main/index.js).
 let app: ElectronApplication;
@@ -465,7 +466,7 @@ test("select text → 标记 creates a mark; 一起问 sends two marks as one qu
 
   const toolbar = win.getByRole("toolbar", { name: "选区操作" });
   await selectInReader(win, "熵是系统无序程度的度量");
-  await toolbar.getByRole("button", { name: "标记" }).click();
+  await clickOnBar(toolbar, "标记");
   await expect(toolbar).toBeHidden();
   const items = panel.getByTestId("mark-item");
   await expect(items).toHaveCount(1);
@@ -473,7 +474,7 @@ test("select text → 标记 creates a mark; 一起问 sends two marks as one qu
   await expect(reader.locator(".block.marked")).toHaveCount(1);
 
   await selectInReader(win, "广延量");
-  await toolbar.getByRole("button", { name: "标记" }).click();
+  await clickOnBar(toolbar, "标记");
   await expect(items).toHaveCount(2);
   await expect(reader.locator(".block.marked")).toHaveCount(2);
 
@@ -753,7 +754,7 @@ test("PDF, Word and Excel open in their original look with one shared bar, marks
   await expect(toolbar).toBeVisible();
   const [tb, view] = await Promise.all([toolbar.boundingBox(), reader.evaluate((e) => e.parentElement!.getBoundingClientRect().toJSON() as DOMRect)]);
   expect(tb!.y >= view.top && tb!.y + tb!.height <= view.bottom, "selection bar inside the visible reader").toBe(true);
-  await toolbar.getByRole("button", { name: "标记" }).click();
+  await clickOnBar(toolbar, "标记");
   const marks = win.getByTestId("marks").getByTestId("mark-item");
   await expect(marks).toHaveCount(1);
   const rect = reader.locator('[data-page="2"] [data-testid="mark-rect"]').first();
@@ -776,7 +777,7 @@ test("PDF, Word and Excel open in their original look with one shared bar, marks
   await expect(bar.getByTestId("capture-button")).toBeVisible();
   await expect(bar.getByRole("button", { name: "放大" })).toBeEnabled();
   await selectIn(win, "p", "收入同比增长");
-  await toolbar.getByRole("button", { name: "标记" }).click();
+  await clickOnBar(toolbar, "标记");
   await expect(marks).toHaveCount(1);
   const dm = reader.locator(".block.marked, .docx-body .marked").first();
   await expect(dm).toBeVisible();
@@ -803,7 +804,7 @@ test("PDF, Word and Excel open in their original look with one shared bar, marks
   await bar.getByRole("button", { name: "上一个工作表" }).click();
   await expect(grid).toHaveAttribute("data-sheet", "成绩");
   await selectIn(win, "tr", "张三");
-  await toolbar.getByRole("button", { name: "标记" }).click();
+  await clickOnBar(toolbar, "标记");
   await expect(marks).toHaveCount(1);
   const xm = reader.locator("tr.marked td").first();
   await expect(xm).toBeVisible();

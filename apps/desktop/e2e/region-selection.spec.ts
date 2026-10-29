@@ -3,6 +3,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makePdf } from "../../../packages/core/test/fixtures/make";
+import { clickOnBar } from "./bar";
 import { decodePng } from "./png";
 
 // Requires `pnpm build`. Region capture pending overlay; mark stores page+rects; click → confirm flash.
@@ -150,17 +151,11 @@ test("1, 3 and 12 selected lines store 1, 3 and 12 rects; the 12-line confirm fl
   const toolbar = win.locator('[aria-label="选区操作"][data-kind="text"]');
   const before = (await storedTextRects(win, "lines")).length;
   for (const [k, [i0, i1]] of ([[1, 1], [3, 5], [0, 11]] as const).entries()) {
-    // The reader scrolls on its own just before the first selection (the new document is re-anchored after its
-    // first layout: scrollTop 0 → 61 here) and, when 标记 follows that quickly, again after the mark (61 → 0, ~10 ms
-    // after the click, measured locally). A scroll closes the selection bar (Reader onScroll), so a scroll still in
-    // flight when the next lines are selected closes their bar under the click: "element is not stable … <html>
-    // intercepts pointer events … element was detached" (Windows CI, 1 run). Select only once the view is still.
-    await settle(win);
     await selectLines(win, i0, i1);
     await expect(toolbar).toBeVisible({ timeout: 5_000 });
     const [tb, view] = await Promise.all([toolbar.boundingBox(), win.locator("main.center").evaluate((e) => e.getBoundingClientRect().toJSON() as DOMRect)]);
     expect(tb!.y >= view.top && tb!.y + tb!.height <= view.bottom, "selection bar inside the visible reader").toBe(true);
-    await toolbar.getByRole("button", { name: "标记" }).click();
+    await clickOnBar(toolbar, "标记");
     await expect.poll(async () => (await storedTextRects(win, "lines")).length).toBe(before + k + 1);
   }
   // One rect per line band; lines 0–11 hold one superscript ("th" at the end of line 6) that sticks out of its line
@@ -239,25 +234,6 @@ async function setZoom(win: Win, z: number) {
     .poll(() => page1(win).evaluate((el) => getComputedStyle(el.querySelector(".pdf-text")!).getPropertyValue("--scale-factor").trim() === el.getAttribute("data-scale") && el.querySelectorAll(".pdf-text span").length > 0))
     .toBe(true);
 }
-
-/** Resolves once the reader has gone 300 ms without a scroll or a DOM change on page 1. */
-const settle = (win: Win) =>
-  page1(win).evaluate(
-    (page) =>
-      new Promise<void>((done) => {
-        const scroller = page.closest(".reader-doc")!.parentElement!;
-        let timer = setTimeout(finish, 300);
-        const again = () => (clearTimeout(timer), (timer = setTimeout(finish, 300)));
-        const mo = new MutationObserver(again);
-        mo.observe(page, { childList: true, subtree: true });
-        scroller.addEventListener("scroll", again, { passive: true });
-        function finish() {
-          mo.disconnect();
-          scroller.removeEventListener("scroll", again);
-          done();
-        }
-      })
-  );
 
 /** Selects text lines i0…i1 of page 1 (whole lines, lines = word text boxes grouped by vertical centre). */
 async function selectLines(win: Win, i0: number, i1: number) {
