@@ -1,0 +1,72 @@
+# Temporary (tmp/pr78-smoke-repeat only, never merged): repeat every e2e spec 10x on the exact PR head.
+name: e2e repeat
+on:
+  push:
+    branches: [tmp/pr78-smoke-repeat]
+env:
+  PR_HEAD: 3de33fd5e37c90d8e5257bb2ce2b447116ec5d71
+jobs:
+  repeat:
+    name: repeat (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PR_HEAD }}
+      - name: tested sha
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$PR_HEAD" && git rev-parse HEAD
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: smoke --repeat-each=10
+        if: always()
+        working-directory: apps/desktop
+        run: pnpm exec playwright test e2e/smoke.spec.ts --repeat-each=10 --retries=0 --reporter=list
+      - name: region-selection --repeat-each=10
+        if: always()
+        working-directory: apps/desktop
+        run: pnpm exec playwright test e2e/region-selection.spec.ts --repeat-each=10 --retries=0 --reporter=list
+      - name: pdf-embedded-fonts --repeat-each=10
+        if: always()
+        working-directory: apps/desktop
+        run: pnpm exec playwright test e2e/pdf-embedded-fonts.spec.ts --repeat-each=10 --retries=0 --reporter=list
+      - name: pdf-text-layer --repeat-each=10
+        if: always()
+        working-directory: apps/desktop
+        run: pnpm exec playwright test e2e/pdf-text-layer.spec.ts --repeat-each=10 --retries=0 --reporter=list
+      - name: docs-and-model --repeat-each=10
+        if: always()
+        working-directory: apps/desktop
+        run: pnpm exec playwright test e2e/docs-and-model.spec.ts --repeat-each=10 --retries=0 --reporter=list
+      - name: chat-width-pref --repeat-each=10
+        if: always()
+        working-directory: apps/desktop
+        run: pnpm exec playwright test e2e/chat-width-pref.spec.ts --repeat-each=10 --retries=0 --reporter=list
+      - name: titlebar --repeat-each=10
+        if: always()
+        working-directory: apps/desktop
+        run: pnpm exec playwright test e2e/titlebar.spec.ts --repeat-each=10 --retries=0 --reporter=list
+      - name: titlebar-narrow --repeat-each=10
+        if: always()
+        working-directory: apps/desktop
+        run: pnpm exec playwright test e2e/titlebar-narrow.spec.ts --repeat-each=10 --retries=0 --reporter=list
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: repeat-results-${{ matrix.os }}
+          path: apps/desktop/test-results
+          retention-days: 14
+          if-no-files-found: ignore
