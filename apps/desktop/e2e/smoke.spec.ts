@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeDocx, makePdf, makeXlsx } from "../../../packages/core/test/fixtures/make";
+import { clickOnBar } from "./bar";
 
 // Requires `pnpm build` first: launches the built main entry (out/main/index.js).
 let app: ElectronApplication;
@@ -465,7 +466,7 @@ test("select text → 标记 creates a mark; 一起问 sends two marks as one qu
 
   const toolbar = win.getByRole("toolbar", { name: "选区操作" });
   await selectInReader(win, "熵是系统无序程度的度量");
-  await toolbar.getByRole("button", { name: "标记" }).click();
+  await clickOnBar(toolbar, "标记");
   await expect(toolbar).toBeHidden();
   const items = panel.getByTestId("mark-item");
   await expect(items).toHaveCount(1);
@@ -473,7 +474,7 @@ test("select text → 标记 creates a mark; 一起问 sends two marks as one qu
   await expect(reader.locator(".block.marked")).toHaveCount(1);
 
   await selectInReader(win, "广延量");
-  await toolbar.getByRole("button", { name: "标记" }).click();
+  await clickOnBar(toolbar, "标记");
   await expect(items).toHaveCount(2);
   await expect(reader.locator(".block.marked")).toHaveCount(2);
 
@@ -691,7 +692,20 @@ test("PDF, Word and Excel open in their original look with one shared bar, marks
     await stubOpenDialog([p]);
     await win.getByRole("button", { name: "导入文档" }).click();
   };
-  const markColor = (loc: ReturnType<typeof win.locator>) => loc.evaluate((e) => getComputedStyle(e).backgroundColor);
+  // The colour a mark paints: its background, under its container's opacity (PDF .mark-rect boxes are opaque
+  // --accent inside one 12 % .mark-rects group, so overlapping line boxes do not tint twice).
+  const markColor = (loc: ReturnType<typeof win.locator>) =>
+    loc.evaluate((e) => {
+      const bg = getComputedStyle(e).backgroundColor;
+      const op = Number(getComputedStyle(e.parentElement!).opacity);
+      if (op === 1) return bg;
+      const probe = document.createElement("div");
+      probe.style.background = `color-mix(in srgb, ${bg} ${op * 100}%, transparent)`;
+      document.body.append(probe);
+      const c = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return c;
+    });
   const colors: string[] = [];
 
   // --- PDF: real page canvases, page switcher, zoom, text-layer selection → mark with rects
@@ -709,10 +723,38 @@ test("PDF, Word and Excel open in their original look with one shared bar, marks
   await bar.getByRole("button", { name: "恢复 100%" }).click();
   await expect(bar.getByRole("button", { name: "恢复 100%" })).toBeDisabled();
   await expect(bar.getByTestId("capture-button")).toBeVisible();
-  // Zoom remounts pages; wait until page 2's text layer is back before selecting (same selector the CI uses).
+  // After 恢复 100% PdfView re-anchors the scroll so the middle of page 2 (the page we were on) is under the middle of
+  // the view (scrollTop 1213 here): page 2's first line, "Viewer page two", is then above the visible reader. The
+  // selection bar sits above the selection, clamped to the window top (y 0, measured 39/40 runs; -1 in the other), so
+  // Playwright scrolls the 标记 button into view, the reader scrolls, and the bar closes on that scroll (Reader
+  // onScroll): "element was detached" (Windows CI, 1/20 locally). A user selects text they can see, so do that: wait
+  // for page 2's layer at the new scale, bring the line to the middle of the view, let the scroll (and any layer
+  // rebuild it causes) settle (300 ms without a scroll or a DOM change on page 2), then select.
+  await expect
+    .poll(() => reader.locator('[data-page="2"]').evaluate((el) => (el.querySelector<HTMLElement>(".pdf-text")?.style.getPropertyValue("--scale-factor") ?? "") === el.getAttribute("data-scale")))
+    .toBe(true);
+  await reader.locator('[data-page="2"]').evaluate(
+    (page) =>
+      new Promise<void>((done) => {
+        const scroller = page.closest(".reader-doc")!.parentElement!;
+        let timer = setTimeout(finish, 300);
+        const again = () => (clearTimeout(timer), (timer = setTimeout(finish, 300)));
+        const mo = new MutationObserver(again);
+        mo.observe(page, { childList: true, subtree: true });
+        scroller.addEventListener("scroll", again, { passive: true });
+        function finish() {
+          mo.disconnect();
+          scroller.removeEventListener("scroll", again);
+          done();
+        }
+        [...page.querySelectorAll(".pdf-text span")].find((e) => e.textContent?.includes("Viewer page two"))!.scrollIntoView({ block: "center" });
+      })
+  );
   await selectIn(win, '[data-page="2"] .pdf-text span', "Viewer page two");
   await expect(toolbar).toBeVisible();
-  await toolbar.getByRole("button", { name: "标记" }).click();
+  const [tb, view] = await Promise.all([toolbar.boundingBox(), reader.evaluate((e) => e.parentElement!.getBoundingClientRect().toJSON() as DOMRect)]);
+  expect(tb!.y >= view.top && tb!.y + tb!.height <= view.bottom, "selection bar inside the visible reader").toBe(true);
+  await clickOnBar(toolbar, "标记");
   const marks = win.getByTestId("marks").getByTestId("mark-item");
   await expect(marks).toHaveCount(1);
   const rect = reader.locator('[data-page="2"] [data-testid="mark-rect"]').first();
@@ -735,7 +777,7 @@ test("PDF, Word and Excel open in their original look with one shared bar, marks
   await expect(bar.getByTestId("capture-button")).toBeVisible();
   await expect(bar.getByRole("button", { name: "放大" })).toBeEnabled();
   await selectIn(win, "p", "收入同比增长");
-  await toolbar.getByRole("button", { name: "标记" }).click();
+  await clickOnBar(toolbar, "标记");
   await expect(marks).toHaveCount(1);
   const dm = reader.locator(".block.marked, .docx-body .marked").first();
   await expect(dm).toBeVisible();
@@ -762,7 +804,7 @@ test("PDF, Word and Excel open in their original look with one shared bar, marks
   await bar.getByRole("button", { name: "上一个工作表" }).click();
   await expect(grid).toHaveAttribute("data-sheet", "成绩");
   await selectIn(win, "tr", "张三");
-  await toolbar.getByRole("button", { name: "标记" }).click();
+  await clickOnBar(toolbar, "标记");
   await expect(marks).toHaveCount(1);
   const xm = reader.locator("tr.marked td").first();
   await expect(xm).toBeVisible();

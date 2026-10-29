@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import type { PageRect } from "@point/core";
 import { SelectionOverlay, type OverlayMode } from "../SelectionOverlay";
 import { BundledCMaps, BundledStandardFonts } from "./pdf-assets";
-import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist/legacy/build/pdf.mjs";
+import { buildPageTextGeom, mergeLineRects, runsToLines, type PdfPageForGeom, type TjLineRun } from "./pdf-tj-geom";
+import type { PDFDocumentProxy, PageViewport, RenderTask } from "pdfjs-dist/legacy/build/pdf.mjs";
 
 type Pdfjs = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
 /** 1 PDF point = 4/3 CSS px at 100%. */
@@ -71,10 +72,8 @@ function Page({ doc, n, scale, size, marks, rects, selection }: { doc: PDFDocume
     }
     let live = true;
     let task: RenderTask | undefined;
-    let layer: { cancel(): void } | undefined;
     void (async () => {
       try {
-        const lib = await loadPdfjs();
         const page = await doc.getPage(n);
         if (!live) return;
         const viewport = page.getViewport({ scale });
@@ -93,20 +92,23 @@ function Page({ doc, n, scale, size, marks, rects, selection }: { doc: PDFDocume
         task = page.render({ canvasContext: ctx, viewport, transform: dpr === 1 ? undefined : [dpr, 0, 0, dpr, 0, 0] });
         await task.promise;
         if (!live) return;
-        const content = await page.getTextContent();
+        // Layout comes from the operator list (glyph origins and advances, as the canvas drew them);
+        // getTextContent only supplies the fallback font family per font and the PDF's /Lang.
+        const [geom, content] = await Promise.all([buildPageTextGeom(page as unknown as PdfPageForGeom), page.getTextContent()]);
         if (!live) return;
         t.replaceChildren();
         t.style.setProperty("--scale-factor", String(viewport.scale));
-        // pdf.js sizes each span by measuring its text on a canvas whose lang is the PDF's /Lang ("" when
-        // unset). The layer must resolve fonts with that same lang: inheriting the app's lang="zh-CN"
-        // turns generic serif/sans-serif into CJK fonts (SimSun / YaHei on Windows) whose Latin widths
-        // differ, so spans overlap and drift from the glyphs.
+        // Spans are sized by measuring their text on a canvas whose lang is the PDF's /Lang ("" when unset).
+        // The layer must resolve fonts with that same lang: inheriting the app's lang="zh-CN" turns generic
+        // serif/sans-serif into CJK fonts (SimSun / YaHei on Windows) whose Latin widths differ.
         t.lang = content.lang ?? "";
-        const tl = new lib.TextLayer({ textContentSource: content, container: t, viewport });
-        layer = tl;
-        await tl.render();
-        if (!live) return;
+        // The embedded font first (pdf.js registered it under the run's font name to draw the canvas), so layer
+        // glyphs have the canvas glyphs' shapes; getTextContent's fallback family when the font is not loaded.
+        const families = new Map(Object.entries(content.styles).map(([k, v]) => [k, v.fontFamily]));
+        const family = (name: string) => `${document.fonts.check(`10px "${name}"`) ? `"${name}", ` : ""}${families.get(name) ?? "sans-serif"}`;
+        renderTextLayer(t, runsToLines(geom.runs), viewport, family);
         closeLineGaps(t);
+        trackSelection(t);
         if (live) setDone((d) => d + 1);
       } catch (e) {
         if ((e as { name?: string }).name !== "RenderingCancelledException") console.warn("pdf page", n, e);
@@ -115,28 +117,45 @@ function Page({ doc, n, scale, size, marks, rects, selection }: { doc: PDFDocume
     return () => {
       live = false;
       task?.cancel();
-      layer?.cancel();
+      // The spans stay until the rebuild replaces them; dropping the scale marks them as superseded
+      // (a selection made in them now is lost when the new layer lands).
+      t.style.removeProperty("--scale-factor");
+      selectionLayers.delete(t);
     };
   }, [near, doc, n, scale]);
 
-  // Same highlight as the other formats: spans whose text lies inside a marked passage.
+  // Same highlight as the other formats: lines whose text lies inside a marked passage.
   useEffect(() => {
     const t = text.current;
     if (!t) return;
     const hay = marks.map(norm);
-    t.querySelectorAll("span").forEach((s) => {
-      const x = norm(s.textContent ?? "");
-      s.classList.toggle("marked", x.length >= 2 && hay.some((h) => h.includes(x)));
+    t.querySelectorAll(".pdf-line").forEach((line) => {
+      const x = norm(line.textContent ?? "");
+      const on = x.length >= 2 && hay.some((h) => h.includes(x));
+      line.querySelectorAll("span").forEach((s) => s.classList.toggle("marked", on));
     });
   }, [marks, done]);
 
+  // Stored marks (legacy per-word ones too) merged on read: one box per line.
+  const lineRects = mergeLineRects(rects);
   return (
     <div className="pdf-page" ref={wrap} data-page={n} data-scale={scale} data-testid="pdf-page" style={{ width: Math.floor(size[0] * scale), height: Math.floor(size[1] * scale) }}>
       <canvas ref={canvas} aria-hidden />
-      {rects.map((r, i) => (
-        <div key={i} className="mark-rect" data-testid="mark-rect" style={{ left: r.x * scale / BASE, top: r.y * scale / BASE, width: r.w * scale / BASE, height: r.h * scale / BASE }} />
-      ))}
-      {selection && selection.rects.length > 0 && <SelectionOverlay rects={selection.rects} scale={scale} mode={selection.mode} />}
+      {lineRects.length > 0 && (
+        <>
+          <div className="mark-rects">
+            {lineRects.map((r, i) => (
+              <div key={i} className="mark-rect" data-testid="mark-rect" style={{ left: r.x * scale / BASE, top: r.y * scale / BASE, width: r.w * scale / BASE, height: r.h * scale / BASE }} />
+            ))}
+          </div>
+          <div className="mark-lines">
+            {lineRects.map((r, i) => (
+              <div key={i} className="mark-line" style={{ left: r.x * scale / BASE, top: (r.y + r.h) * scale / BASE - 2, width: r.w * scale / BASE, height: 2 }} />
+            ))}
+          </div>
+        </>
+      )}
+      {selection && selection.rects.length > 0 && <SelectionOverlay rects={mergeLineRects(selection.rects)} scale={scale} mode={selection.mode} />}
       <div className="textLayer pdf-text" ref={text} />
     </div>
   );
@@ -297,13 +316,227 @@ export function PdfView({ data, zoom, goto, markTexts, markRects, selection, fit
 }
 
 /**
- * Selection gaps between lines: spans are one font-size tall (line-height 1), so a multi-line selection
+ * Text layer from the operator-list runs: one `.pdf-line` span per line holding one span per run, each at the
+ * run's own glyph origin (top = baseline − ascent). Canvas draws the glyphs; these spans are transparent and
+ * only hit-test and select. Each run is stretched to its own PDF advance (never a whole line), and its line
+ * height puts the layer font's baseline on the PDF baseline.
+ */
+function renderTextLayer(layer: HTMLElement, lines: TjLineRun[][], viewport: PageViewport, family: (fontName: string) => string) {
+  const probe = document.createElement("canvas");
+  // Measure with the layer's lang, so generic families resolve to the same fonts as in the layer.
+  probe.lang = layer.lang;
+  probe.style.display = "none";
+  document.body.append(probe);
+  const ctx = probe.getContext("2d")!;
+  const boxes = new Map<string, { a: number; d: number }>();
+  const box = (fam: string) => {
+    let b = boxes.get(fam);
+    if (!b) {
+      ctx.font = `100px ${fam}`;
+      const m = ctx.measureText("x");
+      b = { a: m.fontBoundingBoxAscent / 100, d: m.fontBoundingBoxDescent / 100 };
+      boxes.set(fam, b);
+    }
+    return b;
+  };
+  const frag = document.createDocumentFragment();
+  for (const line of lines) {
+    const runs = line.map((r) => {
+      const [x, y] = viewport.convertToViewportPoint(r.x, r.y) as [number, number];
+      const size = r.fontSize * viewport.scale;
+      const asc = r.ascent / r.fontSize;
+      const fam = family(r.fontName);
+      const { a, d } = box(fam);
+      // line-height 1 puts the baseline at (lh − a − d) / 2 + a; solve for a baseline at the PDF ascent.
+      const lh = Math.min(2, Math.max(0.5, 2 * asc - a + d));
+      ctx.font = `${size}px ${fam}`;
+      const w = ctx.measureText(r.str).width;
+      const adv = (r.advance ?? 0) * viewport.scale;
+      // No advance or nothing measurable (empty / unsupported glyphs): no stretch rather than NaN or Infinity.
+      const sx = w > 0 && adv > 0 && Number.isFinite(adv / w) ? adv / w : 1;
+      return { r, fam, size, lh, left: x, top: y - asc * size, right: x + adv, bottom: y - asc * size + lh * size, sx, space: ctx.measureText(" ").width };
+    });
+    const left = Math.min(...runs.map((x) => x.left));
+    const top = Math.min(...runs.map((x) => x.top));
+    const el = document.createElement("span");
+    el.className = "pdf-line";
+    Object.assign(el.style, { left: `${left}px`, top: `${top}px`, width: `${Math.max(...runs.map((x) => x.right)) - left}px`, height: `${Math.max(...runs.map((x) => x.bottom)) - top}px` });
+    runs.forEach((x, i) => {
+      const s = document.createElement("span");
+      s.textContent = x.r.space ? `${x.r.str} ` : x.r.str;
+      // scaleX from the left edge, so the run keeps its PDF x (style.css sets it too; explicit here).
+      Object.assign(s.style, { left: `${x.left - left}px`, top: `${x.top - top}px`, fontSize: `${x.size}px`, fontFamily: x.fam, lineHeight: String(x.lh), transform: `scaleX(${x.sx})`, transformOrigin: "0 0" });
+      // The word space reaches the next word, so a selection has no holes in justified lines.
+      const next = runs[i + 1];
+      // Never negative: a negative word-spacing would pull the next word's hit area over this one.
+      if (x.r.space && next) s.style.wordSpacing = `${Math.max(0, (next.left - x.right) / x.sx - x.space)}px`;
+      el.append(s);
+    });
+    frag.append(el, document.createElement("br"));
+  }
+  probe.remove();
+  layer.append(frag);
+}
+
+/**
+ * pdf.js TextLayer's selection guard (4.10 `#enableGlobalSelectionListener` / `#bindMouse`), for this span layer.
+ * Each layer ends with a `.endOfContent` div; while selecting (`.selecting`) it covers the layer under the spans,
+ * down to the lowest text line. It is moved to the layer's top level right after the moving end's `.pdf-line` (and
+ * that line's `<br>`), so dragging into a line gap hits it and the selection stays at that line instead of jumping
+ * to a later paragraph. Below the last line it does not cover: there Chromium's own hit on the layer ends the
+ * selection at the layer's last text, which is the right end. (Covering that area too made Chromium map the point to
+ * an arbitrary earlier span: the selection collapsed.)
+ */
+const selectionLayers = new Map<HTMLElement, HTMLDivElement>();
+let selectionListening = false;
+let prevRange: Range | null = null;
+
+function resetSelectionLayer(end: HTMLDivElement, layer: HTMLElement) {
+  layer.append(end);
+  Object.assign(end.style, { left: "", top: "", width: "", height: "" });
+  layer.classList.remove("selecting");
+}
+
+/** Bottom of the layer's lowest text line, in layer px: below it the guard must not cover the layer (see trackSelection). */
+function textBottom(layer: HTMLElement): number {
+  const box = layer.getBoundingClientRect();
+  const k = box.height / (layer.clientHeight || 1) || 1;
+  let bottom = box.top;
+  for (const s of layer.querySelectorAll<HTMLElement>(".pdf-line > span")) bottom = Math.max(bottom, s.getBoundingClientRect().bottom);
+  return Math.ceil((bottom - box.top) / k);
+}
+
+/**
+ * The guard sits right after the moving end's line. When that is the layer's last line, a release just right of it
+ * has no text after it in the layer, and Chromium ends the selection at the next text in the document, past the
+ * article (the column resizer, the AI panel), so no selection bar opens. Pull such an end back into the selected
+ * pages: the line at the pointer's height, the rightmost one starting left of the pointer (two columns); else the
+ * nearest line above it in that column (below it, dragging up). On that line, the end of the last run starting left
+ * of the pointer (dragging up: the start of the first run ending right of it). An end that would cross the anchor
+ * stops at the anchor line's end (start), so the drag keeps its direction. Runs on pointerup, before the bar and
+ * pdfAnchor read the selection.
+ */
+function keepEndInLayer(e: PointerEvent, resetAll: () => void) {
+  const sel = document.getSelection();
+  const { anchorNode, focusNode } = sel ?? {};
+  const focusEl = focusNode instanceof Element ? focusNode : focusNode?.parentElement;
+  if (!sel || sel.isCollapsed || !anchorNode || !focusNode || focusEl?.closest(".pdf-text")) return;
+  const up = !!(anchorNode.compareDocumentPosition(focusNode) & Node.DOCUMENT_POSITION_PRECEDING);
+  type Line = { runs: HTMLElement[]; left: number; right: number; top: number; bottom: number };
+  const lines: Line[] = [];
+  for (const l of selectionLayers.keys()) {
+    if (!sel.containsNode(l, true)) continue;
+    for (const el of l.querySelectorAll(".pdf-line")) {
+      const runs = [...el.querySelectorAll<HTMLElement>(":scope > span")];
+      const rs = runs.map((r) => r.getBoundingClientRect());
+      if (rs.length) lines.push({ runs, left: Math.min(...rs.map((r) => r.left)), right: Math.max(...rs.map((r) => r.right)), top: Math.min(...rs.map((r) => r.top)), bottom: Math.max(...rs.map((r) => r.bottom)) });
+    }
+  }
+  const { clientX: x, clientY: y } = e;
+  // The column: lines starting left of the pointer that reach past the rightmost such line's start.
+  const column = (ls: Line[]) => {
+    const left = ls.filter((l) => l.left <= x);
+    const pool = left.length ? left : ls;
+    const start = Math.max(...pool.map((l) => l.left));
+    return pool.filter((l) => l.right > start);
+  };
+  const atY = column(lines.filter((l) => l.top <= y && y <= l.bottom)).sort((p, q) => p.left - q.left);
+  const line = atY.length
+    ? atY.at(-1)
+    : up
+      ? column(lines.filter((l) => l.top > y)).sort((p, q) => q.top - p.top).at(-1)
+      : column(lines.filter((l) => l.bottom < y)).sort((p, q) => p.bottom - q.bottom).at(-1);
+  if (!line) return;
+  const box = (r: HTMLElement) => r.getBoundingClientRect();
+  const run = up ? line.runs.find((r) => box(r).right >= x) : line.runs.filter((r) => box(r).left <= x).at(-1);
+  // No run on that side of the pointer: the line's end (dragging down, the pointer is left of the line: its start).
+  let t = (run ?? (up ? line.runs.at(-1) : line.runs[0]))?.lastChild;
+  if (t?.nodeType !== Node.TEXT_NODE) return;
+  let at = (run ? !up : up) ? t.textContent!.length : 0;
+  const p = document.createRange();
+  p.setStart(t, at);
+  const crossed = up ? p.comparePoint(anchorNode, sel.anchorOffset) < 0 : p.comparePoint(anchorNode, sel.anchorOffset) > 0;
+  if (crossed) {
+    const a = (anchorNode instanceof Element ? anchorNode : anchorNode.parentElement)?.closest(".pdf-line");
+    const r = a?.querySelectorAll<HTMLElement>(":scope > span");
+    const edge = (up ? r?.[0] : r?.[r.length - 1])?.lastChild;
+    if (edge?.nodeType !== Node.TEXT_NODE) return;
+    t = edge;
+    at = up ? 0 : edge.textContent!.length;
+  }
+  sel.extend(t, at);
+  // The extend's selectionchange arrives after this pointerup and re-arms the guard: put it back once more.
+  document.addEventListener("selectionchange", resetAll, { once: true });
+}
+
+function trackSelection(layer: HTMLElement) {
+  const end = document.createElement("div");
+  end.className = "endOfContent";
+  layer.append(end);
+  selectionLayers.set(layer, end);
+  layer.onpointerdown = () => layer.classList.add("selecting");
+  if (selectionListening) return;
+  selectionListening = true;
+  let pointerDown = false;
+  const resetAll = () => selectionLayers.forEach(resetSelectionLayer);
+  document.addEventListener("pointerdown", () => (pointerDown = true));
+  document.addEventListener("pointerup", (e) => ((pointerDown = false), keepEndInLayer(e, resetAll), resetAll()));
+  window.addEventListener("blur", () => ((pointerDown = false), resetAll()));
+  document.addEventListener("keyup", () => !pointerDown && resetAll());
+  document.addEventListener("selectionchange", () => {
+    const sel = document.getSelection();
+    if (!sel || sel.rangeCount === 0) return resetAll();
+    const active = new Set<HTMLElement>();
+    for (let i = 0; i < sel.rangeCount; i++) {
+      const r = sel.getRangeAt(i);
+      for (const l of selectionLayers.keys()) if (r.intersectsNode(l)) active.add(l);
+    }
+    for (const [l, end] of selectionLayers) {
+      if (active.has(l)) l.classList.add("selecting");
+      else resetSelectionLayer(end, l);
+    }
+    const range = sel.getRangeAt(0);
+    // Neither end moved (the pointer moved within one caret position, or a DOM change re-fired the event): leave the
+    // guard where it is. Read as "start moved", it jumped to the start line and the next hit mapped there.
+    if (prevRange && range.compareBoundaryPoints(Range.END_TO_END, prevRange) === 0 && range.compareBoundaryPoints(Range.START_TO_START, prevRange) === 0) return;
+    const modifyStart = !!prevRange && (range.compareBoundaryPoints(Range.END_TO_END, prevRange) === 0 || range.compareBoundaryPoints(Range.START_TO_END, prevRange) === 0);
+    let anchor: Node | null = modifyStart ? range.startContainer : range.endContainer;
+    if (anchor.nodeType === Node.TEXT_NODE) anchor = anchor.parentNode;
+    else if (anchor instanceof HTMLElement && selectionLayers.has(anchor)) {
+      // Pointer on the layer itself (below the guard): the end is a child index; take the node before it, past the guard.
+      const kids = anchor.childNodes, i = modifyStart ? range.startOffset : range.endOffset - 1;
+      let n: Node | null = kids[Math.min(Math.max(i, 0), kids.length - 1)] ?? null;
+      if (n === selectionLayers.get(anchor)) n = modifyStart ? n.nextSibling : n.previousSibling;
+      if (n) anchor = n;
+    }
+    if (anchor && !modifyStart && range.endOffset === 0) {
+      do {
+        while (anchor && !anchor.previousSibling) anchor = anchor.parentNode;
+        anchor = anchor?.previousSibling ?? null;
+      } while (anchor && !anchor.childNodes.length);
+    }
+    prevRange = range.cloneRange();
+    // Next to the moving end's line, at the layer's top level (not inside the .pdf-line).
+    if (anchor instanceof Element && anchor !== anchor.closest(".pdf-text")) anchor = anchor.closest(".pdf-line") ?? anchor;
+    if (!modifyStart && anchor instanceof Element && anchor.classList.contains("pdf-line") && anchor.nextElementSibling?.tagName === "BR") anchor = anchor.nextElementSibling;
+    const parent = anchor?.parentElement;
+    const layer = parent?.closest<HTMLElement>(".pdf-text");
+    const end = layer && selectionLayers.get(layer);
+    if (!anchor || !parent || !layer || !end || anchor === end) return;
+    const off = parent === layer ? { x: 0, y: 0 } : { x: parent.offsetLeft, y: parent.offsetTop };
+    Object.assign(end.style, { left: `${-off.x}px`, top: `${-off.y}px`, width: `${layer.clientWidth}px`, height: `${textBottom(layer)}px` });
+    parent.insertBefore(end, modifyStart ? anchor : anchor.nextSibling);
+  });
+}
+
+/**
+ * Selection gaps between lines: run spans are about one font-size tall, so a multi-line selection
  * shows strips of page between lines. Give each span a line box as tall as the distance to the next line
  * below it (same column, close enough to be the same paragraph), centred on the glyphs so they don't move.
  * Ratios are in em, so they hold for the span's own font size.
  */
 function closeLineGaps(layer: HTMLElement) {
-  const spans = [...layer.querySelectorAll<HTMLElement>("span:not(.markedContent)")].filter((s) => s.textContent);
+  const spans = [...layer.querySelectorAll<HTMLElement>(".pdf-line > span")].filter((s) => s.textContent);
   const lr = layer.getBoundingClientRect();
   const boxes = spans.map((s) => {
     const r = s.getBoundingClientRect();

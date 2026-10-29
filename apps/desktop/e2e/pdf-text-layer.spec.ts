@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makePdf } from "../../../packages/core/test/fixtures/make";
 
-// Requires `pnpm build` first. pdf.js text layer must hug the canvas glyphs at every zoom.
+// Requires `pnpm build` first. The text layer must hug the canvas glyphs at every zoom.
 const results = join(import.meta.dirname, "..", "test-results");
 const LINES = [
   "Depth determination is a fundamental task for a hydrographer, which requires specific",
@@ -56,32 +56,56 @@ test("PDF text layer: spans line up with the canvas glyphs at 100% and 125%, sel
       const cr = c.getBoundingClientRect();
       const d = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
       const k = c.width / cr.width;
-      const spans = [...layer.querySelectorAll<HTMLElement>("span")].filter((s) => s.textContent!.trim());
+      // Ink extents per word: dark columns over the word's rows, split into words at gaps of 0.2 em or more.
+      const inkWords = (top: number, bottom: number, em: number) => {
+        const y0 = Math.max(0, Math.floor((top - cr.top) * k) - 3);
+        const y1 = Math.min(c.height, Math.ceil((bottom - cr.top) * k) + 3);
+        const cols: number[] = [];
+        for (let x = 0; x < c.width; x++)
+          for (let y = y0; y < y1; y++) {
+            const i = (y * c.width + x) * 4;
+            if (d[i]! < 140 && d[i + 1]! < 140 && d[i + 2]! < 140) {
+              cols.push(x);
+              break;
+            }
+          }
+        const segs: { l: number; r: number }[] = [];
+        for (const x of cols) {
+          const last = segs.at(-1);
+          if (last && x - last.r <= 0.2 * em * k) last.r = x + 1;
+          else segs.push({ l: x, r: x + 1 });
+        }
+        return segs.map((g) => ({ l: g.l / k, r: g.r / k }));
+      };
+      // One leaf span per word run (`.pdf-line > span`), measured on its own so per-word drift cannot hide in
+      // a line box. The word's box is a Range over its non-space text (the trailing space reaches the next word).
+      const words = [...layer.querySelectorAll<HTMLElement>(".pdf-line > span")].flatMap((s) => {
+        const t = s.firstChild as Text | null;
+        if (!t || t.nodeType !== 3 || !t.data.trim()) return [];
+        const i = t.data.search(/\S/);
+        const w = t.data.trim();
+        const r = document.createRange();
+        r.setStart(t, i);
+        r.setEnd(t, i + w.length);
+        const b = r.getBoundingClientRect();
+        const left = b.left - cr.left, right = b.right - cr.left;
+        const segs = inkWords(b.top, b.bottom, parseFloat(getComputedStyle(s).fontSize)).filter((g) => g.l < right && g.r > left);
+        return [{ text: w, left, right, inkLeft: Math.min(...segs.map((g) => g.l)), inkRight: Math.max(...segs.map((g) => g.r)) }];
+      });
       return {
         lang: layer.getAttribute("lang"),
         docScroll: document.scrollingElement!.scrollHeight - document.scrollingElement!.clientHeight,
-        rows: spans.map((s) => {
-          const b = s.getBoundingClientRect();
-          const y0 = Math.max(0, Math.floor((b.top - cr.top) * k) - 3);
-          const y1 = Math.min(c.height, Math.ceil((b.bottom - cr.top) * k) + 3);
-          let minX = Infinity;
-          let maxX = -Infinity;
-          for (let y = y0; y < y1; y++)
-            for (let x = 0; x < c.width; x++) {
-              const i = (y * c.width + x) * 4;
-              if (d[i]! < 140 && d[i + 1]! < 140 && d[i + 2]! < 140) {
-                if (x < minX) minX = x;
-                if (x > maxX) maxX = x;
-              }
-            }
-          return { text: s.textContent!, left: b.left - cr.left, right: b.right - cr.left, inkLeft: minX / k, inkRight: (maxX + 1) / k };
-        })
+        lines: [...layer.querySelectorAll<HTMLElement>(".pdf-line")].map((l) => l.textContent!).filter((x) => x.trim()),
+        rows: words
       };
     });
     expect(m.lang, "layer resolves fonts with the PDF's lang, not the app's zh-CN").toBe("");
     expect(m.docScroll).toBeLessThanOrEqual(0);
-    expect(m.rows.map((r) => r.text)).toEqual(LINES);
+    expect(m.lines).toEqual(LINES);
+    expect(m.rows.map((r) => r.text).join(" ")).toBe(LINES.join(" "));
+    expect(m.rows.length, "one leaf span per word").toBe(LINES.join(" ").split(" ").length);
     const tol = 3 * (zoom / 100);
+    console.log(`PDF-TEXT-LAYER-WORDS ${zoom}% max |dL| ${Math.max(...m.rows.map((r) => Math.abs(r.left - r.inkLeft))).toFixed(2)} max |dR| ${Math.max(...m.rows.map((r) => Math.abs(r.right - r.inkRight))).toFixed(2)}`);
     for (const r of m.rows) {
       expect(Math.abs(r.left - r.inkLeft), `${zoom}% left of “${r.text.slice(0, 20)}”`).toBeLessThanOrEqual(tol);
       expect(Math.abs(r.right - r.inkRight), `${zoom}% right of “${r.text.slice(0, 20)}”`).toBeLessThanOrEqual(tol);

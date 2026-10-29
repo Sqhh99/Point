@@ -1,8 +1,9 @@
 import { test, expect, _electron as electron, type ElectronApplication } from "@playwright/test";
-import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodePng } from "./png";
+import { buildPageTextGeom, type PdfPageForGeom, type TjWordBox } from "../src/renderer/viewers/pdf-tj-geom";
 
 // Requires `pnpm build` first. Embedded-font, justified multi-paragraph PDF (fixtures/pdf/hydro-serif.pdf,
 // Nimbus Roman subset): text-layer glyph boxes vs canvas glyphs at 100/125/150/200 %, and selection
@@ -145,7 +146,6 @@ async function measureTile(win: Win, clip: { x: number; y: number; width: number
 }
 
 test("embedded-font justified PDF: layer glyphs vs canvas glyphs, and selection without ghosting, stripes or line gaps", async () => {
-  test.info().annotations.push({ type: "known-issue", description: "embedded-font drift, v0.2.3" });
   const win = await app.firstWindow();
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setBounds({ x: 0, y: 0, width: 2200, height: 1500 }));
   mkdirSync(shots, { recursive: true });
@@ -173,7 +173,7 @@ test("embedded-font justified PDF: layer glyphs vs canvas glyphs, and selection 
     // Denominator: every word of the page's text layer, wherever it is on the page (scrolled scan above).
     expect(d.total, `${z}%: text layer has words (a missing layer must not pass as 0/0)`).toBeGreaterThanOrEqual(30);
     expect(d.words, `${z}%: every word of the page's text layer was measured`).toBe(d.total);
-    expect(d.within1px, `${z}%: share of words within 1px of the canvas glyphs`).toBeGreaterThanOrEqual(0.2);
+    expect(d.within1px, `${z}%: share of words within 1px of the canvas glyphs`).toBeGreaterThanOrEqual(0.9);
   }
 
   // --- Selection: drawn the upstream way inside the PDF only.
@@ -199,6 +199,29 @@ test("embedded-font justified PDF: layer glyphs vs canvas glyphs, and selection 
   await checkSelection(win, 125, "accuracy.");
   await checkSelection(win, 200, "survey.");
 });
+
+/** Tint threshold: the lowest ratio measured on the three platforms (Windows CI 125 % 0.619) minus a 0.10 margin, floored. */
+const TINT_MIN = 0.51;
+let geomWords: Promise<TjWordBox[]> | undefined;
+/** PageTextGeom.words of the fixture's page 1, built in Node with the app's pdf.js. */
+async function selectedGeomWords(endWord: string) {
+  geomWords ??= (async () => {
+    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const worker = await import("pdfjs-dist/legacy/build/pdf.worker.mjs");
+    (globalThis as { pdfjsWorker?: unknown }).pdfjsWorker ??= worker;
+    const doc = await pdfjs.getDocument({ data: new Uint8Array(readFileSync(join(FIXTURES, "hydro-serif.pdf"))), verbosity: 0, isEvalSupported: false }).promise;
+    try {
+      return (await buildPageTextGeom((await doc.getPage(1)) as unknown as PdfPageForGeom)).words;
+    } finally {
+      await doc.destroy();
+    }
+  })();
+  const all = await geomWords;
+  // The selection runs from the second "Depth" (the paragraph, not the heading) to endWord.
+  const a = all.findIndex((w, i) => w.text === "Depth" && all.slice(0, i).some((x) => x.text === "Depth"));
+  const z = all.findIndex((w, i) => i > a && w.text === endWord);
+  return a >= 0 && z > a ? all.slice(a, z + 1) : [];
+}
 
 async function checkSelection(win: Win, z: number, endWord: string) {
   await setZoom(win, z);
@@ -287,7 +310,30 @@ async function checkSelection(win: Win, z: number, endWord: string) {
     }
   }
   tints.sort((a, b) => a - b);
-  expect(tints.length).toBeGreaterThan(500);
+  // Painted selection, proportional to the selected text: device pixels of clear paper that carry the tint,
+  // inside the selected lines' boxes (first and last line included), over the selected words' area from the
+  // page's own geometry (PageTextGeom.words of the same pdf.js build, PageRect at 100 %): Σ w·h × k² × dpr², k =
+  // data-scale / (96/72) = zoom / 100. The ratio is independent of the platform's glyph antialiasing count and
+  // of the window size; it is 0 when no selection is painted.
+  // Measured (tinted / Σ word area, 91 words at 125 %, 47 at 200 %, dpr 1): Linux (xvfb) 125 % 0.638, 200 % 0.773;
+  // Windows CI 125 % 0.619, 200 % 0.760; macOS CI 125 % 0.626, 200 % 0.748 (run 40757035570).
+  // Threshold = min (0.619) − margin 0.10 = 0.519, floored to 0.51. With the ::selection tint off the ratio is ~0.
+  const dpr = W / clip.width;
+  const k = Number(await page1(win).getAttribute("data-scale")) / (96 / 72);
+  const words = await selectedGeomWords(endWord);
+  const wordArea = words.reduce((a, w) => a + w.rect.w * w.rect.h, 0) * k * k * dpr * dpr;
+  let tinted = 0;
+  for (const ln of lines)
+    for (let y = Math.ceil((ln.t - clip.y) * dpr); y < Math.floor((ln.b - clip.y) * dpr); y++)
+      for (let x = Math.ceil((ln.l - clip.x) * dpr); x < Math.floor((ln.r - clip.x) * dpr); x++) {
+        if (!clearPaper(x, y)) continue;
+        const c = px(selected, x, y), p = px(plain, x, y);
+        if (Math.abs(c[0]! - p[0]!) + Math.abs(c[1]! - p[1]!) + Math.abs(c[2]! - p[2]!) >= 15) tinted++;
+      }
+  const ratio = tinted / wordArea;
+  console.log("PDF-SELECTION-TINT", JSON.stringify({ platform: process.platform, z, dpr, k, words: words.length, midSamples: tints.length, tinted, wordArea: Math.round(wordArea), tintedOfWordArea: +ratio.toFixed(3) }));
+  expect(words.length, `${z}%: selected words found in PageTextGeom`).toBeGreaterThanOrEqual(30);
+  expect(ratio, `${z}%: tinted clear paper / selected words' geom area (${tinted} / ${Math.round(wordArea)})`).toBeGreaterThanOrEqual(TINT_MIN);
   const median = tints[tints.length >> 1]!;
   const tint = chans.map((c) => c.sort((x, y) => x - y)[c.length >> 1]!);
   // Light theme: --accent at the layer's 25 % over white paper.
@@ -318,3 +364,258 @@ async function checkSelection(win: Win, z: number, endWord: string) {
   expect(gapRows, `${z}%: rows of untinted paper between selected lines`).toEqual([]);
 }
 
+
+/** Client box of the nth occurrence of `w` in page 1's text layer. */
+const wordBox = (win: Win, w: string, nth = 0) =>
+  page1(win).evaluate(
+    (el, [w, nth]) => {
+      let k = 0;
+      for (const s of el.querySelectorAll<HTMLElement>(".pdf-line > span")) {
+        const t = s.firstChild as Text | null;
+        if (!t || t.nodeType !== 3) continue;
+        let i = -1;
+        while ((i = t.data.indexOf(w as string, i + 1)) >= 0)
+          if (k++ === nth) {
+            const r = document.createRange();
+            r.setStart(t, i);
+            r.setEnd(t, i + (w as string).length);
+            const b = r.getBoundingClientRect();
+            return { l: b.left, r: b.right, t: b.top, b: b.bottom };
+          }
+      }
+      return null;
+    },
+    [w, nth] as const
+  );
+
+test("dragging from a word into a line gap or below the text keeps the selection local (.endOfContent, .selecting)", async () => {
+  const win = await app.firstWindow();
+  // 125 %, not 100 %: on a window shorter than the page (macOS CI, ~680 px) a Playwright (CDP) mouse drag at 100 % leaves the
+  // selection collapsed at the pointer in Chromium even with the guard off; real X input selects fine there. 125 % is the zoom
+  // the 147 drags use and drags normally on every runner.
+  await setZoom(win, 125);
+  const center = win.locator("main.center");
+  const vis = (await center.boundingBox())!;
+  const bar = (await win.getByTestId("reader-bar").boundingBox())!;
+  const viewTop = bar.y + bar.height, viewBottom = vis.y + vis.height - 16;
+  const s0 = (await wordBox(win, "techniques"))!;
+  await center.evaluate((e, dy) => (e.scrollTop += dy), Math.floor(s0.t - viewTop - 40));
+  await win.waitForTimeout(150);
+  const start = (await wordBox(win, "techniques"))!;
+  const short = (await wordBox(win, "survey."))!; // last line of paragraph 1: empty paper to its right
+  const page = (await page1(win).boundingBox())!;
+  const lastLine = await page1(win).evaluate((el) => Math.max(...[...el.querySelectorAll<HTMLElement>(".pdf-line > span")].map((s) => s.getBoundingClientRect().bottom)));
+  expect(start && short).toBeTruthy();
+  const gapX = page.x + page.width - 60;
+  // Below the text, on the page and inside the visible scroller (the page bottom is off-screen on short windows).
+  const belowY = Math.min(page.y + page.height - 30, viewBottom - 20);
+  expect(gapX > short.r + 40, "empty paper right of the paragraph's short last line").toBe(true);
+  expect(start.t >= viewTop && belowY > lastLine + 20, "empty paper below the last text line, in view").toBe(true);
+  const last = (await wordBox(win, "sounding."))!; // last word of the page ("each sounding.")
+  expect(last && last.b < viewBottom, "last word in view").toBeTruthy();
+  // Each drag walks through the text to its last word (so the selection really grows to it), then leaves the text for
+  // empty paper: the selection must end at that word, not jump to the end of the layer or to a later paragraph.
+  const targets = [
+    { name: "line gap", via: short, word: "survey.", x: gapX, y: (short.t + short.b) / 2, end: /in the survey\.$/, maxBottom: short.b + 2, notAfter: "During the last decade" },
+    { name: "right of the last line +30px", via: last, word: "sounding.", x: last.r + 30, y: (last.t + last.b) / 2, end: /total propagated uncertainty of each sounding\.$/, maxBottom: last.b + 2, notAfter: null },
+    { name: "right of a middle line +30px", via: short, word: "survey.", x: short.r + 30, y: (short.t + short.b) / 2, end: /in the survey\.$/, maxBottom: short.b + 2, notAfter: "During the last decade" },
+    { name: "right of the last line +3px", via: last, word: "sounding.", x: last.r + 3, y: (last.t + last.b) / 2, end: /total propagated uncertainty of each sounding\.$/, maxBottom: last.b + 2, notAfter: null },
+    { name: "below the text", via: last, word: "sounding.", x: page.x + page.width / 2, y: belowY, end: /total propagated uncertainty of each sounding\.$/, maxBottom: last.b + 2, notAfter: null }
+  ];
+  for (const tg of targets) {
+    await win.evaluate(() => getSelection()!.removeAllRanges());
+    // The previous drag's selection bar sits above its start word: wait until it closed, or the mousedown lands on it.
+    await expect(win.getByRole("toolbar", { name: "选区操作" })).toBeHidden();
+    const sx = start.l + 2, sy = (start.t + start.b) / 2;
+    await win.mouse.move(sx, sy);
+    await win.mouse.down();
+    await win.mouse.move(sx + 10, sy, { steps: 2 });
+    await win.mouse.move(tg.via.r - 2, (tg.via.t + tg.via.b) / 2, { steps: 20 });
+    await win.mouse.move(tg.x, tg.y, { steps: 6 });
+    await win.waitForTimeout(100);
+    const during = await page1(win).evaluate((el, word) => {
+      const end = el.querySelector<HTMLElement>(".pdf-text .endOfContent");
+      let line = end?.previousElementSibling;
+      if (line?.tagName === "BR") line = line.previousElementSibling; // the line's own <br>
+      return { selecting: el.querySelector(".pdf-text")!.classList.contains("selecting"), endAtLine: !!line?.classList.contains("pdf-line") && line.textContent!.trim().endsWith(word) };
+    }, tg.word);
+    await win.mouse.up();
+    await win.waitForTimeout(150);
+    const sel = await win.evaluate(() => {
+      const s = getSelection()!;
+      const rects = s.rangeCount ? [...s.getRangeAt(0).getClientRects()].filter((r) => r.width > 1) : [];
+      const end = s.rangeCount ? s.getRangeAt(0).endContainer : null;
+      const endEl = end instanceof Element ? end : end?.parentElement;
+      return { endInText: !!endEl?.closest(".pdf-text"), text: s.toString().replace(/\s+/g, " ").trim(), bottom: Math.max(0, ...rects.map((r) => r.bottom)) };
+    });
+    const after = await page1(win).evaluate((el) => ({ selecting: el.querySelector(".pdf-text")!.classList.contains("selecting"), endLast: el.querySelector(".pdf-text")!.lastElementChild?.classList.contains("endOfContent") }));
+    console.log(`PDF-SELECTION-LOCAL ${JSON.stringify({ target: tg.name, during, words: sel.text.split(" ").length, head: sel.text.slice(0, 40), tail: sel.text.slice(-40), bottom: Math.round(sel.bottom), maxBottom: Math.round(tg.maxBottom) })}`);
+    expect(sel.text, `${tg.name}: the drag selected from the start word`).toMatch(/^techniques\b/);
+    expect(sel.text, `${tg.name}: the selection grew to the target's word and ends there`).toMatch(tg.end);
+    expect(during.selecting, `${tg.name}: layer is .selecting while dragging`).toBe(true);
+    expect(during.endAtLine, `${tg.name}: .endOfContent moved next to the selection end's line, not left at the layer end`).toBe(true);
+    if (tg.notAfter) expect(sel.text, `${tg.name}: selection did not jump to a later paragraph or the end of the layer`).not.toContain(tg.notAfter);
+    expect(sel.bottom, `${tg.name}: selection stays on the lines the drag crossed`).toBeLessThanOrEqual(tg.maxBottom);
+    expect(sel.endInText, `${tg.name}: the selection ends inside .pdf-text, not past the article`).toBe(true);
+    await expect(win.getByRole("toolbar", { name: "选区操作" }), `${tg.name}: the selection bar opens`).toBeVisible();
+    expect(after, `${tg.name}: .selecting off and .endOfContent back at the layer end after pointerup`).toEqual({ selecting: false, endLast: true });
+  }
+  // An end that escaped the article is pulled back by the pointer's height, not to the page end: put the end on
+  // .col-resizer and release right of a middle line; it must end on that line.
+  await win.evaluate(() => getSelection()!.removeAllRanges());
+  const pulled = await page1(win).evaluate((el, [x, y]) => {
+    const t = [...el.querySelectorAll<HTMLElement>(".pdf-line > span")].find((s) => s.textContent!.includes("techniques"))!.firstChild!;
+    const out = document.querySelector(".col-resizer")!;
+    getSelection()!.setBaseAndExtent(t, (t.textContent ?? "").indexOf("techniques"), out, 0);
+    document.dispatchEvent(new PointerEvent("pointerup", { clientX: x, clientY: y, bubbles: true }));
+    const s = getSelection()!;
+    const f = s.focusNode instanceof Element ? s.focusNode : s.focusNode?.parentElement;
+    return { inText: !!f?.closest(".pdf-text"), tail: s.toString().replace(/\s+/g, " ").trim().slice(-30) };
+  }, [short.r + 30, (short.t + short.b) / 2] as const);
+  expect(pulled, "escaped end pulled back to the line at the pointer's height").toEqual({ inText: true, tail: expect.stringMatching(/in the survey\.$/) });
+  await win.evaluate(() => getSelection()!.removeAllRanges());
+});
+
+test("200 % selection across paragraphs, framing the worst-drift word (screenshots)", async () => {
+  const win = await app.firstWindow();
+  await setZoom(win, 200);
+  const center = win.locator("main.center");
+  const vis = (await center.boundingBox())!;
+  const bar = (await win.getByTestId("reader-bar").boundingBox())!;
+  const view = { x: vis.x, y: bar.y + bar.height, width: vis.width - 16, height: vis.y + vis.height - 16 - (bar.y + bar.height) };
+  // Page's left edge in view as far as it fits (at 200 % the page is about as wide as the view), the passage a few lines down.
+  const a0 = (await wordBox(win, "According"))!;
+  const pg0 = (await page1(win).boundingBox())!;
+  await center.evaluate((e, [dx, dy]) => ((e.scrollLeft += dx!), (e.scrollTop += dy!)), [Math.floor(pg0.x - view.x - 24), Math.floor(a0.t - view.y - 160)]);
+  await win.waitForTimeout(150);
+  // Paragraph 1 line 2 (with the "5th" superscript) through the worst-drift word ("confidence" at 200 %) into
+  // paragraph 2 line 2 (with "2nd").
+  const a = (await wordBox(win, "According"))!;
+  const z = (await wordBox(win, "moving"))!;
+  const sx = a.l + 1, sy = (a.t + a.b) / 2, ex = z.r - 1, ey = (z.t + z.b) / 2;
+  await win.mouse.move(sx, sy);
+  await win.mouse.down();
+  for (let i = 1; i <= 16; i++) await win.mouse.move(sx + ((ex - sx) * i) / 16, sy + ((ey - sy) * i) / 16);
+  await win.mouse.up();
+  await win.waitForTimeout(300);
+  const text = (await win.evaluate(() => getSelection()!.toString())).replace(/\s+/g, " ").trim();
+  expect(text.startsWith("According")).toBe(true);
+  expect(text).toContain("confidence");
+  expect(text.endsWith("moving")).toBe(true);
+  const r = await win.evaluate(() => {
+    const rs = [...getSelection()!.getRangeAt(0).getClientRects()].filter((x) => x.width > 1);
+    return { l: Math.min(...rs.map((x) => x.left)), r: Math.max(...rs.map((x) => x.right)), t: Math.min(...rs.map((x) => x.top)), b: Math.max(...rs.map((x) => x.bottom)) };
+  });
+  // Frame: from the page's left edge and one line above the selection (with the selection bar) to just past it.
+  // The paper is white in both themes; the dark shot shows the dark selection bar over the same --accent selection.
+  const pg = (await page1(win).boundingBox())!;
+  const x0 = Math.max(view.x, pg.x - 24), y0 = Math.max(view.y, r.t - 90);
+  const clip = { x: x0, y: y0, width: Math.min(view.x + view.width, r.r + 24) - x0, height: Math.min(view.y + view.height, r.b + 24) - y0 };
+  mkdirSync(shots, { recursive: true });
+  await win.screenshot({ path: join(shots, `pdf-embedded-selection-200-cross-${process.platform}.png`), clip });
+  await win.emulateMedia({ colorScheme: "dark" });
+  await win.waitForTimeout(150);
+  await win.screenshot({ path: join(shots, `pdf-embedded-selection-200-cross-${process.platform}-dark.png`), clip });
+  await win.emulateMedia({ colorScheme: "light" });
+  await win.evaluate(() => getSelection()!.removeAllRanges());
+});
+
+/** Import `file` from the fixtures (choosing a workspace first when the test runs alone); it opens in the reader. */
+async function openFixture(win: Win, file: string) {
+  const src = mkdtempSync(join(tmpdir(), "point-pdfemb-src-"));
+  copyFileSync(join(FIXTURES, file), join(src, file));
+  const pick = win.getByRole("button", { name: "选择工作区…" });
+  const imp = win.getByRole("button", { name: "导入文档" });
+  await expect(pick.or(imp).first()).toBeVisible();
+  const paths = (await pick.isVisible()) ? [mkdtempSync(join(tmpdir(), "point-pdfemb-ws-")), join(src, file)] : [join(src, file)];
+  await app.evaluate(({ dialog }, paths) => {
+    let n = 0;
+    dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [paths[Math.min(n++, paths.length - 1)]!] })) as typeof dialog.showOpenDialog;
+  }, paths);
+  if (paths.length > 1) await pick.click();
+  await imp.click();
+}
+
+/** Selection from `from` (a word on page 1) to .col-resizer, as Chromium leaves it after a release past the article,
+ *  then a pointerup at (x, y): returns where the end was pulled back to. */
+const pullBack = (win: Win, from: string, x: number, y: number, up = false) =>
+  page1(win).evaluate(
+    (el, [from, x, y, up]) => {
+      const t = [...el.querySelectorAll<HTMLElement>(".pdf-line > span")].find((s) => s.textContent!.includes(from as string))!.firstChild!;
+      const i = (t.textContent ?? "").indexOf(from as string);
+      // Dragging up, Chromium's escaped end lands before the article (the document list).
+      const out = document.querySelector(up ? '[data-testid="doc-list"]' : ".col-resizer")!;
+      if (up && !(out.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)) throw new Error("doc-list is not before the page");
+      getSelection()!.setBaseAndExtent(t, up ? i + (from as string).length : i, out, 0);
+      document.dispatchEvent(new PointerEvent("pointerup", { clientX: x as number, clientY: y as number, bubbles: true }));
+      const s = getSelection()!;
+      const f = s.focusNode instanceof Element ? s.focusNode : s.focusNode?.parentElement;
+      const text = s.toString().replace(/\s+/g, " ").trim();
+      const r = { inText: !!f?.closest(".pdf-text"), up: !!(s.anchorNode!.compareDocumentPosition(s.focusNode!) & Node.DOCUMENT_POSITION_PRECEDING), head: text.slice(0, 30), tail: text.slice(-30) };
+      s.removeAllRanges();
+      return r;
+    },
+    [from, x, y, up] as const
+  );
+
+test("an end released past the article is pulled back on the page and column under the pointer (two pages, two columns)", async () => {
+  const win = await app.firstWindow();
+  // Tall enough that page 2's text layer is built at 100 % (layers are built for pages in view).
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setBounds({ x: 0, y: 0, width: 2200, height: 1500 }));
+  await openFixture(win, "hydro-times-std-2p.pdf");
+  await expect(win.locator('[data-page="2"] .pdf-text span').first()).toBeAttached({ timeout: 20_000 });
+  await expect(page1(win).locator(".pdf-text span").first()).toBeVisible();
+  await setZoom(win, 125);
+  const center = win.locator("main.center");
+  const bar = (await win.getByTestId("reader-bar").boundingBox())!;
+  const s0 = (await wordBox(win, "techniques"))!;
+  await center.evaluate((e, dy) => (e.scrollTop += dy), Math.floor(s0.t - bar.y - bar.height - 40));
+  await win.waitForTimeout(150);
+  const start = (await wordBox(win, "techniques"))!;
+  const mid = (await wordBox(win, "survey."))!; // page 1, paragraph 1's short last line; page 2 follows in the layer order
+  // Direct: page 2 is the last selected layer, but the pointer is beside a page-1 line.
+  expect(await pullBack(win, "techniques", mid.r + 30, (mid.t + mid.b) / 2), "two pages: pulled back to the page-1 line at the pointer").toMatchObject({ inText: true, up: false, tail: expect.stringMatching(/in the survey\.$/) });
+  // Dragging up from "survey." and released right of the "techniques" line: the selection keeps the lines below that
+  // line, upwards (it starts at that line's end), and does not flip.
+  const pg = (await page1(win).boundingBox())!;
+  expect(await pullBack(win, "survey.", pg.x + pg.width - 20, (start.t + start.b) / 2, true), "dragging up: pulled back to the line at the pointer, still upwards").toMatchObject({
+    inText: true,
+    up: true,
+    head: expect.stringMatching(/^S-44/),
+    tail: expect.stringMatching(/in the survey\.$/)
+  });
+  // An escaped downward end whose pointer is above the anchor stops at the anchor line's end instead of flipping.
+  expect(await pullBack(win, "survey.", pg.x + pg.width - 20, (start.t + start.b) / 2), "no flip: stops at the anchor line's end").toMatchObject({ inText: true, up: false, head: "survey.", tail: "survey." });
+  // Real drag: page-1 word, through "survey.", released right of it.
+  const toolbar = win.getByRole("toolbar", { name: "选区操作" });
+  await expect(toolbar).toBeHidden();
+  const sx = start.l + 2, sy = (start.t + start.b) / 2;
+  await win.mouse.move(sx, sy);
+  await win.mouse.down();
+  await win.mouse.move(sx + 10, sy, { steps: 2 });
+  await win.mouse.move(mid.r - 2, (mid.t + mid.b) / 2, { steps: 20 });
+  await win.mouse.move(mid.r + 30, (mid.t + mid.b) / 2, { steps: 6 });
+  await win.waitForTimeout(100);
+  await win.mouse.up();
+  await win.waitForTimeout(150);
+  const sel = await win.evaluate(() => {
+    const s = getSelection()!;
+    const end = s.rangeCount ? s.getRangeAt(0).endContainer : null;
+    const endEl = end instanceof Element ? end : end?.parentElement;
+    return { endInText: !!endEl?.closest(".pdf-text"), text: s.toString().replace(/\s+/g, " ").trim() };
+  });
+  expect(sel.text, "two pages, real drag: ends at the page-1 line it was released beside").toMatch(/^techniques\b.*in the survey\.$/);
+  expect(sel.endInText).toBe(true);
+  await expect(toolbar, "two pages, real drag: the selection bar opens").toBeVisible();
+  await win.evaluate(() => getSelection()!.removeAllRanges());
+  await expect(toolbar).toBeHidden();
+
+  // Two columns: beside the right column's last line, the left column has a line at the same height; take the right one.
+  await openFixture(win, "hydro-2col.pdf");
+  await expect.poll(() => page1(win).evaluate((el) => el.querySelectorAll(".pdf-text span").length > 0 && !document.querySelector('[data-page="2"]'))).toBe(true);
+  await setZoom(win, 125);
+  const page = (await page1(win).boundingBox())!;
+  const last = (await wordBox(win, "sounding.", 2))!; // P4's third copy: the right column's last line
+  expect(last.l > page.x + page.width / 2, "the last \"sounding.\" is in the right column").toBe(true);
+  expect(await pullBack(win, "techniques", last.r + 30, (last.t + last.b) / 2), "two columns: pulled back to the right column's line").toMatchObject({ inText: true, tail: expect.stringMatching(/of each sounding\.$/) });
+});

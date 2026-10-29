@@ -7,7 +7,9 @@ export type OverlayMode = "pending" | "confirm";
 
 /**
  * Single overlay for region/text page rects. `pending` = dashed after capture; `confirm` = solid
- * flash after jumping to a mark. Each rect is its own box; never receives pointer events.
+ * flash after jumping to a mark. Each rect is its own box inside one container; never receives pointer events.
+ * Confirm boxes are opaque --accent and the container carries the opacity once, so boxes that overlap (adjacent
+ * lines' boxes overlap by a few px) never tint twice.
  * `scale` is the page's current css/pdf scale (use `PDF_CSS_BASE` for 1:1 article coords).
  */
 export function SelectionOverlay({
@@ -20,7 +22,7 @@ export function SelectionOverlay({
   mode: OverlayMode;
 }) {
   return (
-    <>
+    <div className={`selection-overlay-group selection-overlay-group-${mode}`} data-testid="selection-overlay-group" data-mode={mode}>
       {rects.map((r, i) => (
         <div
           key={i}
@@ -35,7 +37,7 @@ export function SelectionOverlay({
           }}
         />
       ))}
-    </>
+    </div>
   );
 }
 

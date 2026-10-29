@@ -6,3 +6,5 @@
 The text is original (written for these tests). Nimbus Roman is from URW base35 (AGPL-3.0 with the font exception), so embedding a subset in a document does not put the document under the font's licence.
 
 To regenerate: `python3 gen.py && soffice --headless --convert-to pdf hydro-serif.fodt && node std.cjs`. Only the metadata timestamps change between runs; `pdftotext` output is identical.
+- `hydro-times-std-2p.pdf`: `hydro-times-std.pdf`'s page twice (also from `node std.cjs`).
+- `hydro-2col.pdf`: the four paragraphs three times in two columns, from `gen.py` → `hydro-2col.fodt` → LibreOffice, like `hydro-serif.pdf`.
