@@ -448,6 +448,7 @@ export function mergeLineRects(rects: readonly PageRect[]): PageRect[] {
   const dropContained = (rs: PageRect[]) => rs.filter((a, i) => !rs.some((b, j) => inside(a, b) && !(inside(b, a) && j > i)));
   const lines: PageRect[] = [];
   for (const r of dropContained(rects.map((r) => ({ ...r }))).sort((a, b) => a.x - b.x || a.y - b.y)) {
+    // Gap threshold is the shorter box height (≈1.17 × font size), not the font size: PageRect has no font size.
     const line = lines.find((l) => Math.abs(l.y - r.y) <= 1 && Math.abs(l.h - r.h) <= 1 && r.x - (l.x + l.w) < Math.min(l.h, r.h) && l.x - (r.x + r.w) < Math.min(l.h, r.h));
     if (!line) {
       lines.push(r);

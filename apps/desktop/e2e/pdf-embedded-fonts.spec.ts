@@ -417,6 +417,8 @@ test("dragging from a word into a line gap or below the text keeps the selection
   // empty paper: the selection must end at that word, not jump to the end of the layer or to a later paragraph.
   const targets = [
     { name: "line gap", via: short, word: "survey.", x: gapX, y: (short.t + short.b) / 2, end: /in the survey\.$/, maxBottom: short.b + 2, notAfter: "During the last decade" },
+    { name: "right of the last line +30px", via: last, word: "sounding.", x: last.r + 30, y: (last.t + last.b) / 2, end: /total propagated uncertainty of each sounding\.$/, maxBottom: last.b + 2, notAfter: null },
+    { name: "right of the last line +3px", via: last, word: "sounding.", x: last.r + 3, y: (last.t + last.b) / 2, end: /total propagated uncertainty of each sounding\.$/, maxBottom: last.b + 2, notAfter: null },
     { name: "below the text", via: last, word: "sounding.", x: page.x + page.width / 2, y: belowY, end: /total propagated uncertainty of each sounding\.$/, maxBottom: last.b + 2, notAfter: null }
   ];
   for (const tg of targets) {
@@ -441,7 +443,9 @@ test("dragging from a word into a line gap or below the text keeps the selection
     const sel = await win.evaluate(() => {
       const s = getSelection()!;
       const rects = s.rangeCount ? [...s.getRangeAt(0).getClientRects()].filter((r) => r.width > 1) : [];
-      return { text: s.toString().replace(/\s+/g, " ").trim(), bottom: Math.max(0, ...rects.map((r) => r.bottom)) };
+      const end = s.rangeCount ? s.getRangeAt(0).endContainer : null;
+      const endEl = end instanceof Element ? end : end?.parentElement;
+      return { endInText: !!endEl?.closest(".pdf-text"), text: s.toString().replace(/\s+/g, " ").trim(), bottom: Math.max(0, ...rects.map((r) => r.bottom)) };
     });
     const after = await page1(win).evaluate((el) => ({ selecting: el.querySelector(".pdf-text")!.classList.contains("selecting"), endLast: el.querySelector(".pdf-text")!.lastElementChild?.classList.contains("endOfContent") }));
     console.log(`PDF-SELECTION-LOCAL ${JSON.stringify({ target: tg.name, during, words: sel.text.split(" ").length, head: sel.text.slice(0, 40), tail: sel.text.slice(-40), bottom: Math.round(sel.bottom), maxBottom: Math.round(tg.maxBottom) })}`);
@@ -451,6 +455,8 @@ test("dragging from a word into a line gap or below the text keeps the selection
     expect(during.endAtLine, `${tg.name}: .endOfContent moved next to the selection end's line, not left at the layer end`).toBe(true);
     if (tg.notAfter) expect(sel.text, `${tg.name}: selection did not jump to a later paragraph or the end of the layer`).not.toContain(tg.notAfter);
     expect(sel.bottom, `${tg.name}: selection stays on the lines the drag crossed`).toBeLessThanOrEqual(tg.maxBottom);
+    expect(sel.endInText, `${tg.name}: the selection ends inside .pdf-text, not past the article`).toBe(true);
+    await expect(win.getByRole("toolbar", { name: "选区操作" }), `${tg.name}: the selection bar opens`).toBeVisible();
     expect(after, `${tg.name}: .selecting off and .endOfContent back at the layer end after pointerup`).toEqual({ selecting: false, endLast: true });
   }
   await win.evaluate(() => getSelection()!.removeAllRanges());

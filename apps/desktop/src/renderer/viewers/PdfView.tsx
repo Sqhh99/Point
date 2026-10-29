@@ -406,6 +406,28 @@ function textBottom(layer: HTMLElement): number {
   return Math.ceil((bottom - box.top) / k);
 }
 
+/**
+ * The guard sits right after the moving end's line. When that is the layer's last line, a release just right of it
+ * has no text after it in the layer, and Chromium ends the selection at the next text in the document, past the
+ * article (the column resizer), so no selection bar opens. Pull such an end back to the end of that last line's last
+ * word (the last selected word, nearest before the pointer), before the bar and pdfAnchor read the selection.
+ */
+function keepEndInLayer(resetAll: () => void) {
+  const sel = document.getSelection();
+  const focus = sel?.focusNode;
+  const focusEl = focus instanceof Element ? focus : focus?.parentElement;
+  if (!sel || sel.isCollapsed || !focus || focusEl?.closest(".pdf-text")) return;
+  let back: HTMLElement | null = null;
+  for (const l of selectionLayers.keys())
+    if (sel.containsNode(l, true) && l.compareDocumentPosition(focus) & Node.DOCUMENT_POSITION_FOLLOWING && (!back || back.compareDocumentPosition(l) & Node.DOCUMENT_POSITION_FOLLOWING)) back = l;
+  const spans = back?.querySelectorAll<HTMLElement>(".pdf-line > span");
+  const t = spans?.[spans.length - 1]?.lastChild;
+  if (t?.nodeType !== Node.TEXT_NODE) return;
+  sel.extend(t, t.textContent!.length);
+  // The extend's selectionchange arrives after this pointerup and re-arms the guard: put it back once more.
+  document.addEventListener("selectionchange", resetAll, { once: true });
+}
+
 function trackSelection(layer: HTMLElement) {
   const end = document.createElement("div");
   end.className = "endOfContent";
@@ -417,7 +439,7 @@ function trackSelection(layer: HTMLElement) {
   let pointerDown = false;
   const resetAll = () => selectionLayers.forEach(resetSelectionLayer);
   document.addEventListener("pointerdown", () => (pointerDown = true));
-  document.addEventListener("pointerup", () => ((pointerDown = false), resetAll()));
+  document.addEventListener("pointerup", () => ((pointerDown = false), keepEndInLayer(resetAll), resetAll()));
   window.addEventListener("blur", () => ((pointerDown = false), resetAll()));
   document.addEventListener("keyup", () => !pointerDown && resetAll());
   document.addEventListener("selectionchange", () => {
@@ -433,6 +455,9 @@ function trackSelection(layer: HTMLElement) {
       else resetSelectionLayer(end, l);
     }
     const range = sel.getRangeAt(0);
+    // Neither end moved (the pointer moved within one caret position, or a DOM change re-fired the event): leave the
+    // guard where it is. Read as "start moved", it jumped to the start line and the next hit mapped there.
+    if (prevRange && range.compareBoundaryPoints(Range.END_TO_END, prevRange) === 0 && range.compareBoundaryPoints(Range.START_TO_START, prevRange) === 0) return;
     const modifyStart = !!prevRange && (range.compareBoundaryPoints(Range.END_TO_END, prevRange) === 0 || range.compareBoundaryPoints(Range.START_TO_END, prevRange) === 0);
     let anchor: Node | null = modifyStart ? range.startContainer : range.endContainer;
     if (anchor.nodeType === Node.TEXT_NODE) anchor = anchor.parentNode;
