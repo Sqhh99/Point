@@ -519,3 +519,103 @@ test("200 % selection across paragraphs, framing the worst-drift word (screensho
   await win.emulateMedia({ colorScheme: "light" });
   await win.evaluate(() => getSelection()!.removeAllRanges());
 });
+
+/** Import `file` from the fixtures (choosing a workspace first when the test runs alone); it opens in the reader. */
+async function openFixture(win: Win, file: string) {
+  const src = mkdtempSync(join(tmpdir(), "point-pdfemb-src-"));
+  copyFileSync(join(FIXTURES, file), join(src, file));
+  const pick = win.getByRole("button", { name: "选择工作区…" });
+  const imp = win.getByRole("button", { name: "导入文档" });
+  await expect(pick.or(imp).first()).toBeVisible();
+  const paths = (await pick.isVisible()) ? [mkdtempSync(join(tmpdir(), "point-pdfemb-ws-")), join(src, file)] : [join(src, file)];
+  await app.evaluate(({ dialog }, paths) => {
+    let n = 0;
+    dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [paths[Math.min(n++, paths.length - 1)]!] })) as typeof dialog.showOpenDialog;
+  }, paths);
+  if (paths.length > 1) await pick.click();
+  await imp.click();
+}
+
+/** Selection from `from` (a word on page 1) to .col-resizer, as Chromium leaves it after a release past the article,
+ *  then a pointerup at (x, y): returns where the end was pulled back to. */
+const pullBack = (win: Win, from: string, x: number, y: number, up = false) =>
+  page1(win).evaluate(
+    (el, [from, x, y, up]) => {
+      const t = [...el.querySelectorAll<HTMLElement>(".pdf-line > span")].find((s) => s.textContent!.includes(from as string))!.firstChild!;
+      const i = (t.textContent ?? "").indexOf(from as string);
+      // Dragging up, Chromium's escaped end lands before the article (the document list).
+      const out = document.querySelector(up ? '[data-testid="doc-list"]' : ".col-resizer")!;
+      if (up && !(out.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)) throw new Error("doc-list is not before the page");
+      getSelection()!.setBaseAndExtent(t, up ? i + (from as string).length : i, out, 0);
+      document.dispatchEvent(new PointerEvent("pointerup", { clientX: x as number, clientY: y as number, bubbles: true }));
+      const s = getSelection()!;
+      const f = s.focusNode instanceof Element ? s.focusNode : s.focusNode?.parentElement;
+      const text = s.toString().replace(/\s+/g, " ").trim();
+      const r = { inText: !!f?.closest(".pdf-text"), up: !!(s.anchorNode!.compareDocumentPosition(s.focusNode!) & Node.DOCUMENT_POSITION_PRECEDING), head: text.slice(0, 30), tail: text.slice(-30) };
+      s.removeAllRanges();
+      return r;
+    },
+    [from, x, y, up] as const
+  );
+
+test("an end released past the article is pulled back on the page and column under the pointer (two pages, two columns)", async () => {
+  const win = await app.firstWindow();
+  // Tall enough that page 2's text layer is built at 100 % (layers are built for pages in view).
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setBounds({ x: 0, y: 0, width: 2200, height: 1500 }));
+  await openFixture(win, "hydro-times-std-2p.pdf");
+  await expect(win.locator('[data-page="2"] .pdf-text span').first()).toBeAttached({ timeout: 20_000 });
+  await expect(page1(win).locator(".pdf-text span").first()).toBeVisible();
+  await setZoom(win, 125);
+  const center = win.locator("main.center");
+  const bar = (await win.getByTestId("reader-bar").boundingBox())!;
+  const s0 = (await wordBox(win, "techniques"))!;
+  await center.evaluate((e, dy) => (e.scrollTop += dy), Math.floor(s0.t - bar.y - bar.height - 40));
+  await win.waitForTimeout(150);
+  const start = (await wordBox(win, "techniques"))!;
+  const mid = (await wordBox(win, "survey."))!; // page 1, paragraph 1's short last line; page 2 follows in the layer order
+  // Direct: page 2 is the last selected layer, but the pointer is beside a page-1 line.
+  expect(await pullBack(win, "techniques", mid.r + 30, (mid.t + mid.b) / 2), "two pages: pulled back to the page-1 line at the pointer").toMatchObject({ inText: true, up: false, tail: expect.stringMatching(/in the survey\.$/) });
+  // Dragging up from "survey." and released right of the "techniques" line: the selection keeps the lines below that
+  // line, upwards (it starts at that line's end), and does not flip.
+  const pg = (await page1(win).boundingBox())!;
+  expect(await pullBack(win, "survey.", pg.x + pg.width - 20, (start.t + start.b) / 2, true), "dragging up: pulled back to the line at the pointer, still upwards").toMatchObject({
+    inText: true,
+    up: true,
+    head: expect.stringMatching(/^S-44/),
+    tail: expect.stringMatching(/in the survey\.$/)
+  });
+  // An escaped downward end whose pointer is above the anchor stops at the anchor line's end instead of flipping.
+  expect(await pullBack(win, "survey.", pg.x + pg.width - 20, (start.t + start.b) / 2), "no flip: stops at the anchor line's end").toMatchObject({ inText: true, up: false, head: "survey.", tail: "survey." });
+  // Real drag: page-1 word, through "survey.", released right of it.
+  const toolbar = win.getByRole("toolbar", { name: "选区操作" });
+  await expect(toolbar).toBeHidden();
+  const sx = start.l + 2, sy = (start.t + start.b) / 2;
+  await win.mouse.move(sx, sy);
+  await win.mouse.down();
+  await win.mouse.move(sx + 10, sy, { steps: 2 });
+  await win.mouse.move(mid.r - 2, (mid.t + mid.b) / 2, { steps: 20 });
+  await win.mouse.move(mid.r + 30, (mid.t + mid.b) / 2, { steps: 6 });
+  await win.waitForTimeout(100);
+  await win.mouse.up();
+  await win.waitForTimeout(150);
+  const sel = await win.evaluate(() => {
+    const s = getSelection()!;
+    const end = s.rangeCount ? s.getRangeAt(0).endContainer : null;
+    const endEl = end instanceof Element ? end : end?.parentElement;
+    return { endInText: !!endEl?.closest(".pdf-text"), text: s.toString().replace(/\s+/g, " ").trim() };
+  });
+  expect(sel.text, "two pages, real drag: ends at the page-1 line it was released beside").toMatch(/^techniques\b.*in the survey\.$/);
+  expect(sel.endInText).toBe(true);
+  await expect(toolbar, "two pages, real drag: the selection bar opens").toBeVisible();
+  await win.evaluate(() => getSelection()!.removeAllRanges());
+  await expect(toolbar).toBeHidden();
+
+  // Two columns: beside the right column's last line, the left column has a line at the same height; take the right one.
+  await openFixture(win, "hydro-2col.pdf");
+  await expect.poll(() => page1(win).evaluate((el) => el.querySelectorAll(".pdf-text span").length > 0 && !document.querySelector('[data-page="2"]'))).toBe(true);
+  await setZoom(win, 125);
+  const page = (await page1(win).boundingBox())!;
+  const last = (await wordBox(win, "sounding.", 2))!; // P4's third copy: the right column's last line
+  expect(last.l > page.x + page.width / 2, "the last \"sounding.\" is in the right column").toBe(true);
+  expect(await pullBack(win, "techniques", last.r + 30, (last.t + last.b) / 2), "two columns: pulled back to the right column's line").toMatchObject({ inText: true, tail: expect.stringMatching(/of each sounding\.$/) });
+});

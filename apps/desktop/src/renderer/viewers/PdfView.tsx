@@ -409,37 +409,62 @@ function textBottom(layer: HTMLElement): number {
 /**
  * The guard sits right after the moving end's line. When that is the layer's last line, a release just right of it
  * has no text after it in the layer, and Chromium ends the selection at the next text in the document, past the
- * article (the column resizer), so no selection bar opens. Pull such an end back to the word nearest before the
- * pointer: on the line at the pointer's height (else the nearest line above it), the last run starting left of it.
- * Runs on pointerup, before the bar and pdfAnchor read the selection (Reader's mouseup).
+ * article (the column resizer, the AI panel), so no selection bar opens. Pull such an end back into the selected
+ * pages: the line at the pointer's height, the rightmost one starting left of the pointer (two columns); else the
+ * nearest line above it in that column (below it, dragging up). On that line, the end of the last run starting left
+ * of the pointer (dragging up: the start of the first run ending right of it). An end that would cross the anchor
+ * stops at the anchor line's end (start), so the drag keeps its direction. Runs on pointerup, before the bar and
+ * pdfAnchor read the selection.
  */
 function keepEndInLayer(e: PointerEvent, resetAll: () => void) {
   const sel = document.getSelection();
-  const focus = sel?.focusNode;
-  const focusEl = focus instanceof Element ? focus : focus?.parentElement;
-  if (!sel || sel.isCollapsed || !focus || focusEl?.closest(".pdf-text")) return;
-  let back: HTMLElement | null = null;
-  for (const l of selectionLayers.keys())
-    if (sel.containsNode(l, true) && l.compareDocumentPosition(focus) & Node.DOCUMENT_POSITION_FOLLOWING && (!back || back.compareDocumentPosition(l) & Node.DOCUMENT_POSITION_FOLLOWING)) back = l;
-  let line: HTMLElement[] | null = null, lineBottom = -Infinity;
-  for (const el of back?.querySelectorAll(".pdf-line") ?? []) {
-    const runs = [...el.querySelectorAll<HTMLElement>(":scope > span")];
-    const rs = runs.map((r) => r.getBoundingClientRect());
-    if (!rs.length) continue;
-    const top = Math.min(...rs.map((r) => r.top)), bottom = Math.max(...rs.map((r) => r.bottom));
-    if (top <= e.clientY && e.clientY <= bottom) {
-      line = runs;
-      break;
-    }
-    if (bottom < e.clientY && bottom > lineBottom) {
-      line = runs;
-      lineBottom = bottom;
+  const { anchorNode, focusNode } = sel ?? {};
+  const focusEl = focusNode instanceof Element ? focusNode : focusNode?.parentElement;
+  if (!sel || sel.isCollapsed || !anchorNode || !focusNode || focusEl?.closest(".pdf-text")) return;
+  const up = !!(anchorNode.compareDocumentPosition(focusNode) & Node.DOCUMENT_POSITION_PRECEDING);
+  type Line = { runs: HTMLElement[]; left: number; right: number; top: number; bottom: number };
+  const lines: Line[] = [];
+  for (const l of selectionLayers.keys()) {
+    if (!sel.containsNode(l, true)) continue;
+    for (const el of l.querySelectorAll(".pdf-line")) {
+      const runs = [...el.querySelectorAll<HTMLElement>(":scope > span")];
+      const rs = runs.map((r) => r.getBoundingClientRect());
+      if (rs.length) lines.push({ runs, left: Math.min(...rs.map((r) => r.left)), right: Math.max(...rs.map((r) => r.right)), top: Math.min(...rs.map((r) => r.top)), bottom: Math.max(...rs.map((r) => r.bottom)) });
     }
   }
-  const before = line?.filter((r) => r.getBoundingClientRect().left <= e.clientX) ?? [];
-  const t = (before.length ? before.sort((p, q) => p.getBoundingClientRect().left - q.getBoundingClientRect().left).at(-1) : line?.[0])?.lastChild;
+  const { clientX: x, clientY: y } = e;
+  // The column: lines starting left of the pointer that reach past the rightmost such line's start.
+  const column = (ls: Line[]) => {
+    const left = ls.filter((l) => l.left <= x);
+    const pool = left.length ? left : ls;
+    const start = Math.max(...pool.map((l) => l.left));
+    return pool.filter((l) => l.right > start);
+  };
+  const atY = column(lines.filter((l) => l.top <= y && y <= l.bottom)).sort((p, q) => p.left - q.left);
+  const line = atY.length
+    ? atY.at(-1)
+    : up
+      ? column(lines.filter((l) => l.top > y)).sort((p, q) => q.top - p.top).at(-1)
+      : column(lines.filter((l) => l.bottom < y)).sort((p, q) => p.bottom - q.bottom).at(-1);
+  if (!line) return;
+  const box = (r: HTMLElement) => r.getBoundingClientRect();
+  const run = up ? line.runs.find((r) => box(r).right >= x) : line.runs.filter((r) => box(r).left <= x).at(-1);
+  // No run on that side of the pointer: the line's end (dragging down, the pointer is left of the line: its start).
+  let t = (run ?? (up ? line.runs.at(-1) : line.runs[0]))?.lastChild;
   if (t?.nodeType !== Node.TEXT_NODE) return;
-  sel.extend(t, before.length ? t.textContent!.length : 0);
+  let at = (run ? !up : up) ? t.textContent!.length : 0;
+  const p = document.createRange();
+  p.setStart(t, at);
+  const crossed = up ? p.comparePoint(anchorNode, sel.anchorOffset) < 0 : p.comparePoint(anchorNode, sel.anchorOffset) > 0;
+  if (crossed) {
+    const a = (anchorNode instanceof Element ? anchorNode : anchorNode.parentElement)?.closest(".pdf-line");
+    const r = a?.querySelectorAll<HTMLElement>(":scope > span");
+    const edge = (up ? r?.[0] : r?.[r.length - 1])?.lastChild;
+    if (edge?.nodeType !== Node.TEXT_NODE) return;
+    t = edge;
+    at = up ? 0 : edge.textContent!.length;
+  }
+  sel.extend(t, at);
   // The extend's selectionchange arrives after this pointerup and re-arms the guard: put it back once more.
   document.addEventListener("selectionchange", resetAll, { once: true });
 }

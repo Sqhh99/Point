@@ -30,4 +30,4 @@ def fodt(name, paras, font, cols=1, lang="en", country="US", heading="4.1 Depth 
     open(name + ".fodt", "w").write(xml)
 fodt("hydro-serif", [P1, P2, P3, P4], "Nimbus Roman")
 fodt("hydro-zh", ZH, "Noto Serif CJK SC", lang="zh", country="CN", heading="4.1 深度测定")
-fodt("hydro-2col", [P1, P2, P3, P4, P1, P2], "Nimbus Roman", cols=2)
+fodt("hydro-2col", [P1, P2, P3, P4] * 3, "Nimbus Roman", cols=2)
