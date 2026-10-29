@@ -418,6 +418,7 @@ test("dragging from a word into a line gap or below the text keeps the selection
   const targets = [
     { name: "line gap", via: short, word: "survey.", x: gapX, y: (short.t + short.b) / 2, end: /in the survey\.$/, maxBottom: short.b + 2, notAfter: "During the last decade" },
     { name: "right of the last line +30px", via: last, word: "sounding.", x: last.r + 30, y: (last.t + last.b) / 2, end: /total propagated uncertainty of each sounding\.$/, maxBottom: last.b + 2, notAfter: null },
+    { name: "right of a middle line +30px", via: short, word: "survey.", x: short.r + 30, y: (short.t + short.b) / 2, end: /in the survey\.$/, maxBottom: short.b + 2, notAfter: "During the last decade" },
     { name: "right of the last line +3px", via: last, word: "sounding.", x: last.r + 3, y: (last.t + last.b) / 2, end: /total propagated uncertainty of each sounding\.$/, maxBottom: last.b + 2, notAfter: null },
     { name: "below the text", via: last, word: "sounding.", x: page.x + page.width / 2, y: belowY, end: /total propagated uncertainty of each sounding\.$/, maxBottom: last.b + 2, notAfter: null }
   ];
@@ -459,6 +460,19 @@ test("dragging from a word into a line gap or below the text keeps the selection
     await expect(win.getByRole("toolbar", { name: "选区操作" }), `${tg.name}: the selection bar opens`).toBeVisible();
     expect(after, `${tg.name}: .selecting off and .endOfContent back at the layer end after pointerup`).toEqual({ selecting: false, endLast: true });
   }
+  // An end that escaped the article is pulled back by the pointer's height, not to the page end: put the end on
+  // .col-resizer and release right of a middle line; it must end on that line.
+  await win.evaluate(() => getSelection()!.removeAllRanges());
+  const pulled = await page1(win).evaluate((el, [x, y]) => {
+    const t = [...el.querySelectorAll<HTMLElement>(".pdf-line > span")].find((s) => s.textContent!.includes("techniques"))!.firstChild!;
+    const out = document.querySelector(".col-resizer")!;
+    getSelection()!.setBaseAndExtent(t, (t.textContent ?? "").indexOf("techniques"), out, 0);
+    document.dispatchEvent(new PointerEvent("pointerup", { clientX: x, clientY: y, bubbles: true }));
+    const s = getSelection()!;
+    const f = s.focusNode instanceof Element ? s.focusNode : s.focusNode?.parentElement;
+    return { inText: !!f?.closest(".pdf-text"), tail: s.toString().replace(/\s+/g, " ").trim().slice(-30) };
+  }, [short.r + 30, (short.t + short.b) / 2] as const);
+  expect(pulled, "escaped end pulled back to the line at the pointer's height").toEqual({ inText: true, tail: expect.stringMatching(/in the survey\.$/) });
   await win.evaluate(() => getSelection()!.removeAllRanges());
 });
 

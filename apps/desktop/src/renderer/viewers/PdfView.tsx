@@ -409,10 +409,11 @@ function textBottom(layer: HTMLElement): number {
 /**
  * The guard sits right after the moving end's line. When that is the layer's last line, a release just right of it
  * has no text after it in the layer, and Chromium ends the selection at the next text in the document, past the
- * article (the column resizer), so no selection bar opens. Pull such an end back to the end of that last line's last
- * word (the last selected word, nearest before the pointer), before the bar and pdfAnchor read the selection.
+ * article (the column resizer), so no selection bar opens. Pull such an end back to the word nearest before the
+ * pointer: on the line at the pointer's height (else the nearest line above it), the last run starting left of it.
+ * Runs on pointerup, before the bar and pdfAnchor read the selection (Reader's mouseup).
  */
-function keepEndInLayer(resetAll: () => void) {
+function keepEndInLayer(e: PointerEvent, resetAll: () => void) {
   const sel = document.getSelection();
   const focus = sel?.focusNode;
   const focusEl = focus instanceof Element ? focus : focus?.parentElement;
@@ -420,10 +421,25 @@ function keepEndInLayer(resetAll: () => void) {
   let back: HTMLElement | null = null;
   for (const l of selectionLayers.keys())
     if (sel.containsNode(l, true) && l.compareDocumentPosition(focus) & Node.DOCUMENT_POSITION_FOLLOWING && (!back || back.compareDocumentPosition(l) & Node.DOCUMENT_POSITION_FOLLOWING)) back = l;
-  const spans = back?.querySelectorAll<HTMLElement>(".pdf-line > span");
-  const t = spans?.[spans.length - 1]?.lastChild;
+  let line: HTMLElement[] | null = null, lineBottom = -Infinity;
+  for (const el of back?.querySelectorAll(".pdf-line") ?? []) {
+    const runs = [...el.querySelectorAll<HTMLElement>(":scope > span")];
+    const rs = runs.map((r) => r.getBoundingClientRect());
+    if (!rs.length) continue;
+    const top = Math.min(...rs.map((r) => r.top)), bottom = Math.max(...rs.map((r) => r.bottom));
+    if (top <= e.clientY && e.clientY <= bottom) {
+      line = runs;
+      break;
+    }
+    if (bottom < e.clientY && bottom > lineBottom) {
+      line = runs;
+      lineBottom = bottom;
+    }
+  }
+  const before = line?.filter((r) => r.getBoundingClientRect().left <= e.clientX) ?? [];
+  const t = (before.length ? before.sort((p, q) => p.getBoundingClientRect().left - q.getBoundingClientRect().left).at(-1) : line?.[0])?.lastChild;
   if (t?.nodeType !== Node.TEXT_NODE) return;
-  sel.extend(t, t.textContent!.length);
+  sel.extend(t, before.length ? t.textContent!.length : 0);
   // The extend's selectionchange arrives after this pointerup and re-arms the guard: put it back once more.
   document.addEventListener("selectionchange", resetAll, { once: true });
 }
@@ -439,7 +455,7 @@ function trackSelection(layer: HTMLElement) {
   let pointerDown = false;
   const resetAll = () => selectionLayers.forEach(resetSelectionLayer);
   document.addEventListener("pointerdown", () => (pointerDown = true));
-  document.addEventListener("pointerup", () => ((pointerDown = false), keepEndInLayer(resetAll), resetAll()));
+  document.addEventListener("pointerup", (e) => ((pointerDown = false), keepEndInLayer(e, resetAll), resetAll()));
   window.addEventListener("blur", () => ((pointerDown = false), resetAll()));
   document.addEventListener("keyup", () => !pointerDown && resetAll());
   document.addEventListener("selectionchange", () => {
