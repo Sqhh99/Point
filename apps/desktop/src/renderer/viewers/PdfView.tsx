@@ -56,7 +56,11 @@ function Page({ doc, n, scale, size, marks, rects, selection }: { doc: PDFDocume
   useEffect(() => {
     const el = wrap.current;
     if (!el) return;
-    const io = new IntersectionObserver((es) => setNear(es.some((e) => e.isIntersecting)), { rootMargin: "800px 0px" });
+    // Root: the scrolling reader. With the viewport as root, the margin is clipped by that ancestor's box, so only
+    // pages already on screen counted as near and the next page's text layer was built only once it scrolled in.
+    let root: HTMLElement | null = el.parentElement;
+    while (root && !/(auto|scroll)/.test(getComputedStyle(root).overflowY)) root = root.parentElement;
+    const io = new IntersectionObserver((es) => setNear(es.some((e) => e.isIntersecting)), { root, rootMargin: "800px 0px" });
     io.observe(el);
     return () => io.disconnect();
   }, []);
@@ -409,30 +413,45 @@ function textBottom(layer: HTMLElement): number {
 /**
  * The guard sits right after the moving end's line. When that is the layer's last line, a release just right of it
  * has no text after it in the layer, and Chromium ends the selection at the next text in the document, past the
- * article (the column resizer, the AI panel), so no selection bar opens. Pull such an end back into the selected
- * pages: the line at the pointer's height, the rightmost one starting left of the pointer (two columns); else the
- * nearest line above it in that column (below it, dragging up). On that line, the end of the last run starting left
- * of the pointer (dragging up: the start of the first run ending right of it). An end that would cross the anchor
- * stops at the anchor line's end (start), so the drag keeps its direction. Runs on pointerup, before the bar and
- * pdfAnchor read the selection.
+ * article (the column resizer, the AI panel), so no selection bar opens. That end always sorts after the article,
+ * even when the drag went up, so the direction comes from the pointer, not from the selection: up when the pointer
+ * is above the anchor's line, or on it and left of the anchor. Pull the end back into the pages from the anchor's
+ * towards the pointer: the line at the pointer's height, the rightmost one starting left of the pointer (two
+ * columns); else the nearest line above it in that column (below it, dragging up). On that line, the end of the last
+ * run starting left of the pointer (dragging up: the start of the first run ending right of it). An end that would
+ * cross the anchor stops at the anchor line's end (start), so the drag keeps its direction. In two columns a line
+ * above the anchor can follow it in reading order; that line is reached as a drag down. Runs on pointerup,
+ * before the bar and pdfAnchor read the selection.
  */
 function keepEndInLayer(e: PointerEvent, resetAll: () => void) {
   const sel = document.getSelection();
   const { anchorNode, focusNode } = sel ?? {};
   const focusEl = focusNode instanceof Element ? focusNode : focusNode?.parentElement;
   if (!sel || sel.isCollapsed || !anchorNode || !focusNode || focusEl?.closest(".pdf-text")) return;
-  const up = !!(anchorNode.compareDocumentPosition(focusNode) & Node.DOCUMENT_POSITION_PRECEDING);
-  type Line = { runs: HTMLElement[]; left: number; right: number; top: number; bottom: number };
+  const anchorLine = (anchorNode instanceof Element ? anchorNode : anchorNode.parentElement)?.closest<HTMLElement>(".pdf-line");
+  const anchorLayer = anchorLine?.closest<HTMLElement>(".pdf-text");
+  if (!anchorLine || !anchorLayer) return;
+  const { clientX: x, clientY: y } = e;
+  type Line = { el: Element; runs: HTMLElement[]; left: number; right: number; top: number; bottom: number };
+  const lineOf = (el: Element): Line | null => {
+    const runs = [...el.querySelectorAll<HTMLElement>(":scope > span")];
+    const rs = runs.map((r) => r.getBoundingClientRect());
+    return rs.length ? { el, runs, left: Math.min(...rs.map((r) => r.left)), right: Math.max(...rs.map((r) => r.right)), top: Math.min(...rs.map((r) => r.top)), bottom: Math.max(...rs.map((r) => r.bottom)) } : null;
+  };
+  const a = lineOf(anchorLine);
+  if (!a) return;
+  const caret = document.createRange();
+  caret.setStart(anchorNode, sel.anchorOffset);
+  let up = y < a.top || (y <= a.bottom && x < caret.getBoundingClientRect().left);
   const lines: Line[] = [];
   for (const l of selectionLayers.keys()) {
-    if (!sel.containsNode(l, true)) continue;
+    const order = l === anchorLayer ? 0 : l.compareDocumentPosition(anchorLayer) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+    if (order === (up ? 1 : -1)) continue;
     for (const el of l.querySelectorAll(".pdf-line")) {
-      const runs = [...el.querySelectorAll<HTMLElement>(":scope > span")];
-      const rs = runs.map((r) => r.getBoundingClientRect());
-      if (rs.length) lines.push({ runs, left: Math.min(...rs.map((r) => r.left)), right: Math.max(...rs.map((r) => r.right)), top: Math.min(...rs.map((r) => r.top)), bottom: Math.max(...rs.map((r) => r.bottom)) });
+      const line = lineOf(el);
+      if (line) lines.push(line);
     }
   }
-  const { clientX: x, clientY: y } = e;
   // The column: lines starting left of the pointer that reach past the rightmost such line's start.
   const column = (ls: Line[]) => {
     const left = ls.filter((l) => l.left <= x);
@@ -447,6 +466,8 @@ function keepEndInLayer(e: PointerEvent, resetAll: () => void) {
       ? column(lines.filter((l) => l.top > y)).sort((p, q) => q.top - p.top).at(-1)
       : column(lines.filter((l) => l.bottom < y)).sort((p, q) => p.bottom - q.bottom).at(-1);
   if (!line) return;
+  // Two columns: the line found can sit above the anchor yet after it in reading order; that is still a drag down.
+  if (line.el !== anchorLine) up = !!(line.el.compareDocumentPosition(anchorLine) & Node.DOCUMENT_POSITION_FOLLOWING);
   const box = (r: HTMLElement) => r.getBoundingClientRect();
   const run = up ? line.runs.find((r) => box(r).right >= x) : line.runs.filter((r) => box(r).left <= x).at(-1);
   // No run on that side of the pointer: the line's end (dragging down, the pointer is left of the line: its start).
@@ -457,14 +478,13 @@ function keepEndInLayer(e: PointerEvent, resetAll: () => void) {
   p.setStart(t, at);
   const crossed = up ? p.comparePoint(anchorNode, sel.anchorOffset) < 0 : p.comparePoint(anchorNode, sel.anchorOffset) > 0;
   if (crossed) {
-    const a = (anchorNode instanceof Element ? anchorNode : anchorNode.parentElement)?.closest(".pdf-line");
-    const r = a?.querySelectorAll<HTMLElement>(":scope > span");
-    const edge = (up ? r?.[0] : r?.[r.length - 1])?.lastChild;
+    const edge = (up ? a.runs[0] : a.runs.at(-1))?.lastChild;
     if (edge?.nodeType !== Node.TEXT_NODE) return;
     t = edge;
     at = up ? 0 : edge.textContent!.length;
   }
-  sel.extend(t, at);
+  // setBaseAndExtent, not extend: the escaped end sorts after the article even when the drag went up.
+  sel.setBaseAndExtent(anchorNode, sel.anchorOffset, t, at);
   // The extend's selectionchange arrives after this pointerup and re-arms the guard: put it back once more.
   document.addEventListener("selectionchange", resetAll, { once: true });
 }
@@ -474,18 +494,39 @@ function trackSelection(layer: HTMLElement) {
   end.className = "endOfContent";
   layer.append(end);
   selectionLayers.set(layer, end);
-  layer.onpointerdown = () => layer.classList.add("selecting");
   if (selectionListening) return;
   selectionListening = true;
-  let pointerDown = false;
+  // The guard is up only while a press drags. Up during clicks, it is what a click on the page margin lands on
+  // (user-select: none, so the selection is not cleared), and the block it inserts after the line ends a triple
+  // click's paragraph at the clicked word.
+  let pressLayer: HTMLElement | null = null;
+  let dragging = false;
   const resetAll = () => selectionLayers.forEach(resetSelectionLayer);
-  document.addEventListener("pointerdown", () => (pointerDown = true));
-  document.addEventListener("pointerup", (e) => ((pointerDown = false), keepEndInLayer(e, resetAll), resetAll()));
-  window.addEventListener("blur", () => ((pointerDown = false), resetAll()));
-  document.addEventListener("keyup", () => !pointerDown && resetAll());
+  document.addEventListener("pointerdown", (e) => {
+    dragging = false;
+    prevRange = null;
+    pressLayer = e.target instanceof Element ? e.target.closest<HTMLElement>(".pdf-text") : null;
+  });
+  // Triple click selects the line. Each run is absolutely positioned, so Chromium's own triple click stops at the run.
+  document.addEventListener("mousedown", (e) => {
+    const line = e.detail === 3 && e.target instanceof Element ? e.target.closest(".pdf-text .pdf-line") : null;
+    const runs = line?.querySelectorAll<HTMLElement>(":scope > span");
+    const first = runs?.[0]?.firstChild, last = runs?.[runs.length - 1]?.lastChild;
+    if (first?.nodeType !== Node.TEXT_NODE || last?.nodeType !== Node.TEXT_NODE) return;
+    e.preventDefault();
+    document.getSelection()?.setBaseAndExtent(first, 0, last, last.textContent!.length);
+  });
+  document.addEventListener("pointermove", (e) => {
+    if (dragging || !(e.buttons & 1)) return;
+    dragging = true;
+    pressLayer?.classList.add("selecting");
+  });
+  document.addEventListener("pointerup", (e) => ((dragging = false), keepEndInLayer(e, resetAll), resetAll()));
+  window.addEventListener("blur", () => ((dragging = false), resetAll()));
+  document.addEventListener("keyup", () => !dragging && resetAll());
   document.addEventListener("selectionchange", () => {
     const sel = document.getSelection();
-    if (!sel || sel.rangeCount === 0) return resetAll();
+    if (!dragging || !sel || sel.rangeCount === 0) return resetAll();
     const active = new Set<HTMLElement>();
     for (let i = 0; i < sel.rangeCount; i++) {
       const r = sel.getRangeAt(i);
