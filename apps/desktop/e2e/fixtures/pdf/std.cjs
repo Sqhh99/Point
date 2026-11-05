@@ -18,8 +18,12 @@ for(const p of paras){p.forEach((line,li)=>{
   cs+=`BT /F1 ${FS} Tf ${tw} Tw ${X} ${y} Td `;
   parts.forEach((s,i)=>{ if(!s) return; if(i%2) cs+=`/F1 ${(FS*0.6).toFixed(1)} Tf 4 Ts (${esc(s)}) Tj /F1 ${FS} Tf 0 Ts `; else cs+=`(${esc(s)}) Tj `; });
   cs+="ET\n"; y-=14;}); y-=8;}
-const objs=["<< /Type /Catalog /Pages 2 0 R >>","<< /Type /Pages /Kids [5 0 R] /Count 1 >>","<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman >>","<< /Type /Font /Subtype /Type1 /BaseFont /Times-Bold >>",
-`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 6 0 R >>`,`<< /Length ${cs.length} >>\nstream\n${cs}endstream`];
+// pages: 1 → hydro-times-std.pdf; 2 → hydro-times-std-2p.pdf, the same page twice (e2e: selections across pages).
+for(const [pages,file] of [[1,"hydro-times-std.pdf"],[2,"hydro-times-std-2p.pdf"]]){
+const kids=Array.from({length:pages},(_,i)=>`${5+i} 0 R`).join(" ");
+const objs=["<< /Type /Catalog /Pages 2 0 R >>",`<< /Type /Pages /Kids [${kids}] /Count ${pages} >>`,"<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman >>","<< /Type /Font /Subtype /Type1 /BaseFont /Times-Bold >>",
+...Array.from({length:pages},()=>`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${5+pages} 0 R >>`),`<< /Length ${cs.length} >>\nstream\n${cs}endstream`];
 let out="%PDF-1.4\n";const off=[];objs.forEach((o,i)=>{off.push(out.length);out+=`${i+1} 0 obj\n${o}\nendobj\n`;});
 const x=out.length;out+=`xref\n0 ${objs.length+1}\n0000000000 65535 f \n`+off.map(o=>String(o).padStart(10,"0")+" 00000 n \n").join("")+`trailer\n<< /Size ${objs.length+1} /Root 1 0 R >>\nstartxref\n${x}\n%%EOF\n`;
-fs.writeFileSync("hydro-times-std.pdf",out);
+fs.writeFileSync(file,out);
+}
