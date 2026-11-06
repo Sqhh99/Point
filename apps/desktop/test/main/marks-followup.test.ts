@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { BAR_GAP, placeBar, type Rect } from "../../src/renderer/layout.js";
+import { BAR_GAP, outsideBodyRects, placeBar, type Rect } from "../../src/renderer/layout.js";
 
 const box: Rect = { top: 100, left: 0, width: 800, height: 600 };
 const bar = { width: 240, height: 36 };
@@ -42,6 +42,54 @@ describe("placeBar", () => {
     expect(placeBar({ top: 400, left: 0, width: 10, height: 10 }, box, bar).left).toBe(124);
     expect(placeBar({ top: 400, left: 790, width: 10, height: 10 }, box, bar).left).toBe(800 - 124);
     expect(placeBar({ top: 400, left: 50, width: 10, height: 10 }, { ...box, width: 100 }, bar).left).toBe(50);
+  });
+
+  it("flips below when sitting above would cover body text outside the selection", () => {
+    const sel = { top: 300, left: 200, width: 100, height: 20 };
+    const above = { top: 250, left: 200, width: 120, height: 20 };
+    const p = placeBar(sel, box, bar, { obstacles: [above] });
+    expect(p.below).toBe(true);
+    expect(p.top).toBe(sel.top - box.top + sel.height + 8);
+  });
+  it("stays above when body text is far enough not to meet the bar", () => {
+    const sel = { top: 300, left: 200, width: 100, height: 20 };
+    const far = { top: 140, left: 200, width: 120, height: 20 };
+    const p = placeBar(sel, box, bar, { obstacles: [far] });
+    expect(p.below).toBe(false);
+    expect(p.top + bar.height).toBe(sel.top - box.top - 8);
+  });
+  it("stays above when the only extra body is below the selection", () => {
+    const sel = { top: 300, left: 200, width: 100, height: 20 };
+    const under = { top: 340, left: 200, width: 120, height: 20 };
+    const p = placeBar(sel, box, bar, { obstacles: [under] });
+    expect(p.below).toBe(false);
+  });
+  it("after a cover-flip, a below slot that leaves the container is clamped inside", () => {
+    // Selection near the bottom: above would cover a line, below would overflow.
+    const sel = { top: box.top + 560, left: 200, width: 100, height: 20 };
+    const above = { top: box.top + 510, left: 200, width: 120, height: 20 };
+    const p = placeBar(sel, box, bar, { obstacles: [above] });
+    expect(p.below).toBe(true);
+    expect(p.top).toBeGreaterThanOrEqual(0);
+    expect(p.top + bar.height).toBeLessThanOrEqual(box.height);
+  });
+  it("after a cover-flip, a below slot that also covers body but fits stays 8px below", () => {
+    const sel = { top: 300, left: 200, width: 100, height: 20 };
+    const above = { top: 250, left: 200, width: 120, height: 20 };
+    const under = { top: 340, left: 200, width: 120, height: 20 };
+    const p = placeBar(sel, box, bar, { obstacles: [above, under] });
+    expect(p.below).toBe(true);
+    expect(p.top).toBe(sel.top - box.top + sel.height + 8);
+  });
+});
+
+describe("outsideBodyRects", () => {
+  it("drops boxes that share the selection's vertical span", () => {
+    const sel = { top: 100, left: 0, width: 50, height: 20 };
+    const same = { top: 100, left: 60, width: 40, height: 20 };
+    const above = { top: 70, left: 0, width: 50, height: 20 };
+    const below = { top: 130, left: 0, width: 50, height: 20 };
+    expect(outsideBodyRects(sel, [same, above, below])).toEqual([above, below]);
   });
 });
 

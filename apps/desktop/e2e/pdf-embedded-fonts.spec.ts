@@ -684,3 +684,55 @@ test("clicks on the span layer behave as on plain text: caret, word, line, and a
   expect((await sel()).text, "a click on the page margin after a double click clears the selection").toBe("");
   await expect(toolbar, "and closes the selection bar").toBeHidden();
 });
+
+test("triple-click on a mid-page line puts the toolbar below, not over the lines above", async () => {
+  const win = await app.firstWindow();
+  await openFixture(win, "hydro-serif.pdf");
+  await expect(page1(win).locator(".pdf-text span").first()).toBeVisible();
+  await setZoom(win, 125);
+  const lines = await page1(win).evaluate((el) =>
+    [...el.querySelectorAll(".pdf-line")]
+      .filter((l) => l.textContent!.trim())
+      .map((l) => {
+        const spans = [...l.querySelectorAll(":scope > span")].map((s) => s.firstChild).filter((n): n is Text => n?.nodeType === Node.TEXT_NODE);
+        const words: { x: number; y: number }[] = [];
+        for (const n of spans)
+          for (const m of n.data.matchAll(/\S+/g)) {
+            const r = document.createRange();
+            r.setStart(n, m.index);
+            r.setEnd(n, m.index + m[0].length);
+            const b = r.getBoundingClientRect();
+            if (b.width > 10) words.push({ x: (b.left + b.right) / 2, y: (b.top + b.bottom) / 2 });
+          }
+        const box = l.getBoundingClientRect();
+        return { text: l.textContent!.replace(/\s+/g, " ").trim(), mid: words[Math.floor(words.length / 2)]!, top: box.top, bottom: box.bottom };
+      })
+  );
+  expect(lines.length, "enough lines to have body above line 3").toBeGreaterThanOrEqual(3);
+  const toolbar = win.getByRole("toolbar", { name: "选区操作" });
+  const place = () =>
+    win.evaluate(() => {
+      const sel = getSelection();
+      if (!sel || sel.rangeCount === 0) return null;
+      const s = sel.getRangeAt(0).getBoundingClientRect();
+      const bar = document.querySelector<HTMLElement>(".selection-toolbar")?.getBoundingClientRect();
+      if (!bar) return null;
+      return { selTop: s.top, selBottom: s.bottom, barTop: bar.top, barBottom: bar.bottom, text: sel.toString().replace(/\s+/g, " ").trim() };
+    });
+
+  await win.mouse.click(lines[2]!.mid.x, lines[2]!.mid.y, { clickCount: 3 });
+  await expect(toolbar, "line 3: the bar opens").toBeVisible();
+  const mid = await place();
+  expect(mid?.text, "line 3: the whole line").toBe(lines[2]!.text);
+  expect(mid!.barTop, "line 3: bar sits below the selection").toBeGreaterThanOrEqual(mid!.selBottom + 8 - 2);
+  expect(mid!.barBottom <= lines[0]!.top + 1 || mid!.barTop >= lines[0]!.bottom - 1, "does not cover line 1").toBe(true);
+  expect(mid!.barBottom <= lines[1]!.top + 1 || mid!.barTop >= lines[1]!.bottom - 1, "does not cover line 2").toBe(true);
+
+  await win.evaluate(() => getSelection()!.removeAllRanges());
+  await expect(toolbar).toBeHidden();
+  await win.mouse.click(lines[0]!.mid.x, lines[0]!.mid.y, { clickCount: 3 });
+  await expect(toolbar, "line 1: the bar opens").toBeVisible();
+  const first = await place();
+  expect(first?.text, "line 1: the whole line").toBe(lines[0]!.text);
+  expect(first!.barBottom, "line 1: nothing above, bar stays above the line").toBeLessThanOrEqual(first!.selTop - 8 + 2);
+});
