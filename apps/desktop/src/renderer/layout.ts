@@ -97,17 +97,46 @@ export const BAR_GAP = 8;
 /**
  * Where the floating bar goes, in the container's coordinates (add the container's scrollTop
  * when the bar lives in scrolled content). Above the selection with an 8px gap; below it when
- * there is not enough room above. Never overlaps the selection rectangle: the bar's vertical
- * span is entirely above `sel.top - gap` or entirely below `sel.bottom + gap`. Horizontally
- * centred on the selection and clamped inside the container (`left` is the bar's centre).
+ * there is not enough room above, or when sitting above would overlap `obstacles` (body text
+ * outside the selection). If the below slot still overlaps an obstacle or would leave the
+ * container, the bar is clamped inside the container so unselected text stays readable.
+ * Without obstacles the previous placement is unchanged, including not clamping a below slot
+ * that overflows. Never overlaps the selection rectangle when either slot fits: the bar's
+ * vertical span is entirely above `sel.top - gap` or entirely below `sel.bottom + gap`.
+ * Horizontally centred on the selection and clamped inside the container (`left` is the bar's centre).
  */
-export function placeBar(sel: Rect, container: Rect, bar: { width: number; height: number }, gap = BAR_GAP): { top: number; left: number; below: boolean } {
+export function placeBar(
+  sel: Rect,
+  container: Rect,
+  bar: { width: number; height: number },
+  extra?: { gap?: number; obstacles?: readonly Rect[] }
+): { top: number; left: number; below: boolean } {
+  const gap = extra?.gap ?? BAR_GAP;
+  const obstacles = extra?.obstacles ?? [];
   const selTop = sel.top - container.top;
   const selBottom = selTop + sel.height;
-  const below = selTop < bar.height + gap;
-  const top = below ? selBottom + gap : selTop - gap - bar.height;
+  const aboveTop = selTop - gap - bar.height;
+  const belowTop = selBottom + gap;
+  const covers = (top: number) => {
+    const a = top + container.top;
+    const b = a + bar.height;
+    return obstacles.some((o) => a < o.top + o.height && b > o.top);
+  };
+  const coveredAbove = covers(aboveTop);
+  const below = selTop < bar.height + gap || coveredAbove;
+  let top = below ? belowTop : aboveTop;
+  // Clamp only on the new "covers body" path, so existing no-room-above placements stay put.
+  if (coveredAbove && (top + bar.height > container.height || covers(top))) {
+    const maxTop = Math.max(0, container.height - bar.height);
+    top = Math.min(Math.max(top, 0), maxTop);
+  }
   const half = bar.width / 2 + 4;
   const centre = sel.left - container.left + sel.width / 2;
   const left = container.width <= 2 * half ? container.width / 2 : Math.min(Math.max(centre, half), container.width - half);
   return { top, left, below };
+}
+
+/** Candidate body boxes that sit entirely above or below `sel` (not the selected lines themselves). */
+export function outsideBodyRects(sel: Rect, candidates: readonly Rect[], slack = 2): Rect[] {
+  return candidates.filter((r) => r.top + r.height <= sel.top + slack || r.top >= sel.top + sel.height - slack);
 }
