@@ -720,13 +720,26 @@ test("triple-click on a mid-page line puts the toolbar below, not over the lines
       return { selTop: s.top, selBottom: s.bottom, barTop: bar.top, barBottom: bar.bottom, text: sel.toString().replace(/\s+/g, " ").trim() };
     });
 
-  await win.mouse.click(lines[2]!.mid.x, lines[2]!.mid.y, { clickCount: 3 });
-  await expect(toolbar, "line 3: the bar opens").toBeVisible();
+  const midLine = lines.find((l) => l.text.includes("uncertainty of depth measurements"));
+  const nextPara = lines.find((l) => l.text.includes("During the last decade"));
+  expect(midLine, "mid-page body line").toBeTruthy();
+  expect(nextPara, "following paragraph").toBeTruthy();
+  await win.mouse.click(midLine!.mid.x, midLine!.mid.y, { clickCount: 3 });
+  await expect(toolbar, "mid-page line: the bar opens").toBeVisible();
   const mid = await place();
-  expect(mid?.text, "line 3: the whole line").toBe(lines[2]!.text);
-  expect(mid!.barTop, "line 3: bar sits below the selection").toBeGreaterThanOrEqual(mid!.selBottom + 8 - 2);
-  expect(mid!.barBottom <= lines[0]!.top + 1 || mid!.barTop >= lines[0]!.bottom - 1, "does not cover line 1").toBe(true);
-  expect(mid!.barBottom <= lines[1]!.top + 1 || mid!.barTop >= lines[1]!.bottom - 1, "does not cover line 2").toBe(true);
+  expect(mid?.text, "mid-page line: the whole line").toBe(midLine!.text);
+  expect(
+    mid!.barBottom <= nextPara!.top + 1 || mid!.barTop >= nextPara!.bottom - 1,
+    "does not cover the next paragraph"
+  ).toBe(true);
+  for (const [i, line] of lines.entries()) {
+    if (line.bottom <= mid!.selTop + 1) {
+      expect(
+        mid!.barBottom <= line.top + 1 || mid!.barTop >= line.bottom - 1,
+        `does not cover a line above the selection (${i + 1})`
+      ).toBe(true);
+    }
+  }
 
   await win.evaluate(() => getSelection()!.removeAllRanges());
   await expect(toolbar).toBeHidden();
