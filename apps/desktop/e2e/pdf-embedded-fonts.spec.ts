@@ -684,3 +684,68 @@ test("clicks on the span layer behave as on plain text: caret, word, line, and a
   expect((await sel()).text, "a click on the page margin after a double click clears the selection").toBe("");
   await expect(toolbar, "and closes the selection bar").toBeHidden();
 });
+
+test("triple-click on a mid-page line puts the toolbar below, not over the lines above", async () => {
+  const win = await app.firstWindow();
+  await openFixture(win, "hydro-serif.pdf");
+  await expect(page1(win).locator(".pdf-text span").first()).toBeVisible();
+  await setZoom(win, 125);
+  const lines = await page1(win).evaluate((el) =>
+    [...el.querySelectorAll(".pdf-line")]
+      .filter((l) => l.textContent!.trim())
+      .map((l) => {
+        const spans = [...l.querySelectorAll(":scope > span")].map((s) => s.firstChild).filter((n): n is Text => n?.nodeType === Node.TEXT_NODE);
+        const words: { x: number; y: number }[] = [];
+        for (const n of spans)
+          for (const m of n.data.matchAll(/\S+/g)) {
+            const r = document.createRange();
+            r.setStart(n, m.index);
+            r.setEnd(n, m.index + m[0].length);
+            const b = r.getBoundingClientRect();
+            if (b.width > 10) words.push({ x: (b.left + b.right) / 2, y: (b.top + b.bottom) / 2 });
+          }
+        const box = l.getBoundingClientRect();
+        return { text: l.textContent!.replace(/\s+/g, " ").trim(), mid: words[Math.floor(words.length / 2)]!, top: box.top, bottom: box.bottom };
+      })
+  );
+  expect(lines.length, "enough lines to have body above line 3").toBeGreaterThanOrEqual(3);
+  const toolbar = win.getByRole("toolbar", { name: "选区操作" });
+  const place = () =>
+    win.evaluate(() => {
+      const sel = getSelection();
+      if (!sel || sel.rangeCount === 0) return null;
+      const s = sel.getRangeAt(0).getBoundingClientRect();
+      const bar = document.querySelector<HTMLElement>(".selection-toolbar")?.getBoundingClientRect();
+      if (!bar) return null;
+      return { selTop: s.top, selBottom: s.bottom, barTop: bar.top, barBottom: bar.bottom, text: sel.toString().replace(/\s+/g, " ").trim() };
+    });
+
+  const midLine = lines.find((l) => l.text.includes("uncertainty of depth measurements"));
+  const nextPara = lines.find((l) => l.text.includes("During the last decade"));
+  expect(midLine, "mid-page body line").toBeTruthy();
+  expect(nextPara, "following paragraph").toBeTruthy();
+  await win.mouse.click(midLine!.mid.x, midLine!.mid.y, { clickCount: 3 });
+  await expect(toolbar, "mid-page line: the bar opens").toBeVisible();
+  const mid = await place();
+  expect(mid?.text, "mid-page line: the whole line").toBe(midLine!.text);
+  expect(
+    mid!.barBottom <= nextPara!.top + 1 || mid!.barTop >= nextPara!.bottom - 1,
+    "does not cover the next paragraph"
+  ).toBe(true);
+  for (const [i, line] of lines.entries()) {
+    if (line.bottom <= mid!.selTop + 1) {
+      expect(
+        mid!.barBottom <= line.top + 1 || mid!.barTop >= line.bottom - 1,
+        `does not cover a line above the selection (${i + 1})`
+      ).toBe(true);
+    }
+  }
+
+  await win.evaluate(() => getSelection()!.removeAllRanges());
+  await expect(toolbar).toBeHidden();
+  await win.mouse.click(lines[0]!.mid.x, lines[0]!.mid.y, { clickCount: 3 });
+  await expect(toolbar, "line 1: the bar opens").toBeVisible();
+  const first = await place();
+  expect(first?.text, "line 1: the whole line").toBe(lines[0]!.text);
+  expect(first!.barBottom, "line 1: nothing above, bar stays above the line").toBeLessThanOrEqual(first!.selTop - 8 + 2);
+});

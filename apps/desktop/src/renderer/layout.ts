@@ -94,20 +94,101 @@ export interface Rect {
 
 export const BAR_GAP = 8;
 
+/** True when two rectangles overlap on both axes. Touching edges does not count. */
+function rectsOverlap(a: Rect, b: Rect): boolean {
+  return a.top < b.top + b.height && a.top + a.height > b.top && a.left < b.left + b.width && a.left + a.width > b.left;
+}
+
+function overlapArea(a: Rect, b: Rect): number {
+  const w = Math.min(a.left + a.width, b.left + b.width) - Math.max(a.left, b.left);
+  const h = Math.min(a.top + a.height, b.top + b.height) - Math.max(a.top, b.top);
+  return w > 0 && h > 0 ? w * h : 0;
+}
+
 /**
  * Where the floating bar goes, in the container's coordinates (add the container's scrollTop
  * when the bar lives in scrolled content). Above the selection with an 8px gap; below it when
- * there is not enough room above. Never overlaps the selection rectangle: the bar's vertical
- * span is entirely above `sel.top - gap` or entirely below `sel.bottom + gap`. Horizontally
- * centred on the selection and clamped inside the container (`left` is the bar's centre).
+ * there is not enough room above, or when sitting above would overlap `obstacles` (unselected
+ * body line boxes, tested by 2D intersection). If the below slot still overlaps an obstacle
+ * or would leave the container, the bar slides from the below candidate toward the selection
+ * until it misses unselected text and stays in the reading area (overlapping the highlight
+ * if needed). If no such slot exists, it stays in the reading area at the position with the
+ * least overlap area against obstacles. Without obstacles the previous placement is unchanged,
+ * including not clamping a below slot that overflows. Never overlaps the selection rectangle
+ * when either slot is clear: the bar's vertical span is entirely above `sel.top - gap` or
+ * entirely below `sel.bottom + gap`. Horizontally centred on the selection and clamped inside
+ * the container (`left` is the bar's centre).
  */
-export function placeBar(sel: Rect, container: Rect, bar: { width: number; height: number }, gap = BAR_GAP): { top: number; left: number; below: boolean } {
+export function placeBar(
+  sel: Rect,
+  container: Rect,
+  bar: { width: number; height: number },
+  extra?: { gap?: number; obstacles?: readonly Rect[] }
+): { top: number; left: number; below: boolean } {
+  const gap = extra?.gap ?? BAR_GAP;
+  const obstacles = extra?.obstacles ?? [];
   const selTop = sel.top - container.top;
   const selBottom = selTop + sel.height;
-  const below = selTop < bar.height + gap;
-  const top = below ? selBottom + gap : selTop - gap - bar.height;
+  const aboveTop = selTop - gap - bar.height;
+  const belowTop = selBottom + gap;
   const half = bar.width / 2 + 4;
   const centre = sel.left - container.left + sel.width / 2;
   const left = container.width <= 2 * half ? container.width / 2 : Math.min(Math.max(centre, half), container.width - half);
-  return { top, left, below };
+
+  // Region capture and any caller without obstacles keep the original placement.
+  if (obstacles.length === 0) {
+    const below = selTop < bar.height + gap;
+    return { top: below ? belowTop : aboveTop, left, below };
+  }
+
+  const at = (top: number): Rect => ({
+    top: top + container.top,
+    left: container.left + left - bar.width / 2,
+    width: bar.width,
+    height: bar.height
+  });
+  const intersects = (top: number) => obstacles.some((o) => rectsOverlap(at(top), o));
+  const inView = (top: number) => top >= 0 && top + bar.height <= container.height;
+  const areaOf = (top: number) => obstacles.reduce((sum, o) => sum + overlapArea(at(top), o), 0);
+
+  if (inView(aboveTop) && !intersects(aboveTop)) return { top: aboveTop, left, below: false };
+  if (inView(belowTop) && !intersects(belowTop)) return { top: belowTop, left, below: true };
+
+  const maxTop = Math.max(0, container.height - bar.height);
+  const clamp = (t: number) => Math.min(Math.max(t, 0), maxTop);
+  let top = clamp(belowTop);
+  if (intersects(top)) {
+    const box = at(top);
+    const up = obstacles.filter((o) => rectsOverlap(box, o)).map((o) => o.top - container.top - bar.height);
+    if (up.length) top = clamp(Math.min(...up));
+  }
+  if (intersects(top)) {
+    let best = top;
+    let bestArea = areaOf(top);
+    let bestDist = Math.abs(best - belowTop);
+    const consider = (t: number) => {
+      const c = clamp(t);
+      const a = areaOf(c);
+      const d = Math.abs(c - belowTop);
+      if (a < bestArea || (a === bestArea && d < bestDist)) {
+        best = c;
+        bestArea = a;
+        bestDist = d;
+      }
+    };
+    consider(0);
+    consider(maxTop);
+    for (const o of obstacles) {
+      consider(o.top - container.top - bar.height);
+      consider(o.top + o.height - container.top);
+    }
+    top = best;
+  }
+  return { top, left, below: true };
+}
+
+/** Candidate body boxes that sit entirely above or below `sel` (not the selected lines themselves).
+ *  `slack` must exceed the few-pixel overlap between consecutive `.pdf-line` boxes (line-height vs step). */
+export function outsideBodyRects(sel: Rect, candidates: readonly Rect[], slack = 8): Rect[] {
+  return candidates.filter((r) => r.top + r.height <= sel.top + slack || r.top >= sel.top + sel.height - slack);
 }

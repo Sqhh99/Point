@@ -6,7 +6,7 @@ import { CaptureOverlay } from "./Capture";
 import { SelectionOverlay, confirmDuration, PDF_CSS_BASE, type OverlayMode } from "./SelectionOverlay";
 import { EmptyState } from "./EmptyState";
 import { IconAsk, IconCapture, IconDiagram, IconExplain, IconMark, IconMore, IconNote } from "./icons";
-import { isCaptureKey, placeBar, type Box } from "./layout";
+import { isCaptureKey, outsideBodyRects, placeBar, type Box } from "./layout";
 import { isViewBlockId, relocateBlock } from "@point/core/relocate";
 import { DocError } from "./viewers/DocError";
 import { DocxView } from "./viewers/DocxView";
@@ -288,8 +288,15 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
     const scroller = article.parentElement!;
     const r = range.getBoundingClientRect();
     const box = scroller.getBoundingClientRect();
-    // Above the selection with an 8px gap; flipped below when there is no room; never on top of it.
-    const p = placeBar(r, box, barSize());
+    const body: { top: number; left: number; width: number; height: number }[] = [];
+    for (const el of article.querySelectorAll(".pdf-line, .block")) {
+      if (!el.textContent?.trim()) continue;
+      const b = el.getBoundingClientRect();
+      if (b.width >= 1 && b.height >= 1) body.push({ top: b.top, left: b.left, width: b.width, height: b.height });
+    }
+    // Above the selection with an 8px gap; flipped below when there is no room or when the bar
+    // would cover body text outside the selection (triple-click on a mid-page line).
+    const p = placeBar(r, box, barSize(), { obstacles: outsideBodyRects(r, body) });
     const top = p.top + scroller.scrollTop;
     const left = p.left;
     const where = blockAt(range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement);
