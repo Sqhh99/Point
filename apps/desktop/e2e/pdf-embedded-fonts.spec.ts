@@ -749,3 +749,74 @@ test("triple-click on a mid-page line puts the toolbar below, not over the lines
   expect(first?.text, "line 1: the whole line").toBe(lines[0]!.text);
   expect(first!.barBottom, "line 1: nothing above, bar stays above the line").toBeLessThanOrEqual(first!.selTop - 8 + 2);
 });
+
+
+/** Client box of the first glyph-run of page 1's `nth` visual (non-empty) line in the left or right column. `nth` is 0-based. */
+const lineStart = (win: Win, nth: number, right: boolean) =>
+  page1(win).evaluate(
+    (el, [nth, right]) => {
+      const lines = [...el.querySelectorAll<HTMLElement>(".pdf-line")]
+        .filter((l) => l.textContent!.trim() && l.firstElementChild)
+        .map((l) => (l.firstElementChild as HTMLElement).getBoundingClientRect());
+      const mid = (Math.min(...lines.map((b) => b.left)) + Math.max(...lines.map((b) => b.left))) / 2;
+      const spread = Math.max(...lines.map((b) => b.left)) - Math.min(...lines.map((b) => b.left));
+      const col = lines.filter((b) => spread < 50 || (right ? b.left > mid : b.left <= mid));
+      const b = col.sort((a, c) => a.top - c.top)[nth as number]!;
+      return { l: b.left, y: (b.top + b.bottom) / 2 };
+    },
+    [nth, right] as const
+  );
+
+/** Press at each listed offset into the line, drag right: the presses that select nothing. */
+async function deadPresses(win: Win, at: { l: number; y: number }, dxs: number[]) {
+  const dead: number[] = [];
+  for (const dx of dxs) {
+    await win.evaluate(() => getSelection()!.removeAllRanges());
+    await win.mouse.move(at.l + dx, at.y);
+    await win.mouse.down();
+    await win.mouse.move(at.l + dx + 40, at.y, { steps: 4 });
+    const len = await win.evaluate(() => getSelection()!.toString().length);
+    await win.mouse.up();
+    if (len === 0) dead.push(dx);
+  }
+  await win.evaluate(() => getSelection()!.removeAllRanges());
+  return dead;
+}
+
+test("a drag pressed anywhere 0–8px into a line selects (single column, both columns)", async () => {
+  test.setTimeout(120_000);
+  const win = await app.firstWindow();
+  const toolbar = win.getByRole("toolbar", { name: "选区操作" });
+  // #81: hydro L2/L6, twocol L2/L7/R2/R7 × dx 0/2/4/5/6/8. Pressing on a caret-offset boundary used to leave
+  // Chromium moving a caret instead of selecting (see startDragSelection).
+  const dxs = [0, 2, 4, 5, 6, 8];
+  for (const [file, cols, nth] of [
+    ["hydro-times-std.pdf", [false], [1, 5]],
+    ["hydro-2col.pdf", [false, true], [1, 6]],
+  ] as const) {
+    await openFixture(win, file);
+    await expect
+      .poll(() => page1(win).evaluate((el) => el.querySelectorAll(".pdf-text span").length > 0 && !document.querySelector('[data-page="2"]')))
+      .toBe(true);
+    for (const z of [100, 125]) {
+      await setZoom(win, z);
+      for (const right of cols)
+        for (const n of nth)
+          expect(await deadPresses(win, await lineStart(win, n, right), dxs), `${file} ${z}% ${right ? "right" : "left"} column, line ${n + 1}`).toEqual([]);
+    }
+  }
+
+  // Page-margin click (left of the line, not an expanded hit target) still clears the selection and the bar.
+  await openFixture(win, "hydro-times-std.pdf");
+  await expect.poll(() => page1(win).evaluate((el) => el.querySelectorAll(".pdf-text span").length > 0)).toBe(true);
+  await setZoom(win, 125);
+  const at = await lineStart(win, 1, false);
+  await win.mouse.move(at.l + 40, at.y);
+  await win.mouse.down();
+  await win.mouse.move(at.l + 120, at.y, { steps: 4 });
+  await win.mouse.up();
+  await expect(toolbar, "setup: a selection from inside the line opens the bar").toBeVisible();
+  await win.mouse.click(at.l - 12, at.y);
+  expect(await win.evaluate(() => getSelection()!.toString()), "a click 12px left of the line start clears the selection").toBe("");
+  await expect(toolbar, "and closes the selection bar").toBeHidden();
+});
