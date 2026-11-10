@@ -489,6 +489,46 @@ function keepEndInLayer(e: PointerEvent, resetAll: () => void) {
   document.addEventListener("selectionchange", resetAll, { once: true });
 }
 
+/** Caret under the latest plain left press in the first 8px of a line, until the drag selects or the button is released. */
+let press: Range | null = null;
+/** Caret under the pointer at the previous move of that drag. */
+let pressMoved: Range | null = null;
+
+const LINE_START_SLACK = 8;
+
+/** Caret at (x, y) when that point sits in a line's first 8 CSS pixels; otherwise null (page margin stays a click target). */
+function caretInLineStart(x: number, y: number): Range | null {
+  const at = document.caretRangeFromPoint(x, y);
+  if (!at) return null;
+  for (const line of document.querySelectorAll<HTMLElement>(".pdf-text .pdf-line")) {
+    const boxes = [...line.querySelectorAll<HTMLElement>(":scope > span")].map((r) => r.getBoundingClientRect());
+    if (!boxes.length) continue;
+    const left = Math.min(...boxes.map((b) => b.left));
+    const top = Math.min(...boxes.map((b) => b.top));
+    const bottom = Math.max(...boxes.map((b) => b.bottom));
+    if (y >= top && y <= bottom && x >= left && x <= left + LINE_START_SLACK) return at;
+  }
+  return null;
+}
+
+/**
+ * Pressing exactly where the caret offset changes (a sub-pixel band at character edges, e.g. 5px into a line)
+ * can leave Chromium's drag not selecting: the caret stays at the press point or follows the pointer.
+ * Chromium applies a move to the selection after its pointermove, so if the previous move put the pointer on
+ * another caret and the selection still holds no text (collapsed, or spanning only a span boundary), select
+ * from the press point to the pointer ourselves; Chromium then extends from there.
+ */
+function startDragSelection(e: PointerEvent) {
+  const sel = document.getSelection();
+  if (!press || !(e.buttons & 1) || !sel || sel.rangeCount === 0 || sel.toString() !== "") return void (press = pressMoved = null);
+  const at = document.caretRangeFromPoint(e.clientX, e.clientY);
+  if (pressMoved && at && pressMoved.compareBoundaryPoints(Range.START_TO_START, press) !== 0) {
+    sel.setBaseAndExtent(press.startContainer, press.startOffset, at.startContainer, at.startOffset);
+    return void (press = pressMoved = null);
+  }
+  pressMoved = at;
+}
+
 function trackSelection(layer: HTMLElement) {
   const end = document.createElement("div");
   end.className = "endOfContent";
@@ -506,6 +546,8 @@ function trackSelection(layer: HTMLElement) {
     dragging = false;
     prevRange = null;
     pressLayer = e.target instanceof Element ? e.target.closest<HTMLElement>(".pdf-text") : null;
+    press = pressLayer && e.button === 0 && !e.shiftKey ? caretInLineStart(e.clientX, e.clientY) : null;
+    pressMoved = null;
   });
   // Triple click selects the line. Each run is absolutely positioned, so Chromium's own triple click stops at the run.
   document.addEventListener("mousedown", (e) => {
@@ -517,12 +559,14 @@ function trackSelection(layer: HTMLElement) {
     document.getSelection()?.setBaseAndExtent(first, 0, last, last.textContent!.length);
   });
   document.addEventListener("pointermove", (e) => {
-    if (dragging || !(e.buttons & 1)) return;
-    dragging = true;
-    pressLayer?.classList.add("selecting");
+    if (!dragging && (e.buttons & 1)) {
+      dragging = true;
+      pressLayer?.classList.add("selecting");
+    }
+    if (press) startDragSelection(e);
   });
-  document.addEventListener("pointerup", (e) => ((dragging = false), keepEndInLayer(e, resetAll), resetAll()));
-  window.addEventListener("blur", () => ((dragging = false), resetAll()));
+  document.addEventListener("pointerup", (e) => ((press = pressMoved = null), (dragging = false), keepEndInLayer(e, resetAll), resetAll()));
+  window.addEventListener("blur", () => ((press = pressMoved = null), (dragging = false), resetAll()));
   document.addEventListener("keyup", () => !dragging && resetAll());
   document.addEventListener("selectionchange", () => {
     const sel = document.getSelection();
