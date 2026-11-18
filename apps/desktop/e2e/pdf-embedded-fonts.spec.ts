@@ -899,3 +899,35 @@ test("releasing a text selection on the AI panel or column resizer still shows t
   await win.mouse.click(panel.x + 24, panel.y + 24);
   await expect(toolbar, "clicking the AI panel dismisses the bar").toBeHidden();
 });
+
+test("dragging past the last line of a long page keeps the selection through Line 90", async () => {
+  const win = await app.firstWindow();
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setBounds({ x: 0, y: 0, width: 2200, height: 1500 }));
+  await openFixture(win, "long-90-lines.pdf");
+  await expect.poll(() => page1(win).evaluate((el) => el.querySelectorAll(".pdf-line").length >= 90)).toBe(true);
+  await setZoom(win, 100);
+  const l03 = (await lineBox(win, "Line 03"))!;
+  const l90 = (await lineBox(win, "Line 90"))!;
+  const page = (await page1(win).boundingBox())!;
+  const toolbar = win.getByRole("toolbar", { name: "选区操作" });
+  const midX = (l03.l + l03.r) / 2;
+  const cases = [
+    { name: "below the last line", x: midX, y: l90.b + 12 },
+    { name: "below the page", x: midX, y: page.y + page.height + 16 }
+  ];
+  for (const tg of cases) {
+    await hideBar(win);
+    await win.mouse.move(l03.l + 2, (l03.t + l03.b) / 2);
+    await win.mouse.down();
+    await win.mouse.move(midX, (l90.t + l90.b) / 2, { steps: 30 });
+    await win.mouse.move(tg.x, tg.y, { steps: 6 });
+    await win.mouse.up();
+    const sel = await win.evaluate(() => getSelection()!.toString().replace(/\s+/g, " ").trim());
+    expect(sel, `${tg.name}: starts at Line 03`).toMatch(/^Line 03\b/);
+    expect(sel, `${tg.name}: reaches Line 90, not a mid-page truncate or a collapse to Line 01`).toMatch(/Line 90 kappa lambda mu nu xi$/);
+    expect(sel, `${tg.name}: is not reversed onto Line 01`).not.toMatch(/^Line 03[\s\S]*Line 01\b/);
+    await expect(toolbar, `${tg.name}: the selection bar opens`).toBeVisible();
+    const place = await barPlacement(win);
+    expect(place?.inReadingView, `${tg.name}: the bar stays in the reading viewport`).toBe(true);
+  }
+});

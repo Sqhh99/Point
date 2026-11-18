@@ -422,12 +422,16 @@ function textBottom(layer: HTMLElement): number {
  * cross the anchor stops at the anchor line's end (start), so the drag keeps its direction. In two columns a line
  * above the anchor can follow it in reading order; that line is reached as a drag down. Runs on pointerup,
  * before the bar and pdfAnchor read the selection.
+ * A pointer below the last line can still leave the focus inside .pdf-text (often not on a
+ * .pdf-line) while Chromium maps the end to a mid-page span. That is not a reason to skip:
+ * only a pointer that is actually on a line, with the focus already in the layer, is left alone.
  */
 function keepEndInLayer(e: PointerEvent, resetAll: () => void) {
   const sel = document.getSelection();
   const { anchorNode, focusNode } = sel ?? {};
   const focusEl = focusNode instanceof Element ? focusNode : focusNode?.parentElement;
-  if (!sel || sel.isCollapsed || !anchorNode || !focusNode || focusEl?.closest(".pdf-text")) return;
+  if (!sel || sel.isCollapsed || !anchorNode || !focusNode) return;
+  const escaped = !focusEl?.closest(".pdf-text");
   const anchorLine = (anchorNode instanceof Element ? anchorNode : anchorNode.parentElement)?.closest<HTMLElement>(".pdf-line");
   const anchorLayer = anchorLine?.closest<HTMLElement>(".pdf-text");
   if (!anchorLine || !anchorLayer) return;
@@ -460,6 +464,8 @@ function keepEndInLayer(e: PointerEvent, resetAll: () => void) {
     return pool.filter((l) => l.right > start);
   };
   const atY = column(lines.filter((l) => l.top <= y && y <= l.bottom)).sort((p, q) => p.left - q.left);
+  // Focus still in the layer and the pointer on a line: Chromium's end is already local.
+  if (!escaped && atY.length) return;
   const line = atY.length
     ? atY.at(-1)
     : up
@@ -469,11 +475,14 @@ function keepEndInLayer(e: PointerEvent, resetAll: () => void) {
   // Two columns: the line found can sit above the anchor yet after it in reading order; that is still a drag down.
   if (line.el !== anchorLine) up = !!(line.el.compareDocumentPosition(anchorLine) & Node.DOCUMENT_POSITION_FOLLOWING);
   const box = (r: HTMLElement) => r.getBoundingClientRect();
-  const run = up ? line.runs.find((r) => box(r).right >= x) : line.runs.filter((r) => box(r).left <= x).at(-1);
+  // Pointer not on a line (below the last line / above the first): x is not a glyph position, so take the line end
+  // (start when dragging up). On a line, keep the run under the pointer.
+  const pastLine = atY.length === 0;
+  const run = pastLine ? (up ? line.runs[0] : line.runs.at(-1)) : up ? line.runs.find((r) => box(r).right >= x) : line.runs.filter((r) => box(r).left <= x).at(-1);
   // No run on that side of the pointer: the line's end (dragging down, the pointer is left of the line: its start).
   let t = (run ?? (up ? line.runs.at(-1) : line.runs[0]))?.lastChild;
   if (t?.nodeType !== Node.TEXT_NODE) return;
-  let at = (run ? !up : up) ? t.textContent!.length : 0;
+  let at = pastLine ? (up ? 0 : t.textContent!.length) : (run ? !up : up) ? t.textContent!.length : 0;
   const p = document.createRange();
   p.setStart(t, at);
   const crossed = up ? p.comparePoint(anchorNode, sel.anchorOffset) < 0 : p.comparePoint(anchorNode, sel.anchorOffset) > 0;
