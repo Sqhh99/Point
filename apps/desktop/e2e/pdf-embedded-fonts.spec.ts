@@ -820,3 +820,82 @@ test("a drag pressed anywhere 0–8px into a line selects (single column, both c
   expect(await win.evaluate(() => getSelection()!.toString()), "a click 12px left of the line start clears the selection").toBe("");
   await expect(toolbar, "and closes the selection bar").toBeHidden();
 });
+
+
+async function hideBar(win: Win) {
+  await win.evaluate(() => getSelection()!.removeAllRanges());
+  await expect(win.getByRole("toolbar", { name: "选区操作" })).toBeHidden();
+}
+
+/** Where the reader selection bar sits relative to the reading area and the AI panel. */
+const barPlacement = (win: Win) =>
+  win.evaluate(() => {
+    const bar = document.querySelector<HTMLElement>('.selection-toolbar[aria-label="选区操作"]');
+    const panel = document.querySelector<HTMLElement>(".ai-panel");
+    const center = document.querySelector<HTMLElement>("main.center");
+    const readerBar = document.querySelector<HTMLElement>('[data-testid="reader-bar"]');
+    if (!bar || !panel || !center) return null;
+    const b = bar.getBoundingClientRect();
+    const p = panel.getBoundingClientRect();
+    const c = center.getBoundingClientRect();
+    const viewTop = readerBar?.getBoundingClientRect().bottom ?? c.top;
+    const overlaps = (a: DOMRect, o: DOMRect) => a.top < o.bottom && a.bottom > o.top && a.left < o.right && a.right > o.left;
+    return {
+      top: b.top,
+      bottom: b.bottom,
+      inReadingView: b.top >= viewTop - 0.5 && b.bottom <= c.bottom + 0.5 && b.left >= c.left - 0.5 && b.right <= c.right + 0.5,
+      overlapsPanel: overlaps(b, p)
+    };
+  });
+
+const lineBox = (win: Win, label: string) =>
+  page1(win).evaluate((el, label) => {
+    const line = [...el.querySelectorAll(".pdf-line")].find((l) => l.textContent!.replace(/\s+/g, " ").trim().startsWith(label as string));
+    if (!line) return null;
+    const spans = [...line.querySelectorAll<HTMLElement>(":scope > span")].map((s) => s.getBoundingClientRect());
+    return {
+      text: line.textContent!.replace(/\s+/g, " ").trim(),
+      l: Math.min(...spans.map((b) => b.left)),
+      r: Math.max(...spans.map((b) => b.right)),
+      t: Math.min(...spans.map((b) => b.top)),
+      b: Math.max(...spans.map((b) => b.bottom))
+    };
+  }, label);
+
+test("releasing a text selection on the AI panel or column resizer still shows the toolbar in the reader", async () => {
+  const win = await app.firstWindow();
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setBounds({ x: 0, y: 0, width: 2200, height: 1500 }));
+  await openFixture(win, "hydro-times-std.pdf");
+  await expect.poll(() => page1(win).evaluate((el) => el.querySelectorAll(".pdf-text span").length > 0)).toBe(true);
+  await setZoom(win, 125);
+  const start = (await wordBox(win, "techniques"))!;
+  const end = (await wordBox(win, "equipment"))!;
+  const toolbar = win.getByRole("toolbar", { name: "选区操作" });
+  const resizer = (await win.locator(".col-resizer").boundingBox())!;
+  const panel = (await win.locator(".ai-panel").boundingBox())!;
+
+  for (const target of [
+    { name: ".col-resizer", x: resizer.x + resizer.width / 2, y: (end.t + end.b) / 2 },
+    { name: "AI panel", x: panel.x + Math.min(40, panel.width / 2), y: (end.t + end.b) / 2 }
+  ]) {
+    await hideBar(win);
+    const sx = start.l + 2, sy = (start.t + start.b) / 2;
+    await win.mouse.move(sx, sy);
+    await win.mouse.down();
+    await win.mouse.move(end.r - 2, (end.t + end.b) / 2, { steps: 12 });
+    await win.mouse.move(target.x, target.y, { steps: 6 });
+    await win.mouse.up();
+    await expect(toolbar, `${target.name}: the selection bar opens after release outside the article`).toBeVisible();
+    const text = (await win.evaluate(() => getSelection()!.toString())).replace(/\s+/g, " ").trim();
+    expect(text, `${target.name}: selection stays on the reader text`).toMatch(/^techniques\b/);
+    expect(text, `${target.name}: selection does not include the AI panel`).not.toMatch(/AI 解读/);
+    const place = await barPlacement(win);
+    expect(place, `${target.name}: the bar is in the DOM`).toBeTruthy();
+    expect(place!.overlapsPanel, `${target.name}: the bar does not cover the AI panel`).toBe(false);
+    expect(place!.inReadingView, `${target.name}: the bar stays in the reading viewport`).toBe(true);
+  }
+
+  // A dismiss click that starts outside the article must not reopen the bar on mouseup.
+  await win.mouse.click(panel.x + 24, panel.y + 24);
+  await expect(toolbar, "clicking the AI panel dismisses the bar").toBeHidden();
+});

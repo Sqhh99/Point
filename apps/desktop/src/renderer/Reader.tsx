@@ -309,6 +309,27 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
     timer.current = window.setTimeout(measure, SHOW_DELAY_MS);
   }, [measure]);
 
+  // A drag that starts in the article must still open the bar when the pointer is
+  // released on .col-resizer or the AI panel: those sit outside <article>, so the
+  // article's onMouseUp never runs. Clicks that start outside stay a dismiss.
+  useEffect(() => {
+    let armed = false;
+    const inArticle = (t: EventTarget | null) => !!(t instanceof Node && articleRef.current?.contains(t));
+    const onDown = (e: PointerEvent) => {
+      armed = e.button === 0 && inArticle(e.target);
+    };
+    const onUp = (e: MouseEvent) => {
+      if (armed && e.button === 0) onSelectEnd();
+      armed = false;
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    document.addEventListener("mouseup", onUp);
+    return () => {
+      document.removeEventListener("pointerdown", onDown, true);
+      document.removeEventListener("mouseup", onUp);
+    };
+  }, [onSelectEnd]);
+
   // Dismiss on Esc, outside click, scroll, or when the selection collapses.
   useEffect(() => {
     if (!toolbar) return;
