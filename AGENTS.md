@@ -3,7 +3,7 @@
 Point 是一个 Electron 桌面应用（Windows / macOS），用于导入文档、选中内容交给 AI 解读、整理笔记。pnpm 单仓库：`packages/core` 是不依赖 Electron 的纯 TS 核心，`apps/desktop` 是 main / preload / renderer。
 
 ## 分工
-每个 bot 的职责、不做的事和约束见 [`agents/bots/`](agents/bots/README.md)。
+团队为 1 名开发负责人、4 名职责相同的端到端开发（A–D）和 1 名工程效能。一个功能由同一负责人做到交付，不再默认按架构 → UI → 实现 → 测试 → 评审 → 运维串行交接。职责、不做的事和约束见 [`agents/bots/`](agents/bots/README.md)。
 
 ## 必备记录
 按 [`agents/skills/project-records`](agents/skills/project-records/SKILL.md) 写：
