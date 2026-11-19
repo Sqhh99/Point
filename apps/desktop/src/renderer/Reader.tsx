@@ -6,7 +6,7 @@ import { CaptureOverlay } from "./Capture";
 import { SelectionOverlay, confirmDuration, PDF_CSS_BASE, type OverlayMode } from "./SelectionOverlay";
 import { EmptyState } from "./EmptyState";
 import { IconAsk, IconCapture, IconDiagram, IconExplain, IconMark, IconMore, IconNote } from "./icons";
-import { isCaptureKey, outsideBodyRects, placeBar, type Box } from "./layout";
+import { isCaptureKey, outsideBodyRects, placeBar, rectAtCaret, selectionEnds, sameSelectionEnds, type Box } from "./layout";
 import { isViewBlockId, relocateBlock } from "@point/core/relocate";
 import { DocError } from "./viewers/DocError";
 import { DocxView } from "./viewers/DocxView";
@@ -235,12 +235,15 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
   const articleRef = useRef<HTMLElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const timer = useRef<number | undefined>(undefined);
+  const dismissedSel = useRef<ReturnType<typeof selectionEnds>>(null);
 
   /** The bar's real size once rendered; a fallback before the first paint. */
   const barSize = (fallbackWidth = 340) => ({ width: toolbarRef.current?.offsetWidth || fallbackWidth, height: toolbarRef.current?.offsetHeight || TOOLBAR_H });
 
   const close = useCallback((opts?: { keepSelection?: boolean }) => {
     window.clearTimeout(timer.current);
+    const ends = selectionEnds(window.getSelection());
+    if (ends) dismissedSel.current = ends;
     setToolbar(null);
     setMore(false);
     if (!opts?.keepSelection) setSelection(null);
@@ -286,17 +289,63 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
     const text = s.toString().trim();
     if (text.length < 2) return setToolbar(null);
     const scroller = article.parentElement!;
-    const r = range.getBoundingClientRect();
+    const union = range.getBoundingClientRect();
     const box = scroller.getBoundingClientRect();
+    // Spans are absolutely positioned, so a .pdf-line element's own box is not the glyph line.
+    const lineBox = (el: Element) => {
+      const boxes = el.classList.contains("pdf-line")
+        ? [...el.querySelectorAll<HTMLElement>(":scope > span")].map((s) => s.getBoundingClientRect()).filter((b) => b.width >= 1 && b.height >= 1)
+        : [el.getBoundingClientRect()].filter((b) => b.width >= 1 && b.height >= 1);
+      if (!boxes.length) return null;
+      const top = Math.min(...boxes.map((b) => b.top));
+      const left = Math.min(...boxes.map((b) => b.left));
+      return { top, left, width: Math.max(...boxes.map((b) => b.right)) - left, height: Math.max(...boxes.map((b) => b.bottom)) - top };
+    };
     const body: { top: number; left: number; width: number; height: number }[] = [];
     for (const el of article.querySelectorAll(".pdf-line, .block")) {
       if (!el.textContent?.trim()) continue;
-      const b = el.getBoundingClientRect();
-      if (b.width >= 1 && b.height >= 1) body.push({ top: b.top, left: b.left, width: b.width, height: b.height });
+      const b = lineBox(el);
+      if (b) body.push(b);
     }
-    // Above the selection with an 8px gap; flipped below when there is no room or when the bar
-    // would cover body text outside the selection (triple-click on a mid-page line).
-    const p = placeBar(r, box, barSize(), { obstacles: outsideBodyRects(r, body) });
+    // Anchor at the Selection focus (the release / keyboard moving end), not the document-order
+    // Range end or the union's first line. Obstacles are body lines outside the focus line, so
+    // earlier selected lines block "above the last line" without treating the whole highlight
+    // as a slab that would push the bar past later unselected paragraphs.
+    const focusEl = s.focusNode instanceof Element ? s.focusNode : s.focusNode?.parentElement;
+    const pdfLine = focusEl?.closest(".pdf-line");
+    const clientRects = [...range.getClientRects()]
+      .filter((c) => c.width >= 1 && c.height >= 1)
+      .map((c) => ({ top: c.top, left: c.left, width: c.width, height: c.height }));
+    let r = { top: union.top, left: union.left, width: union.width, height: union.height };
+    if (pdfLine && article.contains(pdfLine)) {
+      const picked = lineBox(pdfLine);
+      if (picked) r = picked;
+    } else if (s.focusNode && clientRects.length) {
+      try {
+        const caret = document.createRange();
+        caret.setStart(s.focusNode, s.focusOffset);
+        caret.collapse(true);
+        const c = caret.getBoundingClientRect();
+        const picked = rectAtCaret({ top: c.top, left: c.left, width: Math.max(c.width, 1), height: Math.max(c.height, 1) }, clientRects);
+        if (picked) r = picked;
+      } catch {
+        // Keep the union if the focus caret cannot be resolved.
+      }
+    }
+    // Anchor vertically at the focus line; centre horizontally on the whole highlight so a
+    // short last line does not pull the bar over the previous full line. When the focus is
+    // the lower end, try below first so "above the last line" cannot sit on earlier selected
+    // text. Obstacles: unselected body, plus body lines clearly on the inner side of the focus.
+    const unionRect = { top: union.top, left: union.left, width: union.width, height: union.height };
+    const preferBelow = r.top + r.height / 2 >= union.top + union.height / 2;
+    const inner = body.filter((b) => {
+      const mid = b.top + b.height / 2;
+      return preferBelow ? mid < r.top - r.height / 2 : mid > r.top + r.height + r.height / 2;
+    });
+    const p = placeBar({ top: r.top, left: union.left, width: union.width, height: r.height }, box, barSize(), {
+      obstacles: [...outsideBodyRects(unionRect, body), ...inner],
+      preferBelow
+    });
     const top = p.top + scroller.scrollTop;
     const left = p.left;
     const where = blockAt(range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement);
@@ -308,6 +357,50 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
     window.clearTimeout(timer.current);
     timer.current = window.setTimeout(measure, SHOW_DELAY_MS);
   }, [measure]);
+
+  const onKeySelectEnd = useCallback(() => {
+    if (sameSelectionEnds(dismissedSel.current, selectionEnds(window.getSelection()))) return;
+    dismissedSel.current = null;
+    onSelectEnd();
+  }, [onSelectEnd]);
+
+  // A drag that starts in the article must still open the bar when the pointer is
+  // released on .col-resizer or the AI panel: those sit outside <article>, so the
+  // article's onMouseUp never runs. Clicks that start outside stay a dismiss.
+  useEffect(() => {
+    let armed = false;
+    const inArticle = (t: EventTarget | null) => !!(t instanceof Node && articleRef.current?.contains(t));
+    const onDown = (e: PointerEvent) => {
+      armed = e.button === 0 && inArticle(e.target);
+    };
+    const onUp = (e: MouseEvent) => {
+      if (armed && e.button === 0) onSelectEnd();
+      armed = false;
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    document.addEventListener("mouseup", onUp);
+    return () => {
+      document.removeEventListener("pointerdown", onDown, true);
+      document.removeEventListener("mouseup", onUp);
+    };
+  }, [onSelectEnd]);
+
+  // Keyboard selections never hit article.onKeyUp: the PDF text layer is not a focused
+  // control. A document keyup opens / repositions the bar at the existing Selection focus.
+  // Native keyboard extend is left unchanged; this effect does not rewrite Shift+Arrow.
+  useEffect(() => {
+    const field = (t: EventTarget | null) => t instanceof HTMLElement && !!t.closest("input, textarea, select, [contenteditable='true']");
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === "Escape" || field(e.target)) return;
+      const article = articleRef.current;
+      const s = window.getSelection();
+      if (!article || !s || s.rangeCount === 0 || s.isCollapsed) return;
+      if (!article.contains(s.anchorNode) && !article.contains(s.focusNode)) return;
+      onKeySelectEnd();
+    };
+    document.addEventListener("keyup", onKeyUp);
+    return () => document.removeEventListener("keyup", onKeyUp);
+  }, [onKeySelectEnd]);
 
   // Dismiss on Esc, outside click, scroll, or when the selection collapses.
   useEffect(() => {
@@ -617,7 +710,7 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
       data-kind={view.kind}
       ref={articleRef}
       onMouseUp={onSelectEnd}
-      onKeyUp={(e) => e.key !== "Escape" && onSelectEnd()}
+      onKeyUp={(e) => e.key !== "Escape" && onKeySelectEnd()}
     >
       {view.kind === "md" && doc && (
         <div style={{ zoom: zoom / 100 }}>

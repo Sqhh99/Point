@@ -1,0 +1,20 @@
+# fix(ui): 选区松手出条、文末夹取，工具条锚定在 focus 端
+
+#81 剩余三项。本轮升 `c`：`0.2.3` → `0.2.4`。不关闭 #81 或 #79。
+
+## 行为
+- 从阅读器按下拖选后，在 `.col-resizer` 或 AI 面板松手，仍显示选区工具条，且留在阅读视口内、不压 AI 面板。
+- 在 long-90 上从 Line 03 拖到末行下方或页面盒子下方，选区停在 Line 90，不截在中段、不反向塌到 Line 01；每个目标前把 Line 03 滚回视口并重测起点（避免小视口上第一段拖选后 stale 盒打在中段）。工具条留在视口内。
+- 工具条锚定在 Selection 的 focus（松手端），不再总是整段第一行。向下/向上拖后，条靠近松手行；用 programmatic 反向选区加 keyup 验证组件按 focus 定位（不声称 PDF 跨行键盘导航已支持）。三击中行仍翻到下方且不压未选正文，首行上方无正文时仍在上方。
+- 行首 0–8px 起选、页边单击清选区仍保持。
+
+## 改动
+- `Reader.tsx`：article 内 pointerdown 武装，document `mouseup` 再 measure；`placeBar` 纵向锚在焦点行、水平居中用整段并集，focus 在选区下半时 `preferBelow`；document `keyup` 触发已有选区的 measure，不改写原生键盘选择。Esc / 滚动关闭时记下 Selection 端点引用，两端未变的 keyup（例如只松 Shift）不再复活工具条；换到同文不同 node 或新的真实拖选仍可出条。
+- `PdfView.tsx`：`keepEndInLayer` 在指针不在行盒内时，即使焦点仍在 `.pdf-text` 也夹到最后/最先可及行；仅本次从正文按下并已拖动的左键手势才夹取。点击「更多」或面板不得改写 focus。
+- `layout.ts`：`rectAtCaret` 只合并同一视觉行碎片；`placeBar` 增加 `preferBelow`。
+- e2e / 夹具 / `rectAtCaret` 单测见工作日志。
+
+## 验证
+- 本地 Linux/Xvfb：typecheck；`test:main` 815 passed / 14 skipped；本轮只改 e2e 输入与契约、不改产品与版本后，`pdf-embedded-fonts.spec.ts` 整文件一次 14/14 通过（含 focus-end 大窗 + 1024×677 短窗 100/125/150 上下拖的预先声明 caret 契约，以及真实鼠标跨页上/下 × 100/150/200 六格；按住后只使用 `mouse.wheel`，不用 evaluate(scrollTop)。条纹 125%/200% 仍为 0.631 / 0.773）。详见工作日志第 7–10 节。Windows / macOS CI 与真机仍未跑，不能报通过。不把 CI 重试变绿当作 #79 已修复。行隙与两页夹取仅在失败时附加手势时序，供下次 CI 判别 Windows 现场。run 44486518704 后另修同文异 node 用例两端前置选区不等价，面板松手前增加精确输入断言，更多/面板失败诊断落盘；产品未改，Linux 整文件再一次 14/14，详情见工作日志第 11 节。Windows 面板截断、行隙及 mac 更多首轮失败仍待对应平台现场，不宣称已修复。
+
+Related to #81. Related to #79（共享拖选现场，不关闭）。

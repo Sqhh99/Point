@@ -366,8 +366,8 @@ async function checkSelection(win: Win, z: number, endWord: string) {
 
 
 /** Client box of the nth occurrence of `w` in page 1's text layer. */
-const wordBox = (win: Win, w: string, nth = 0) =>
-  page1(win).evaluate(
+const wordBoxOn = (win: Win, page: number, w: string, nth = 0) =>
+  win.locator(`[data-page="${page}"]`).evaluate(
     (el, [w, nth]) => {
       let k = 0;
       for (const s of el.querySelectorAll<HTMLElement>(".pdf-line > span")) {
@@ -387,9 +387,267 @@ const wordBox = (win: Win, w: string, nth = 0) =>
     },
     [w, nth] as const
   );
+const wordBox = (win: Win, w: string, nth = 0) => wordBoxOn(win, 1, w, nth);
+
+/** Reading area below the sticky reader bar, inside main.center. */
+async function readingView(win: Win) {
+  const center = win.locator("main.center");
+  const vis = (await center.boundingBox())!;
+  const bar = (await win.getByTestId("reader-bar").boundingBox())!;
+  const y = bar.y + bar.height;
+  return { center, x: vis.x, y, width: vis.width - 16, bottom: vis.y + vis.height - 16, height: vis.y + vis.height - 16 - y };
+}
+const boxInView = (b: { l: number; r: number; t: number; b: number }, v: { x: number; y: number; width: number; bottom: number }) =>
+  b.t >= v.y + 2 && b.b <= v.bottom - 2 && b.l >= v.x + 1 && b.r <= v.x + v.width - 1;
+
+const comfortableInView = (b: { l: number; r: number; t: number; b: number }, v: { x: number; y: number; width: number; bottom: number }, pad = 24) =>
+  b.t >= v.y + pad && b.b <= v.bottom - pad && b.l >= v.x + 1 && b.r <= v.x + v.width - 1;
+
+const normWord = (w: string) => w.replace(/[.,;:]+$/g, "");
+
+/** Caret under a client point: word, node offset, page. Used to declare an endpoint before mouseup. */
+const pointerCaret = (win: Win, x: number, y: number) =>
+  win.evaluate(([x, y]) => {
+    const c = document.caretRangeFromPoint(x, y);
+    const n = c?.startContainer;
+    const el = (n instanceof Element ? n : n?.parentElement) ?? null;
+    const data = n?.nodeType === 3 ? n.textContent ?? "" : "";
+    let word = "";
+    if (n?.nodeType === 3) {
+      const a = data.lastIndexOf(" ", Math.max(0, c!.startOffset - 1)) + 1;
+      const d = data.indexOf(" ", c!.startOffset);
+      word = data.slice(a, d < 0 ? data.length : d);
+    }
+    const line = el?.closest(".pdf-line");
+    let onLine = false;
+    if (line) {
+      const rs = [...line.querySelectorAll<HTMLElement>(":scope > span")].map((s) => s.getBoundingClientRect());
+      if (rs.length) {
+        const t = Math.min(...rs.map((b) => b.top)), btm = Math.max(...rs.map((b) => b.bottom));
+        const l = Math.min(...rs.map((b) => b.left)), r = Math.max(...rs.map((b) => b.right));
+        onLine = y >= t && y <= btm && x >= l && x <= r;
+      }
+    }
+    return { x, y, word, off: c?.startOffset ?? -1, data, page: el?.closest("[data-page]")?.getAttribute("data-page") ?? null, onLine };
+  }, [x, y] as const);
+type CaretHit = Awaited<ReturnType<typeof pointerCaret>>;
+
+/** Pick a live point whose caret is already on `word` at its start or end. The hit is the contract, declared before input. */
+async function declareWordCaret(win: Win, box: { l: number; r: number; t: number; b: number }, page: number, word: string, which: "start" | "end"): Promise<CaretHit> {
+  const y = (box.t + box.b) / 2;
+  const xs = which === "start"
+    ? [box.l + 2, box.l + Math.min(4, Math.max(1, (box.r - box.l) * 0.15))]
+    : [box.r - 1, box.r - 2, box.r - 3, box.r - 4, box.l + (box.r - box.l) * 0.92, box.l + (box.r - box.l) * 0.85];
+  let last: CaretHit | null = null;
+  for (const x of xs) {
+    const hit = await pointerCaret(win, x, y);
+    last = hit;
+    if (!hit.onLine || hit.page !== String(page) || normWord(hit.word) !== normWord(word)) continue;
+    const i = hit.data.indexOf(word) >= 0 ? hit.data.indexOf(word) : hit.data.indexOf(normWord(word));
+    if (which === "start") {
+      if (i >= 0 && hit.off <= i + 1) return hit;
+      if (i < 0 && hit.off <= 1) return hit;
+    } else if (i >= 0 && hit.off === i + (hit.data.includes(word) ? word.length : normWord(word).length)) {
+      return hit;
+    }
+  }
+  throw new Error(`could not declare a ${which} caret on page ${page} "${word}"; last=${JSON.stringify(last)}`);
+}
+
+const selectionEndsNow = (win: Win) =>
+  win.evaluate(() => {
+    const s = getSelection();
+    if (!s || s.rangeCount === 0) return { collapsed: true, text: "", head: "", tail: "", len: 0, anchor: { page: null as string | null, word: "", off: -1, data: "" }, focus: { page: null as string | null, word: "", off: -1, data: "" } };
+    const text = s.toString().replace(/\s+/g, " ").trim();
+    const wordAt = (n: Node | null, off: number): { word: string; off: number; data: string } => {
+      if (n && n.nodeType !== 3) {
+        const kids = n.childNodes;
+        if (off >= kids.length) {
+          const last = kids[kids.length - 1] ?? null;
+          return wordAt(last, last?.nodeType === 3 ? (last.textContent ?? "").length : 0);
+        }
+        return wordAt(kids[off] ?? null, 0);
+      }
+      if (!n || n.nodeType !== 3) return { word: "", off, data: "" };
+      const data = n.textContent ?? "";
+      const a = data.lastIndexOf(" ", Math.max(0, off - 1)) + 1;
+      const c = data.indexOf(" ", off);
+      return { word: data.slice(a, c < 0 ? data.length : c), off, data };
+    };
+    const pageOf = (n: Node | null) => ((n instanceof Element ? n : n?.parentElement)?.closest("[data-page]")?.getAttribute("data-page")) ?? null;
+    return {
+      collapsed: s.isCollapsed,
+      text,
+      head: text.slice(0, 40),
+      tail: text.slice(-40),
+      len: text.length,
+      anchor: { page: pageOf(s.anchorNode), ...wordAt(s.anchorNode, s.anchorOffset) },
+      focus: { page: pageOf(s.focusNode), ...wordAt(s.focusNode, s.focusOffset) }
+    };
+  });
+
+async function assertBarAtFocus(win: Win, label: string) {
+  const toolbar = win.getByRole("toolbar", { name: "选区操作" });
+  await expect(toolbar, `${label}: the selection bar opens`).toBeVisible();
+  const place = await barPlacement(win);
+  expect(place, `${label}: the bar is in the DOM`).toBeTruthy();
+  expect(place!.inReadingView, `${label}: the bar stays in the reading viewport`).toBe(true);
+  expect(place!.overlapsPanel, `${label}: the bar does not cover the AI panel`).toBe(false);
+  const geom = await win.evaluate(() => {
+    const s = getSelection()!;
+    const elOf = (n: Node | null) => (n instanceof Element ? n : n?.parentElement) ?? null;
+    const boxOf = (line: Element | null) => {
+      if (!line) return null;
+      const boxes = [...line.querySelectorAll<HTMLElement>(":scope > span")].map((el) => el.getBoundingClientRect()).filter((b) => b.width >= 1 && b.height >= 1);
+      if (!boxes.length) return null;
+      return { top: Math.min(...boxes.map((b) => b.top)), bottom: Math.max(...boxes.map((b) => b.bottom)), left: Math.min(...boxes.map((b) => b.left)), right: Math.max(...boxes.map((b) => b.right)) };
+    };
+    const focusLine = elOf(s.focusNode)?.closest(".pdf-line") ?? null;
+    const anchorLine = elOf(s.anchorNode)?.closest(".pdf-line") ?? null;
+    const fb = boxOf(focusLine);
+    const ab = boxOf(anchorLine);
+    const bar = document.querySelector<HTMLElement>('.selection-toolbar[aria-label="选区操作"]')?.getBoundingClientRect();
+    const overlaps = (a: DOMRect, o: { top: number; bottom: number; left: number; right: number }) => a.top < o.bottom && a.bottom > o.top && a.left < o.right && a.right > o.left;
+    const range = s.rangeCount ? s.getRangeAt(0) : null;
+    const covered: string[] = [];
+    if (bar && range) {
+      for (const line of document.querySelectorAll(".pdf-line")) {
+        if (line === focusLine) continue;
+        const b = boxOf(line);
+        if (!b) continue;
+        if (range.intersectsNode(line)) continue;
+        if (overlaps(bar, b)) covered.push((line.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 40));
+      }
+    }
+    const focusDist = bar && fb ? Math.min(Math.abs(bar.bottom - fb.top), Math.abs(bar.top - fb.bottom)) : Infinity;
+    const otherDist = bar && ab && anchorLine !== focusLine ? Math.min(Math.abs(bar.bottom - ab.top), Math.abs(bar.top - ab.bottom)) : Infinity;
+    return { focusDist, otherDist, distinct: !!focusLine && !!anchorLine && focusLine !== anchorLine, covered };
+  });
+  expect(geom.distinct, `${label}: focus and anchor are different visual lines`).toBe(true);
+  expect(geom.focusDist, `${label}: bar is closer to the focus line than to the other end`).toBeLessThan(geom.otherDist);
+  expect(geom.focusDist, `${label}: bar sits by the focus end`).toBeLessThanOrEqual(8 + 36 + 1);
+  expect(geom.covered, `${label}: the bar does not cover unselected body text (${geom.covered.join(" | ")})`).toEqual([]);
+}
+
+/** Lightweight pointer/selection trace for one test. Attach the dump only when the test throws. Not a product logger. */
+async function startGestureTrace(win: Win) {
+  await win.evaluate(() => {
+    const evs: Record<string, unknown>[] = [];
+    const t0 = performance.now();
+    const snap = (ev: string, e?: PointerEvent | MouseEvent) => {
+      const s = getSelection();
+      const text = s && s.rangeCount ? s.toString().replace(/\s+/g, " ").trim() : "";
+      const wordAt = (n: Node | null, off: number) => {
+        if (!n || n.nodeType !== 3) return { word: "", off, data: "" };
+        const data = n.textContent ?? "";
+        const a = data.lastIndexOf(" ", Math.max(0, off - 1)) + 1;
+        const c = data.indexOf(" ", off);
+        return { word: data.slice(a, c < 0 ? data.length : c), off, data: data.slice(0, 48) };
+      };
+      const pageOf = (n: Node | null) => ((n instanceof Element ? n : n?.parentElement)?.closest("[data-page]")?.getAttribute("data-page")) ?? null;
+      const x = e && "clientX" in e ? e.clientX : undefined;
+      const y = e && "clientY" in e ? e.clientY : undefined;
+      let hit: { word: string; off: number; page: string | null; onLine: boolean; el: string } | null = null;
+      if (x != null && y != null) {
+        const c = document.caretRangeFromPoint(x, y);
+        const n = c?.startContainer;
+        const el = (n instanceof Element ? n : n?.parentElement) ?? document.elementFromPoint(x, y);
+        const data = n?.nodeType === 3 ? n.textContent ?? "" : "";
+        let word = "";
+        if (n?.nodeType === 3) {
+          const a = data.lastIndexOf(" ", Math.max(0, c!.startOffset - 1)) + 1;
+          const d = data.indexOf(" ", c!.startOffset);
+          word = data.slice(a, d < 0 ? data.length : d);
+        }
+        hit = { word, off: c?.startOffset ?? -1, page: el?.closest("[data-page]")?.getAttribute("data-page") ?? null, onLine: !!el?.closest(".pdf-line"), el: el ? `${el.tagName}.${String(el.className).slice(0, 40)}` : "" };
+      }
+      evs.push({
+        t: +(performance.now() - t0).toFixed(1),
+        ev,
+        x, y,
+        target: e?.target instanceof Element ? `${e.target.tagName}.${String(e.target.className).slice(0, 80)}` : null,
+        guardAfter: document.querySelector(".pdf-text.selecting .endOfContent")?.previousElementSibling?.textContent?.slice(-80) ?? null,
+        scrollTop: document.querySelector("main.center")?.scrollTop ?? null,
+        collapsed: !s || s.rangeCount === 0 || s.isCollapsed,
+        len: text.length,
+        head: text.slice(0, 40),
+        tail: text.slice(-40),
+        anchor: s ? { page: pageOf(s.anchorNode), ...wordAt(s.anchorNode, s.anchorOffset) } : null,
+        focus: s ? { page: pageOf(s.focusNode), ...wordAt(s.focusNode, s.focusOffset) } : null,
+        selecting: !!document.querySelector(".pdf-text.selecting"),
+        hit,
+        bar: !!document.querySelector('.selection-toolbar[aria-label="选区操作"]')
+      });
+    };
+    const offs: Array<() => void> = [];
+    const on = (type: string, fn: EventListener, capture = false) => {
+      document.addEventListener(type, fn, capture);
+      offs.push(() => document.removeEventListener(type, fn, capture));
+    };
+    on("pointerdown", (e) => snap("pointerdown", e as PointerEvent), true);
+    let moves = 0;
+    on("pointermove", (e) => {
+      const ev = e as PointerEvent;
+      if (!(ev.buttons & 1)) return;
+      if (++moves % 5 === 1) snap("pointermove", ev);
+    }, true);
+    on("pointerup", (e) => snap("pointerup-capture", e as PointerEvent), true);
+    on("pointerup", (e) => snap("pointerup-bubble", e as PointerEvent), false);
+    on("mouseup", (e) => snap("mouseup", e as MouseEvent), false);
+    on("selectionchange", () => snap("selectionchange"));
+    (window as unknown as { __gestureTrace: { evs: unknown[]; offs: Array<() => void>; sample: (l: string) => void } }).__gestureTrace = {
+      evs,
+      offs,
+      sample: (l: string) => snap(l)
+    };
+  });
+  return {
+    sample: (label: string) => win.evaluate((l) => (window as unknown as { __gestureTrace: { sample: (s: string) => void } }).__gestureTrace.sample(l), label),
+    dump: () => win.evaluate(() => (window as unknown as { __gestureTrace: { evs: unknown[] } }).__gestureTrace?.evs ?? []),
+    stop: () =>
+      win.evaluate(() => {
+        const g = (window as unknown as { __gestureTrace?: { offs: Array<() => void> } }).__gestureTrace;
+        g?.offs.forEach((off) => off());
+        delete (window as unknown as { __gestureTrace?: unknown }).__gestureTrace;
+      })
+  };
+}
+
+async function attachGestureTrace(trace: Awaited<ReturnType<typeof startGestureTrace>>, label: string) {
+  await trace.sample("on-failure");
+  await trace.sample("t-after-measure");
+  const evs = await trace.dump();
+  const body = Buffer.from(JSON.stringify({ label, platform: process.platform, events: evs }, null, 2));
+  const path = test.info().outputPath(`${label}-gesture-trace.json`);
+  writeFileSync(path, body);
+  await test.info().attach(`${label}-gesture-trace.json`, { path, contentType: "application/json" });
+  const last = evs.at(-1);
+  console.log(`PDF-GESTURE-TRACE ${JSON.stringify({ label, platform: process.platform, n: evs.length, last })}`);
+}
+
+async function withGestureTrace(win: Win, label: string, fn: () => Promise<void>) {
+  const trace = await startGestureTrace(win);
+  try {
+    await fn();
+    // One sample after the 120ms measure window, kept in the dump only if we later fail in the caller.
+    await win.waitForTimeout(0);
+  } catch (err) {
+    try {
+      await trace.sample("t+120");
+      await attachGestureTrace(trace, label);
+    } catch (traceError) {
+      console.error("PDF-GESTURE-TRACE-ERROR", String(traceError));
+    }
+    throw err;
+  } finally {
+    await trace.stop().catch(() => {});
+  }
+}
+
 
 test("dragging from a word into a line gap or below the text keeps the selection local (.endOfContent, .selecting)", async () => {
   const win = await app.firstWindow();
+  await withGestureTrace(win, 'line-gap-local', async () => {
   // 125 %, not 100 %: on a window shorter than the page (macOS CI, ~680 px) a Playwright (CDP) mouse drag at 100 % leaves the
   // selection collapsed at the pointer in Chromium even with the guard off; real X input selects fine there. 125 % is the zoom
   // the 147 drags use and drags normally on every runner.
@@ -464,44 +722,77 @@ test("dragging from a word into a line gap or below the text keeps the selection
   // .col-resizer and release right of a middle line; it must end on that line.
   await win.evaluate(() => getSelection()!.removeAllRanges());
   const pulled = await page1(win).evaluate((el, [x, y]) => {
-    const t = [...el.querySelectorAll<HTMLElement>(".pdf-line > span")].find((s) => s.textContent!.includes("techniques"))!.firstChild!;
+    const span = [...el.querySelectorAll<HTMLElement>(".pdf-line > span")].find((s) => s.textContent!.includes("techniques"))!;
+    const t = span.firstChild!;
     const out = document.querySelector(".col-resizer")!;
+    const r = span.getBoundingClientRect();
+    const sx = r.left + Math.min(2, r.width / 2), sy = (r.top + r.bottom) / 2;
+    span.dispatchEvent(new PointerEvent("pointerdown", { button: 0, buttons: 1, clientX: sx, clientY: sy, bubbles: true }));
+    span.dispatchEvent(new PointerEvent("pointermove", { button: 0, buttons: 1, clientX: sx + 1, clientY: sy, bubbles: true }));
     getSelection()!.setBaseAndExtent(t, (t.textContent ?? "").indexOf("techniques"), out, 0);
-    document.dispatchEvent(new PointerEvent("pointerup", { clientX: x, clientY: y, bubbles: true }));
+    document.dispatchEvent(new PointerEvent("pointerup", { button: 0, clientX: x, clientY: y, bubbles: true }));
     const s = getSelection()!;
     const f = s.focusNode instanceof Element ? s.focusNode : s.focusNode?.parentElement;
     return { inText: !!f?.closest(".pdf-text"), tail: s.toString().replace(/\s+/g, " ").trim().slice(-30) };
   }, [short.r + 30, (short.t + short.b) / 2] as const);
   expect(pulled, "escaped end pulled back to the line at the pointer's height").toEqual({ inText: true, tail: expect.stringMatching(/in the survey\.$/) });
+  const unarmed = await page1(win).evaluate((el, [x, y]) => {
+    const t = [...el.querySelectorAll<HTMLElement>(".pdf-line > span")].find((s) => s.textContent!.includes("techniques"))!.firstChild!;
+    const out = document.querySelector(".col-resizer")!;
+    getSelection()!.setBaseAndExtent(t, (t.textContent ?? "").indexOf("techniques"), out, 0);
+    document.dispatchEvent(new PointerEvent("pointerup", { button: 0, clientX: x, clientY: y, bubbles: true }));
+    const s = getSelection()!;
+    const f = s.focusNode instanceof Element ? s.focusNode : s.focusNode?.parentElement;
+    const r = { inText: !!f?.closest(".pdf-text"), tail: s.toString().replace(/\s+/g, " ").trim().slice(-30) };
+    s.removeAllRanges();
+    return r;
+  }, [short.r + 30, (short.t + short.b) / 2] as const);
+  expect(unarmed.inText, "a pointerup without a PDF drag gesture must not clamp the escaped end back into the layer").toBe(false);
   await win.evaluate(() => getSelection()!.removeAllRanges());
+  });
 });
 
 test("200 % selection across paragraphs, framing the worst-drift word (screenshots)", async () => {
   const win = await app.firstWindow();
   await setZoom(win, 200);
-  const center = win.locator("main.center");
-  const vis = (await center.boundingBox())!;
-  const bar = (await win.getByTestId("reader-bar").boundingBox())!;
-  const view = { x: vis.x, y: bar.y + bar.height, width: vis.width - 16, height: vis.y + vis.height - 16 - (bar.y + bar.height) };
+  const view = await readingView(win);
   // Page's left edge in view as far as it fits (at 200 % the page is about as wide as the view), the passage a few lines down.
   const a0 = (await wordBox(win, "According"))!;
   const pg0 = (await page1(win).boundingBox())!;
-  await center.evaluate((e, [dx, dy]) => ((e.scrollLeft += dx!), (e.scrollTop += dy!)), [Math.floor(pg0.x - view.x - 24), Math.floor(a0.t - view.y - 160)]);
+  await view.center.evaluate((e, [dx, dy]) => ((e.scrollLeft += dx!), (e.scrollTop += dy!)), [Math.floor(pg0.x - view.x - 24), Math.floor(a0.t - view.y - 160)]);
   await win.waitForTimeout(150);
   // Paragraph 1 line 2 (with the "5th" superscript) through the worst-drift word ("confidence" at 200 %) into
-  // paragraph 2 line 2 (with "2nd").
-  const a = (await wordBox(win, "According"))!;
-  const z = (await wordBox(win, "moving"))!;
-  const sx = a.l + 1, sy = (a.t + a.b) / 2, ex = z.r - 1, ey = (z.t + z.b) / 2;
+  // paragraph 2 line 2 (with "2nd"). Both words must be in the reading view; otherwise the drag starts or ends off-screen.
+  let a = (await wordBox(win, "According"))!;
+  let z = (await wordBox(win, "moving"))!;
+  if (!boxInView(a, view) || !boxInView(z, view)) {
+    const v = await readingView(win);
+    await v.center.evaluate((e, dy) => (e.scrollTop += dy), Math.floor(a.t - v.y - 80));
+    await win.waitForTimeout(150);
+    a = (await wordBox(win, "According"))!;
+    z = (await wordBox(win, "moving"))!;
+  }
+  const inset = (box: { l: number; r: number }, from: "start" | "end") => {
+    const pad = Math.min(3, Math.max(1, (box.r - box.l) * 0.15));
+    return from === "start" ? box.l + pad : box.r - pad;
+  };
+  const sx = inset(a, "start"), sy = (a.t + a.b) / 2, ex = inset(z, "end"), ey = (z.t + z.b) / 2;
+  const viewNow = await readingView(win);
+  console.log("PDF-SELECTION-200-CROSS", JSON.stringify({
+    a, z, sx, sy, ex, ey,
+    startInView: boxInView(a, viewNow),
+    endInView: boxInView(z, viewNow),
+    scrollTop: await viewNow.center.evaluate((e) => e.scrollTop)
+  }));
   await win.mouse.move(sx, sy);
   await win.mouse.down();
   for (let i = 1; i <= 16; i++) await win.mouse.move(sx + ((ex - sx) * i) / 16, sy + ((ey - sy) * i) / 16);
   await win.mouse.up();
   await win.waitForTimeout(300);
   const text = (await win.evaluate(() => getSelection()!.toString())).replace(/\s+/g, " ").trim();
-  expect(text.startsWith("According")).toBe(true);
-  expect(text).toContain("confidence");
-  expect(text.endsWith("moving")).toBe(true);
+  expect(text, `200 % cross-paragraph selection was ${JSON.stringify(text)}`).toMatch(/^According\b/);
+  expect(text, `200 % cross-paragraph selection was ${JSON.stringify(text)}`).toContain("confidence");
+  expect(text, `200 % cross-paragraph selection was ${JSON.stringify(text)}`).toMatch(/moving$/);
   const r = await win.evaluate(() => {
     const rs = [...getSelection()!.getRangeAt(0).getClientRects()].filter((x) => x.width > 1);
     return { l: Math.min(...rs.map((x) => x.left)), r: Math.max(...rs.map((x) => x.right)), t: Math.min(...rs.map((x) => x.top)), b: Math.max(...rs.map((x) => x.bottom)) };
@@ -547,8 +838,13 @@ const pullBack = (win: Win, from: string, x: number, y: number, { up = false, ou
       const t = span.firstChild!;
       const i = (t.textContent ?? "").indexOf(from);
       const o = document.querySelector(out)!;
+      const box = span.getBoundingClientRect();
+      const sx = box.left + Math.min(2, box.width / 2), sy = (box.top + box.bottom) / 2;
+      // A real PDF drag arms pressLayer + dragging; a bare pointerup must not clamp.
+      span.dispatchEvent(new PointerEvent("pointerdown", { button: 0, buttons: 1, clientX: sx, clientY: sy, bubbles: true }));
+      span.dispatchEvent(new PointerEvent("pointermove", { button: 0, buttons: 1, clientX: sx + 1, clientY: sy, bubbles: true }));
       getSelection()!.setBaseAndExtent(t, up ? i + from.length : i, o, 0);
-      document.dispatchEvent(new PointerEvent("pointerup", { clientX: x, clientY: y, bubbles: true }));
+      document.dispatchEvent(new PointerEvent("pointerup", { button: 0, clientX: x, clientY: y, bubbles: true }));
       const s = getSelection()!;
       const f = s.focusNode instanceof Element ? s.focusNode : s.focusNode?.parentElement;
       const text = s.toString().replace(/\s+/g, " ").trim();
@@ -561,6 +857,7 @@ const pullBack = (win: Win, from: string, x: number, y: number, { up = false, ou
 
 test("an end released past the article is pulled back on the page and column under the pointer (two pages, two columns)", async () => {
   const win = await app.firstWindow();
+  await withGestureTrace(win, 'two-page-pullback', async () => {
   // 1280x800 (what the macOS runner's screen holds; an earlier test asks for 2200x1500, which macOS shrinks). At
   // 125 % page 2 starts below the view but within the reader's 800 px preload margin, so its text layer is built.
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setBounds({ x: 0, y: 0, width: 1280, height: 800 }));
@@ -636,6 +933,7 @@ test("an end released past the article is pulled back on the page and column und
   const twoColUp = await pullBack(win, "sounding.", page.x + page.width - 20, right.y, { up: true, nth: 2 });
   expect(twoColUp, "two columns, dragging up: upwards, ending at the anchor").toMatchObject({ inText: true, up: true, tail: expect.stringMatching(/of each sounding\.$/) });
   expect(twoColUp.head.startsWith(right.next), `two columns, dragging up: starts at "${right.next}", got "${twoColUp.head}"`).toBe(true);
+  });
 });
 
 test("clicks on the span layer behave as on plain text: caret, word, line, and a click on the margin clears", async () => {
@@ -819,4 +1117,739 @@ test("a drag pressed anywhere 0–8px into a line selects (single column, both c
   await win.mouse.click(at.l - 12, at.y);
   expect(await win.evaluate(() => getSelection()!.toString()), "a click 12px left of the line start clears the selection").toBe("");
   await expect(toolbar, "and closes the selection bar").toBeHidden();
+});
+
+
+async function hideBar(win: Win) {
+  await win.evaluate(() => getSelection()!.removeAllRanges());
+  await expect(win.getByRole("toolbar", { name: "选区操作" })).toBeHidden();
+}
+
+/** Where the reader selection bar sits relative to the reading area and the AI panel. */
+const barPlacement = (win: Win) =>
+  win.evaluate(() => {
+    const bar = document.querySelector<HTMLElement>('.selection-toolbar[aria-label="选区操作"]');
+    const panel = document.querySelector<HTMLElement>(".ai-panel");
+    const center = document.querySelector<HTMLElement>("main.center");
+    const readerBar = document.querySelector<HTMLElement>('[data-testid="reader-bar"]');
+    if (!bar || !panel || !center) return null;
+    const b = bar.getBoundingClientRect();
+    const p = panel.getBoundingClientRect();
+    const c = center.getBoundingClientRect();
+    const viewTop = readerBar?.getBoundingClientRect().bottom ?? c.top;
+    const overlaps = (a: DOMRect, o: DOMRect) => a.top < o.bottom && a.bottom > o.top && a.left < o.right && a.right > o.left;
+    return {
+      top: b.top,
+      bottom: b.bottom,
+      inReadingView: b.top >= viewTop - 0.5 && b.bottom <= c.bottom + 0.5 && b.left >= c.left - 0.5 && b.right <= c.right + 0.5,
+      overlapsPanel: overlaps(b, p)
+    };
+  });
+
+const lineBox = (win: Win, label: string) =>
+  page1(win).evaluate((el, label) => {
+    const line = [...el.querySelectorAll(".pdf-line")].find((l) => l.textContent!.replace(/\s+/g, " ").trim().startsWith(label as string));
+    if (!line) return null;
+    const spans = [...line.querySelectorAll<HTMLElement>(":scope > span")].map((s) => s.getBoundingClientRect());
+    return {
+      text: line.textContent!.replace(/\s+/g, " ").trim(),
+      l: Math.min(...spans.map((b) => b.left)),
+      r: Math.max(...spans.map((b) => b.right)),
+      t: Math.min(...spans.map((b) => b.top)),
+      b: Math.max(...spans.map((b) => b.bottom))
+    };
+  }, label);
+
+/** After a long drag the scroller may have moved; never reuse a pre-drag Line 03 box. */
+async function scrollLineIntoView(win: Win, label: string) {
+  const view = await readingView(win);
+  const before = (await lineBox(win, label))!;
+  if (!boxInView(before, view)) {
+    await view.center.evaluate((e, dy) => (e.scrollTop += dy), Math.floor(before.t - view.y - 40));
+    await win.waitForTimeout(150);
+  }
+  return (await lineBox(win, label))!;
+}
+
+test("releasing a text selection on the AI panel or column resizer still shows the toolbar in the reader", async () => {
+  const win = await app.firstWindow();
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setBounds({ x: 0, y: 0, width: 2200, height: 1500 }));
+  await openFixture(win, "hydro-times-std.pdf");
+  await expect.poll(() => page1(win).evaluate((el) => el.querySelectorAll(".pdf-text span").length > 0)).toBe(true);
+  await setZoom(win, 125);
+  const start = (await wordBox(win, "techniques"))!;
+  const end = (await wordBox(win, "equipment"))!;
+  const toolbar = win.getByRole("toolbar", { name: "选区操作" });
+  const resizer = (await win.locator(".col-resizer").boundingBox())!;
+  const panel = (await win.locator(".ai-panel").boundingBox())!;
+
+  for (const target of [
+    { name: ".col-resizer", x: resizer.x + resizer.width / 2, y: (end.t + end.b) / 2 },
+    { name: "AI panel", x: panel.x + Math.min(40, panel.width / 2), y: (end.t + end.b) / 2 }
+  ]) {
+    await hideBar(win);
+    await withGestureTrace(win, `outside-release-${target.name.replace(/[^a-z]/gi, "-")}`, async () => {
+    const startHit = await declareWordCaret(win, start, 1, "techniques", "start");
+    const endHit = await declareWordCaret(win, end, 1, "equipment", "end");
+    const sx = startHit.x, sy = startHit.y;
+    await win.mouse.move(sx, sy);
+    await win.mouse.down();
+    await win.mouse.move(endHit.x, endHit.y, { steps: 12 });
+    const beforeExit = await selectionEndsNow(win);
+    expect(beforeExit.text, `${target.name}: declared range exists before leaving the reader`).toBe("techniques and equipment");
+    expect(beforeExit.anchor.off, `${target.name}: native anchor before leaving the reader`).toBe(startHit.off);
+    expect(beforeExit.focus.off, `${target.name}: native focus before leaving the reader`).toBe(endHit.off);
+    await win.mouse.move(target.x, target.y, { steps: 6 });
+    await win.mouse.up();
+    await expect(toolbar, `${target.name}: the selection bar opens after release outside the article`).toBeVisible();
+    const text = (await win.evaluate(() => getSelection()!.toString())).replace(/\s+/g, " ").trim();
+    expect(text, `${target.name}: selection stays on the reader text`).toMatch(/^techniques\b/);
+    expect(text, `${target.name}: selection does not include the AI panel`).not.toMatch(/AI 解读/);
+    const place = await barPlacement(win);
+    expect(place, `${target.name}: the bar is in the DOM`).toBeTruthy();
+    expect(place!.overlapsPanel, `${target.name}: the bar does not cover the AI panel`).toBe(false);
+    expect(place!.inReadingView, `${target.name}: the bar stays in the reading viewport`).toBe(true);
+    });
+  }
+
+  // A dismiss click that starts outside the article must not reopen the bar on mouseup.
+  await win.mouse.click(panel.x + 24, panel.y + 24);
+  await expect(toolbar, "clicking the AI panel dismisses the bar").toBeHidden();
+});
+
+test("dragging past the last line of a long page keeps the selection through Line 90", async () => {
+  const win = await app.firstWindow();
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setBounds({ x: 0, y: 0, width: 2200, height: 1500 }));
+  await openFixture(win, "long-90-lines.pdf");
+  await expect.poll(() => page1(win).evaluate((el) => el.querySelectorAll(".pdf-line").length >= 90)).toBe(true);
+  const toolbar = win.getByRole("toolbar", { name: "选区操作" });
+  // CI macOS workArea is 1024×677: a 2200×1500 request is shrunk, and the first drag auto-scrolls
+  // so Line 03 leaves the view. Re-measure after scrolling Line 03 back in; do not reuse stale boxes.
+  // The 1024×677 pass is a Linux regression for that shrink; it is not a macOS or real-device PASS.
+  // Assertions still require a Line 03 start and a Line 90 end (not rewritten to a mid-page start).
+  for (const bounds of [
+    { w: 2200, h: 1500, label: "requested 2200x1500" },
+    { w: 1024, h: 677, label: "1024x677 (macOS CI workArea, Linux regression)" }
+  ] as const) {
+    await app.evaluate(({ BrowserWindow }, b) => BrowserWindow.getAllWindows()[0]!.setBounds({ x: 0, y: 0, width: b.w, height: b.h }), bounds);
+    await setZoom(win, 100);
+    for (const name of ["below the last line", "below the page"] as const) {
+    await hideBar(win);
+    const l03 = await scrollLineIntoView(win, "Line 03");
+    const l90 = (await lineBox(win, "Line 90"))!;
+    const page = (await page1(win).boundingBox())!;
+    const view = await readingView(win);
+    const midX = (l03.l + l03.r) / 2;
+    const tg = name === "below the last line" ? { x: midX, y: l90.b + 12 } : { x: midX, y: page.y + page.height + 16 };
+    console.log("PDF-SELECTION-LONG90", JSON.stringify({
+      bounds: bounds.label,
+      name,
+      l03,
+      l90,
+      startInView: boxInView(l03, view),
+      scrollTop: await view.center.evaluate((e) => e.scrollTop),
+      inner: await win.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }))
+    }));
+    expect(boxInView(l03, view), `${name}: Line 03 is in the reading view at mousedown (live box, not a pre-drag cache)`).toBe(true);
+    await win.mouse.move(l03.l + 2, (l03.t + l03.b) / 2);
+    await win.mouse.down();
+    await win.mouse.move(midX, (l90.t + l90.b) / 2, { steps: 30 });
+    await win.mouse.move(tg.x, tg.y, { steps: 6 });
+    await win.mouse.up();
+    const sel = await win.evaluate(() => getSelection()!.toString().replace(/\s+/g, " ").trim());
+    expect(sel, `${name}: starts at Line 03 (selection was ${JSON.stringify(sel.slice(0, 80))})`).toMatch(/^Line 03\b/);
+    expect(sel, `${name}: reaches Line 90, not a mid-page truncate or a collapse to Line 01`).toMatch(/Line 90 kappa lambda mu nu xi$/);
+    expect(sel, `${name}: is not reversed onto Line 01`).not.toMatch(/^Line 03[\s\S]*Line 01\b/);
+    await expect(toolbar, `${name}: the selection bar opens`).toBeVisible();
+    const place = await barPlacement(win);
+    expect(place?.inReadingView, `${name}: the bar stays in the reading viewport`).toBe(true);
+    }
+  }
+});
+
+test("the selection toolbar is anchored at the focus (release) end, not always the first line", async () => {
+  const win = await app.firstWindow();
+  await openFixture(win, "hydro-serif.pdf");
+  await expect.poll(() => page1(win).evaluate((el) => el.querySelectorAll(".pdf-text span").length > 0)).toBe(true);
+  const toolbar = win.getByRole("toolbar", { name: "选区操作" });
+
+  const wordOnScreen = async (w: string) => {
+    await page1(win).evaluate((el, w) => {
+      const span = [...el.querySelectorAll(".pdf-line > span")].find((s) => s.textContent?.includes(w as string));
+      span?.scrollIntoView({ block: "center", inline: "nearest" });
+    }, w);
+    await win.waitForTimeout(50);
+    return (await wordBox(win, w))!;
+  };
+
+  const setBounds = async (w: number, h: number) => {
+    await app.evaluate(({ BrowserWindow }, b) => BrowserWindow.getAllWindows()[0]!.setBounds({ x: 0, y: 0, width: b.w, height: b.h }), { w, h });
+    await win.waitForTimeout(200);
+    return win.evaluate(() => ({ w: innerWidth, h: innerHeight }));
+  };
+
+  // Same-page pair: "During" (paragraph start) and the unique "sounding." (last line of the page).
+  // hydro-serif: "sounding." with a period is only "each sounding." at the page end, so a downward
+  // bar has no following unselected line. "techniques" has a body line immediately above and is not
+  // used as the upward focus. Pre-drag scroll may use evaluate; while holding, only mouse.wheel.
+  const pairStartWord = "During";
+
+  /** Hit-test view: use the real pane, not the 16px scrollbar inset, so a last-line word is not rejected by 1px. */
+  const readingHitView = async () => {
+    const v = await readingView(win);
+    const vis = (await v.center.boundingBox())!;
+    return { center: v.center, x: vis.x + 2, y: v.y, width: vis.width - 4, bottom: vis.y + vis.height - 2 };
+  };
+  const visibleForCaret = (b: { l: number; r: number; t: number; b: number }, v: { x: number; y: number; width: number; bottom: number }) =>
+    b.t >= v.y + 2 && b.b <= v.bottom - 2 && b.l >= v.x + 1 && b.r <= v.x + v.width - 1;
+  const inwardForCaret = (b: { l: number; r: number; t: number; b: number }, v: { x: number; y: number; width: number; bottom: number }) =>
+    b.t >= v.y + 2 && b.b <= v.bottom - 2 && b.l >= v.x + 24 && b.r <= v.x + v.width - 24;
+  const verticallyIn = (b: { t: number; b: number }, v: { y: number; bottom: number }) => b.t >= v.y + 2 && b.b <= v.bottom - 2;
+
+  const scrollBoxIntoView = async (box: { l: number; r: number; t: number; b: number } | null) => {
+    if (!box) return null;
+    const view = await readingHitView();
+    const dy = Math.floor((box.t + box.b) / 2 - (view.y + view.bottom) / 2);
+    const dx = Math.floor((box.l + box.r) / 2 - (view.x + view.x + view.width) / 2);
+    if (dy !== 0 || dx !== 0) {
+      await view.center.evaluate((e, d) => { e.scrollTop += d.dy; e.scrollLeft += d.dx; }, { dy, dx });
+      await win.waitForTimeout(80);
+    }
+  };
+
+  const wordBoxOnLine = (page: number, word: string) =>
+    win.locator(`[data-page="${page}"]`).evaluate((el, word) => {
+      const lines = [...el.querySelectorAll(".pdf-line")];
+      const line = lines[lines.length - 1];
+      if (!line) return null;
+      for (const s of line.querySelectorAll<HTMLElement>(":scope > span")) {
+        const t = s.firstChild as Text | null;
+        if (!t || t.nodeType !== 3) continue;
+        const i = t.data.indexOf(word);
+        if (i < 0) continue;
+        const r = document.createRange();
+        r.setStart(t, i);
+        r.setEnd(t, i + word.length);
+        const b = r.getBoundingClientRect();
+        if (b.width >= 1) return { l: b.left, r: b.right, t: b.top, b: b.bottom };
+      }
+      return null;
+    }, word);
+
+  /** Declare the later endpoint before input: prefer unique "sounding." on the last line; if the short pane clips it, use the rightmost fully visible word on that same line. */
+  const declareLaterEnd = async () => {
+    // Only scroll vertically when probing "sounding.": a temporary scrollLeft would make it look
+    // inward, then the start-word scroll resets scrollLeft and the release point is clipped.
+    let box = await wordBoxOnLine(1, "sounding.");
+    if (box) {
+      const view0 = await readingHitView();
+      const dy = Math.floor((box.t + box.b) / 2 - (view0.y + view0.bottom) / 2);
+      if (dy) {
+        await view0.center.evaluate((e, dy) => { e.scrollTop += dy; }, dy);
+        await win.waitForTimeout(80);
+      }
+    }
+    box = await wordBoxOnLine(1, "sounding.");
+    const view = await readingHitView();
+    if (box && inwardForCaret(box, view)) return { word: "sounding.", box };
+    const picked = await win.evaluate((v) => {
+      const lines = [...document.querySelectorAll('[data-page="1"] .pdf-line')];
+      const line = lines[lines.length - 1];
+      if (!line) return null;
+      const words: { w: string; l: number; r: number; t: number; b: number }[] = [];
+      for (const s of line.querySelectorAll(":scope > span")) {
+        const n = s.firstChild;
+        if (!n || n.nodeType !== 3) continue;
+        for (const m of (n as Text).data.matchAll(/\S+/g)) {
+          const r = document.createRange();
+          r.setStart(n, m.index);
+          r.setEnd(n, m.index + m[0].length);
+          const b = r.getBoundingClientRect();
+          if (b.width >= 1) words.push({ w: m[0], l: b.left, r: b.right, t: b.top, b: b.bottom });
+        }
+      }
+      const inView = words.filter((w) => w.t >= v.y + 2 && w.b <= v.bottom - 2 && w.l >= v.x + 24 && w.r <= v.x + v.width - 24);
+      const pick = inView.length ? inView[inView.length - 1] : null;
+      return pick ? { word: pick.w, box: { l: pick.l, r: pick.r, t: pick.t, b: pick.b }, all: words.map((w) => w.w), clipped: words.map((w) => w.w).filter((w) => !inView.some((x) => x.w === w)) } : { word: null, box: null, all: words.map((w) => w.w), clipped: words.map((w) => w.w) };
+    }, { y: view.y, bottom: view.bottom, x: view.x, width: view.width });
+    expect(picked?.word && picked?.box, `last line of page 1 has a word 24px inside the pane (candidates=${JSON.stringify(picked)})`).toBeTruthy();
+    return { word: picked!.word!, box: picked!.box! };
+  };
+
+  const runMatrix = async (boundsLabel: string, inner: { w: number; h: number }) => {
+    const failed: string[] = [];
+    for (const z of [100, 125, 150]) {
+      for (const dir of ["down", "up"] as const) {
+        const cell = `${boundsLabel} ${z}% ${dir} (${inner.w}x${inner.h})`;
+        try {
+          await hideBar(win);
+          await setZoom(win, z);
+          const later = await declareLaterEnd();
+          const fromWord = dir === "down" ? pairStartWord : later.word;
+          const toWord = dir === "down" ? later.word : pairStartWord;
+          const startWhich = dir === "down" ? "start" : "end";
+          const endWhich = dir === "down" ? "end" : "start";
+          // Pre-hold scroll only the start word, with a live box. The end word is brought in with mouse.wheel while holding.
+          if (dir === "down") await scrollBoxIntoView(await wordBox(win, pairStartWord));
+          else await scrollBoxIntoView(await wordBoxOnLine(1, later.word) ?? later.box);
+          const startBox = dir === "down" ? (await wordBox(win, pairStartWord))! : (await wordBoxOnLine(1, later.word) ?? later.box);
+          const startView = await readingHitView();
+          expect(inwardForCaret(startBox, startView), `${cell}: start word is 24px inside the pane at mousedown (box=${JSON.stringify(startBox)}, view=${JSON.stringify({ y: startView.y, bottom: startView.bottom, x: startView.x, width: startView.width })})`).toBe(true);
+          const startHit = await declareWordCaret(win, startBox, 1, fromWord, startWhich);
+          // Establish a same-word range first so a later wheel does not start from a caret.
+          const sameWordOther = await declareWordCaret(win, startBox, 1, fromWord, endWhich);
+          await win.mouse.move(startHit.x, startHit.y);
+          await win.mouse.down();
+          await win.mouse.move(sameWordOther.x, sameWordOther.y, { steps: 6 });
+          const afterPress = await selectionEndsNow(win);
+          if (afterPress.collapsed) {
+            await win.mouse.up().catch(() => {});
+            throw new Error(`${cell}: native Selection stayed collapsed after a same-word drag (startHit=${JSON.stringify(startHit)}, sameWordOther=${JSON.stringify(sameWordOther)})`);
+          }
+          expect(normWord(afterPress.anchor.word), `${cell}: press anchor is the declared start word`).toBe(normWord(startHit.word));
+
+          const wheelDir = dir === "down" ? 1 : -1;
+          const liveEndBox = async () => dir === "down" ? (await wordBoxOnLine(1, toWord) ?? await wordBox(win, toWord)) : await wordBox(win, toWord);
+          let endBox = await liveEndBox();
+          for (let i = 0; i < 24; i++) {
+            const v = await readingHitView();
+            const slot = 8 + 36 + 1;
+            const hasSlot = endBox && (dir === "down" ? endBox.b <= v.bottom - slot : endBox.t >= v.y + slot);
+            if (endBox && inwardForCaret(endBox, v) && hasSlot) break;
+            const mid = await selectionEndsNow(win);
+            if (normWord(mid.anchor.word) !== normWord(startHit.word) || mid.anchor.off !== startHit.off) {
+              throw new Error(`${cell}: native anchor was lost during mouse.wheel step ${i}: ${JSON.stringify({ mid, startHit, scrollTop: await v.center.evaluate((e) => e.scrollTop) })}`);
+            }
+            const vert = !!(endBox && verticallyIn(endBox, v));
+            const needY = !vert;
+            const needSlot = !!(endBox && vert && (dir === "down" ? endBox.b > v.bottom - slot : endBox.t < v.y + slot));
+            const needX = !!(endBox && vert && !visibleForCaret(endBox, v));
+            const yDelta = needY ? wheelDir * 240 : needSlot ? -wheelDir * 80 : 0;
+            await win.mouse.wheel(needX ? (endBox!.l < v.x + 24 ? -240 : 240) : 0, yDelta);
+            await win.waitForTimeout(80);
+            endBox = await liveEndBox();
+          }
+          endBox = (await liveEndBox())!;
+          const endView = await readingHitView();
+          expect(endBox && inwardForCaret(endBox, endView), `${cell}: end word is 24px inside the pane before release (box=${JSON.stringify(endBox)}, view=${JSON.stringify({ y: endView.y, bottom: endView.bottom, x: endView.x, width: endView.width })}, scroll=${await endView.center.evaluate((e) => ({ top: e.scrollTop, left: e.scrollLeft }))})`).toBe(true);
+          const endHit = await declareWordCaret(win, endBox, 1, toWord, endWhich);
+          await win.mouse.move(endHit.x, endHit.y, { steps: 12 });
+          const hitBeforeUp = await pointerCaret(win, endHit.x, endHit.y);
+          expect(
+            hitBeforeUp.onLine && hitBeforeUp.page === "1" && normWord(hitBeforeUp.word) === normWord(endHit.word) && hitBeforeUp.off === endHit.off,
+            `${cell}: live pointer before mouseup is still the declared end caret (got ${JSON.stringify(hitBeforeUp)}, declared ${JSON.stringify(endHit)})`
+          ).toBe(true);
+          await win.mouse.up();
+          await win.waitForTimeout(200);
+          const sel = await selectionEndsNow(win);
+          const formed = !sel.collapsed && sel.len >= 2;
+          console.log("PDF-SELECTION-FOCUS-END", JSON.stringify({ cell, formed, startHit, endHit, hitBeforeUp, sel }));
+          if (!formed) {
+            const body = Buffer.from(JSON.stringify({ cell, inner, platform: process.platform, startHit, endHit, hitBeforeUp, sel }, null, 2));
+            await test.info().attach(`focus-end-premise-${boundsLabel}-${z}-${dir}.json`, { body, contentType: "application/json" });
+            throw new Error(`${cell}: after a real mouse drag the native Selection was collapsed or shorter than 2 characters (hitBeforeUp=${JSON.stringify(hitBeforeUp)}, sel=${JSON.stringify(sel)}). Recorded on ${process.platform} only; not a placement PASS and not a macOS/device conclusion.`);
+          }
+          expect(normWord(sel.anchor.word), `${cell}: anchor word matches the declared start`).toBe(normWord(startHit.word));
+          expect(sel.anchor.off, `${cell}: anchor offset matches the declared start caret`).toBe(startHit.off);
+          expect(normWord(sel.focus.word), `${cell}: focus word matches the declared end`).toBe(normWord(endHit.word));
+          expect(sel.focus.off, `${cell}: focus offset matches the declared end caret (not a mid-word stand-in)`).toBe(endHit.off);
+          const earlierHit = dir === "down" ? startHit : endHit;
+          const laterHit = dir === "down" ? endHit : startHit;
+          expect(sel.text, `${cell}: document-order text starts at the earlier word`).toMatch(new RegExp(`^${earlierHit.word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+          expect(sel.text, `${cell}: document-order text ends at the later word (exact declared end, not a prefix)`).toMatch(new RegExp(`${laterHit.word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
+          await assertBarAtFocus(win, cell);
+          await hideBar(win);
+        } catch (err) {
+          failed.push(`${cell}: ${err instanceof Error ? err.message : String(err)}`);
+          await hideBar(win).catch(() => {});
+          await win.evaluate(() => getSelection()?.removeAllRanges());
+          await win.mouse.up().catch(() => {});
+        }
+      }
+    }
+    expect(failed, `focus-end matrix cells that did not meet their declared caret/placement contract:\n${failed.join("\n")}`).toEqual([]);
+  };
+
+  const large = await setBounds(2200, 1500);
+  await runMatrix("asked-2200x1500", large);
+  const small = await setBounds(1024, 677);
+  await runMatrix("1024x677", small);
+  // Restore a standard pane for the keyboard / programmatic checks. The 1024x677 matrix
+  // already ran; those checks were written against a 1280x800 reading view, not the narrow pane.
+  await setBounds(1280, 800);
+
+  // Native Shift+Right is the keyboard extend Chromium can apply inside a text node.
+  // This is not a cross-line claim. If the span layer leaves the caret collapsed, that
+  // is a pre-existing PDF keyboard limitation, not something this PR invents around.
+  await hideBar(win);
+  await setZoom(win, 125);
+  const caretAt = await wordOnScreen("techniques");
+  await win.mouse.click(caretAt.l + 2, (caretAt.t + caretAt.b) / 2);
+  await win.keyboard.press("Shift+ArrowRight");
+  const nativeRight = await win.evaluate(() => {
+    const s = getSelection()!;
+    return { collapsed: s.isCollapsed, len: s.toString().replace(/\s+/g, " ").trim().length };
+  });
+  // Product contract (Reader.measure): hide the bar when trimmed text length is < 2.
+  // A 1-character native extend must not be required to open the bar.
+  if (!nativeRight.collapsed && nativeRight.len >= 2) {
+    await expect(toolbar, "native Shift+Right opens the bar when the selection has at least 2 characters").toBeVisible();
+  } else if (!nativeRight.collapsed && nativeRight.len === 1) {
+    await expect(toolbar, "Reader hides the bar when the selection is shorter than 2 characters").toBeHidden();
+  }
+  test.info().annotations.push({
+    type: "pdf-keyboard",
+    description: nativeRight.collapsed
+      ? "native Shift+Right did not extend a PDF span-layer caret (pre-existing limitation; not added in this PR)"
+      : nativeRight.len === 1
+        ? "native Shift+Right extended to 1 char; bar stays hidden per the <2 character contract"
+        : `native Shift+Right extended to ${nativeRight.len} chars and opened the bar`
+  });
+
+  // Component placement check, not a claim that the PDF text layer supports real
+  // cross-line keyboard navigation. A programmatic Selection (focus and anchor on
+  // different visual lines) plus a document keyup must place the bar at the focus
+  // line. Oracle: union of :scope > span boxes on the focus/anchor .pdf-line,
+  // independent of placeBar / rectAtCaret. Distance asserts are not relaxed.
+  const applyFocusSel = (focusAt: "first" | "last") =>
+    win.evaluate((focusAt) => {
+      const textOf = (n: Node | null) => (n?.textContent ?? "").replace(/\s+/g, " ");
+      // Use the second paragraph's first and last lines: the gap above "During" is wide enough
+      // for the 8px + bar-height slot. "techniques" has a body line immediately above, so
+      // placeBar correctly moves further up and would fail a tight adjacency assert.
+      const firstLine = [...document.querySelectorAll(".pdf-text .pdf-line")].find((l) => textOf(l).includes("During the last decade"));
+      const lastLine = [...document.querySelectorAll(".pdf-text .pdf-line")].find((l) => textOf(l).includes("sounding."));
+      const startNode = (el: Element) => {
+        const n = [...el.querySelectorAll(":scope > span")][0]?.firstChild;
+        return n?.nodeType === Node.TEXT_NODE ? n : null;
+      };
+      const endNode = (el: Element) => {
+        const spans = [...el.querySelectorAll(":scope > span")];
+        const n = spans[spans.length - 1]?.lastChild;
+        return n?.nodeType === Node.TEXT_NODE ? n : null;
+      };
+      if (!firstLine || !lastLine || firstLine === lastLine) return { ok: false as const, reason: "need two distinct visual lines" };
+      const a = startNode(firstLine);
+      const b = endNode(lastLine);
+      if (!a || !b || a.textContent == null || b.textContent == null) return { ok: false as const, reason: "missing text nodes" };
+      (focusAt === "first" ? firstLine : lastLine).scrollIntoView({ block: "center", inline: "nearest" });
+      const s = getSelection()!;
+      if (focusAt === "first") s.setBaseAndExtent(b, b.textContent.length, a, 0);
+      else s.setBaseAndExtent(a, 0, b, b.textContent.length);
+      document.dispatchEvent(new KeyboardEvent("keyup", { key: "Shift", bubbles: true }));
+      return { ok: true as const, text: s.toString().replace(/\s+/g, " ").trim() };
+    }, focusAt);
+
+  const focusOracle = () =>
+    win.evaluate(() => {
+      const s = getSelection()!;
+      const elOf = (n: Node | null) => (n instanceof Element ? n : n?.parentElement) ?? null;
+      const focusLine = elOf(s.focusNode)?.closest(".pdf-line");
+      const anchorLine = elOf(s.anchorNode)?.closest(".pdf-line");
+      const boxOf = (line: Element | null | undefined) => {
+        if (!line) return null;
+        const boxes = [...line.querySelectorAll<HTMLElement>(":scope > span")].map((el) => el.getBoundingClientRect()).filter((b) => b.width >= 1 && b.height >= 1);
+        if (!boxes.length) return null;
+        return { top: Math.min(...boxes.map((b) => b.top)), bottom: Math.max(...boxes.map((b) => b.bottom)) };
+      };
+      const fb = boxOf(focusLine);
+      const ab = boxOf(anchorLine);
+      const mid = (b: { top: number; bottom: number } | null) => (b ? (b.top + b.bottom) / 2 : NaN);
+      return {
+        distinct: !!focusLine && !!anchorLine && focusLine !== anchorLine && Number.isFinite(mid(fb)) && Number.isFinite(mid(ab)) && Math.abs(mid(fb) - mid(ab)) > 1,
+        focusTop: fb?.top ?? 0,
+        focusBottom: fb?.bottom ?? 0,
+        otherTop: ab?.top ?? 0,
+        otherBottom: ab?.bottom ?? 0,
+        text: s.toString().replace(/\s+/g, " ").trim()
+      };
+    });
+
+  for (const focusAt of ["last", "first"] as const) {
+    await hideBar(win);
+    const applied = await applyFocusSel(focusAt);
+    expect(applied.ok, `programmatic ${focusAt}-focus selection is set`).toBe(true);
+    if (applied.ok) expect(applied.text.length, `programmatic ${focusAt}-focus selection spans the two lines`).toBeGreaterThan(20);
+    await expect(toolbar, `programmatic ${focusAt}-focus + keyup opens the bar (component placement, not native cross-line keyboard)`).toBeVisible();
+    const keyPlace = await barPlacement(win);
+    const keySel = await focusOracle();
+    expect(keySel.distinct, `programmatic ${focusAt}-focus: focus and anchor are different visual lines (independent span-union oracle)`).toBe(true);
+    const keyDist = Math.min(Math.abs(keyPlace!.bottom - keySel.focusTop), Math.abs(keyPlace!.top - keySel.focusBottom));
+    const keyToOther = Math.min(Math.abs(keyPlace!.bottom - keySel.otherTop), Math.abs(keyPlace!.top - keySel.otherBottom));
+    const keyGeom = `bar=${keyPlace!.top.toFixed(3)}..${keyPlace!.bottom.toFixed(3)} focus=${keySel.focusTop.toFixed(3)}..${keySel.focusBottom.toFixed(3)} other=${keySel.otherTop.toFixed(3)}..${keySel.otherBottom.toFixed(3)} dist=${keyDist} otherDist=${keyToOther}`;
+    expect(keyDist, `programmatic ${focusAt}-focus: bar is closer to the focus line than to the other end (${keyGeom})`).toBeLessThan(keyToOther);
+    expect(keyDist, `programmatic ${focusAt}-focus: bar sits by the focus end (${keyGeom})`).toBeLessThanOrEqual(8 + 36 + 1);
+    expect(keyPlace!.inReadingView, `programmatic ${focusAt}-focus: bar in reading view`).toBe(true);
+  }
+});
+
+test("clicking 更多 on a retained PDF selection does not rewrite the focus end", async () => {
+  const win = await app.firstWindow();
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setBounds({ x: 0, y: 0, width: 1280, height: 800 }));
+  await openFixture(win, "hydro-serif.pdf");
+  await expect.poll(() => page1(win).evaluate((el) => el.querySelectorAll(".pdf-text span").length > 0)).toBe(true);
+  await setZoom(win, 125);
+  const toolbar = win.getByRole("toolbar", { name: "选区操作" });
+  await withGestureTrace(win, "retained-selection-more", async () => {
+  const start = (await wordBox(win, "techniques"))!;
+  const end = (await wordBox(win, "equipment"))!;
+  await hideBar(win);
+  await win.mouse.move(start.l + 2, (start.t + start.b) / 2);
+  await win.mouse.down();
+  await win.mouse.move(end.r - 2, (end.t + end.b) / 2, { steps: 12 });
+  await win.mouse.up();
+  await expect(toolbar).toBeVisible();
+  const before = await win.evaluate(() => {
+    const s = getSelection()!;
+    const mark = (n: Node | null) => {
+      const el = n instanceof Element ? n : n?.parentElement;
+      return { text: (el?.textContent ?? "").replace(/\s+/g, " ").trim(), offset: n === s.anchorNode ? s.anchorOffset : s.focusOffset };
+    };
+    return {
+      text: s.toString().replace(/\s+/g, " ").trim(),
+      anchor: { ...mark(s.anchorNode), offset: s.anchorOffset },
+      focus: { ...mark(s.focusNode), offset: s.focusOffset }
+    };
+  });
+  expect(before.text.length, "need a multi-character selection before clicking 更多").toBeGreaterThan(1);
+  await win.evaluate(() => {
+    const s = getSelection()!;
+    (window as unknown as { __pointSel?: { a: Node | null; ao: number; f: Node | null; fo: number; text: string } }).__pointSel = {
+      a: s.anchorNode, ao: s.anchorOffset, f: s.focusNode, fo: s.focusOffset, text: s.toString()
+    };
+  });
+  await win.getByRole("button", { name: "更多" }).click();
+  const afterMore = await win.evaluate(() => {
+    const s = getSelection()!;
+    const b = (window as unknown as { __pointSel: { a: Node | null; ao: number; f: Node | null; fo: number; text: string } }).__pointSel;
+    return { same: s.anchorNode === b.a && s.anchorOffset === b.ao && s.focusNode === b.f && s.focusOffset === b.fo && s.toString() === b.text };
+  });
+  expect(afterMore.same, "clicking 更多 keeps the same Selection nodes and offsets").toBe(true);
+  await expect(win.getByRole("button", { name: "记笔记" })).toBeVisible();
+
+  const panel = (await win.locator(".ai-panel").boundingBox())!;
+  await win.mouse.click(panel.x + 24, panel.y + 24);
+  const afterPanel = await win.evaluate(() => {
+    const s = getSelection()!;
+    const b = (window as unknown as { __pointSel: { a: Node | null; ao: number; f: Node | null; fo: number; text: string } }).__pointSel;
+    return { same: s.anchorNode === b.a && s.anchorOffset === b.ao && s.focusNode === b.f && s.focusOffset === b.fo && s.toString() === b.text };
+  });
+  expect(afterPanel.same, "a non-drag click on the AI panel does not rewrite the focus end").toBe(true);
+  await expect(toolbar, "clicking the AI panel dismisses the bar").toBeHidden();
+  });
+});
+
+test("releasing Shift alone does not revive a toolbar hidden by Escape", async () => {
+  const win = await app.firstWindow();
+  await openFixture(win, "hydro-serif.pdf");
+  await expect.poll(() => page1(win).evaluate((el) => el.querySelectorAll(".pdf-text span").length > 0)).toBe(true);
+  await setZoom(win, 125);
+  const toolbar = win.getByRole("toolbar", { name: "选区操作" });
+  const start = (await wordBox(win, "techniques"))!;
+  const end = (await wordBox(win, "equipment"))!;
+  await hideBar(win);
+  await win.mouse.move(start.l + 2, (start.t + start.b) / 2);
+  await win.mouse.down();
+  await win.mouse.move(end.r - 2, (end.t + end.b) / 2, { steps: 12 });
+  await win.mouse.up();
+  await expect(toolbar).toBeVisible();
+  const text = await win.evaluate(() => getSelection()!.toString().replace(/\s+/g, " ").trim());
+  expect(text.length).toBeGreaterThan(1);
+  await win.keyboard.press("Escape");
+  await expect(toolbar, "Escape hides the bar and leaves the native selection").toBeHidden();
+  const still = await win.evaluate(() => getSelection()!.toString().replace(/\s+/g, " ").trim());
+  expect(still, "Escape does not clear the native selection").toBe(text);
+  await win.keyboard.down("Shift");
+  await win.keyboard.up("Shift");
+  await win.waitForTimeout(400);
+  await expect(toolbar, "releasing Shift alone does not revive the bar after Escape").toBeHidden();
+  expect(await win.evaluate(() => getSelection()!.toString().replace(/\s+/g, " ").trim())).toBe(text);
+
+  // Start outside the dismissed range so the browser makes a new selection instead of dragging the old text.
+  const next = (await wordBox(win, "During"))!;
+  const last = (await wordBox(win, "decade"))!;
+  await win.mouse.move(next.l + 2, (next.t + next.b) / 2);
+  await win.mouse.down();
+  await win.mouse.move(last.r - 2, (last.t + last.b) / 2, { steps: 12 });
+  await win.mouse.up();
+  await win.waitForTimeout(200);
+  const newText = await win.evaluate(() => getSelection()!.toString().replace(/\s+/g, " ").trim());
+  expect(newText, `new mouse selection after Escape was ${JSON.stringify(newText)}`).toMatch(/^During\b/);
+  expect(newText).not.toBe(text);
+  await expect(toolbar, "a real new mouse selection after Escape still opens the bar").toBeVisible();
+
+  await win.locator("main.center").evaluate((e) => (e.scrollTop += 48));
+  await expect(toolbar, "scrolling hides the bar and leaves the native selection").toBeHidden();
+  const afterScroll = await win.evaluate(() => getSelection()!.toString().replace(/\s+/g, " ").trim());
+  expect(afterScroll.length).toBeGreaterThan(1);
+  await win.keyboard.down("Shift");
+  await win.keyboard.up("Shift");
+  await win.waitForTimeout(400);
+  await expect(toolbar, "releasing Shift alone does not revive the bar after scroll").toBeHidden();
+  expect(await win.evaluate(() => getSelection()!.toString().replace(/\s+/g, " ").trim())).toBe(afterScroll);
+});
+
+test("keyup after Escape still opens the bar when the endpoints move to a same-text node on another page", async () => {
+  const win = await app.firstWindow();
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setBounds({ x: 0, y: 0, width: 1280, height: 800 }));
+  await openFixture(win, "hydro-times-std-2p.pdf");
+  await expect(page1(win).locator(".pdf-text span").first()).toBeVisible();
+  await setZoom(win, 125);
+  const view = await readingView(win);
+  const s0 = (await wordBoxOn(win, 1, "techniques"))!;
+  await view.center.evaluate((e, dy) => (e.scrollTop += dy), Math.floor(s0.t - view.y - 40));
+  await expect(win.locator('[data-page="2"] .pdf-text span').first()).toBeAttached({ timeout: 10_000 });
+  await win.waitForTimeout(150);
+  const toolbar = win.getByRole("toolbar", { name: "选区操作" });
+  // This regression isolates dismissal by node identity, not native mouse rounding.
+  const page1Text = await page1(win).evaluate((el) => {
+    const spans = [...el.querySelectorAll<HTMLElement>(".pdf-line > span")];
+    const tech = spans.find((s) => s.textContent!.includes("techniques"))?.firstChild;
+    const equip = spans.find((s) => s.textContent!.includes("equipment"))?.firstChild;
+    if (!tech || !equip) throw new Error("page 1 endpoints missing");
+    const s = getSelection()!;
+    s.setBaseAndExtent(tech, (tech.textContent ?? "").indexOf("techniques"), equip, (equip.textContent ?? "").indexOf("equipment") + "equipment".length);
+    document.dispatchEvent(new KeyboardEvent("keyup", { key: "Shift", bubbles: true }));
+    return s.toString().replace(/\s+/g, " ").trim();
+  });
+  expect(page1Text, "the dismissed selection has declared complete endpoints").toBe("techniques and equipment");
+  await expect(toolbar).toBeVisible();
+  await win.keyboard.press("Escape");
+  await expect(toolbar).toBeHidden();
+  const moved = await win.evaluate(() => {
+    const page2 = document.querySelector('[data-page="2"]');
+    const spans = [...(page2?.querySelectorAll<HTMLElement>(".pdf-line > span") ?? [])];
+    const tech = spans.find((s) => s.textContent!.includes("techniques"))?.firstChild;
+    const equip = spans.find((s) => s.textContent!.includes("equipment"))?.firstChild;
+    if (!tech || tech.nodeType !== Node.TEXT_NODE || !equip || equip.nodeType !== Node.TEXT_NODE) return { ok: false as const };
+    const s = getSelection()!;
+    const sameNode = s.anchorNode === tech && s.focusNode === equip;
+    s.setBaseAndExtent(tech, (tech.textContent ?? "").indexOf("techniques"), equip, (equip.textContent ?? "").indexOf("equipment") + "equipment".length);
+    document.dispatchEvent(new KeyboardEvent("keyup", { key: "Shift", bubbles: true }));
+    return {
+      ok: true as const,
+      sameNode,
+      sameText: s.toString().replace(/\s+/g, " ").trim(),
+      page: (tech.parentElement?.closest("[data-page]") as HTMLElement | null)?.getAttribute("data-page") ?? null
+    };
+  });
+  expect(moved.ok, "page-2 techniques node is available").toBe(true);
+  if (moved.ok) {
+    expect(moved.sameNode, "page-2 techniques is a different node from the dismissed page-1 selection").toBe(false);
+    expect(moved.sameText, "the new selection is the same words on the other page").toBe(page1Text);
+    expect(moved.page).toBe("2");
+  }
+  await expect(toolbar, "keyup opens the bar when the Selection moved to a different node with the same text").toBeVisible();
+});
+
+test("real mouse drag across two pages, both directions, at 100/150/200 %", async () => {
+  test.info().annotations.push({
+    type: "platform",
+    description: `This run is ${process.platform}. It is not a Windows/macOS CI result or a real-device PASS unless executed there.`
+  });
+  const win = await app.firstWindow();
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setBounds({ x: 0, y: 0, width: 1280, height: 800 }));
+  await openFixture(win, "hydro-times-std-2p.pdf");
+  await expect(page1(win).locator(".pdf-text span").first()).toBeVisible();
+
+  // Empirically (Linux/Xvfb, 1280x800): page-1 "calibration" and page-2 "techniques" cannot share the
+  // reading view (gap > view height at 100/150/200%). mouse.wheel while the button is down does scroll
+  // and, unlike evaluate(scrollTop) during the press, keeps the native anchor. Edge autoscroll also
+  // moved scrollTop. This test uses mouse.wheel only while holding; pre-drag scroll may use evaluate.
+
+  const failed: string[] = [];
+  const runCell = async (z: 100 | 150 | 200, dir: "down" | "up") => {
+    const cell = `${z}% ${dir}`;
+    await hideBar(win);
+    await setZoom(win, z);
+    const from = dir === "down" ? { page: 1, word: "calibration" } : { page: 2, word: "techniques" };
+    const to = dir === "down" ? { page: 2, word: "techniques" } : { page: 1, word: "calibration" };
+    // Preload page 2 (evaluate scroll, not holding): at 200% it is not virtualized while page 1 is centered.
+    const view0 = await readingView(win);
+    await view0.center.evaluate((e) => {
+      const page2 = document.querySelector<HTMLElement>('[data-page="2"]');
+      if (page2) page2.scrollIntoView({ block: "center" });
+      else e.scrollTop = e.scrollHeight;
+    });
+    await expect(win.locator('[data-page="2"] .pdf-text span').first(), `${cell}: page 2 text layer is preloaded`).toBeAttached({ timeout: 10_000 });
+    await win.waitForTimeout(150);
+    const start0 = await wordBoxOn(win, from.page, from.word);
+    if (start0) {
+      const v = await readingView(win);
+      await v.center.evaluate((e, dy) => (e.scrollTop += dy), Math.floor((start0.t + start0.b) / 2 - (v.y + v.bottom) / 2));
+    }
+    let startBox = (await wordBoxOn(win, from.page, from.word))!;
+    if (!comfortableInView(startBox, await readingView(win))) {
+      const v = await readingView(win);
+      await v.center.evaluate((e, dy) => (e.scrollTop += dy), Math.floor((startBox.t + startBox.b) / 2 - (v.y + v.bottom) / 2));
+      await win.waitForTimeout(80);
+      startBox = (await wordBoxOn(win, from.page, from.word))!;
+    }
+    expect(comfortableInView(startBox, await readingView(win)), `${cell}: start word is comfortably in view at mousedown`).toBe(true);
+    const startHit = await declareWordCaret(win, startBox, from.page, from.word, dir === "down" ? "start" : "end");
+    const sameWordOther = await declareWordCaret(win, startBox, from.page, from.word, dir === "down" ? "end" : "start");
+    await win.mouse.move(startHit.x, startHit.y);
+    await win.mouse.down();
+    await win.mouse.move(sameWordOther.x, sameWordOther.y, { steps: 6 });
+    const afterPress = await selectionEndsNow(win);
+    expect(afterPress.collapsed, `${cell}: a range starts after a same-word drag (start=${JSON.stringify(startHit)}, other=${JSON.stringify(sameWordOther)})`).toBe(false);
+    expect(normWord(afterPress.anchor.word), `${cell}: press anchor is the declared start word`).toBe(normWord(startHit.word));
+    expect(afterPress.anchor.page, `${cell}: press anchor stays on the start page`).toBe(String(from.page));
+
+    const wheelDir = dir === "down" ? 1 : -1;
+    let endBox = await wordBoxOn(win, to.page, to.word);
+    for (let i = 0; i < 24; i++) {
+      const v = await readingView(win);
+      if (endBox && comfortableInView(endBox, v)) break;
+      const mid = await selectionEndsNow(win);
+      if (mid.anchor.page !== String(from.page) || normWord(mid.anchor.word) !== normWord(startHit.word)) {
+        throw new Error(`${cell}: native anchor was lost during mouse.wheel step ${i}: ${JSON.stringify({ mid, startHit, scrollTop: v.center && (await v.center.evaluate((e) => e.scrollTop)) })}`);
+      }
+      await win.mouse.wheel(0, wheelDir * 240);
+      await win.waitForTimeout(80);
+      endBox = await wordBoxOn(win, to.page, to.word);
+    }
+    endBox = (await wordBoxOn(win, to.page, to.word))!;
+    const viewEnd = await readingView(win);
+    expect(endBox && comfortableInView(endBox, viewEnd), `${cell}: end word is comfortably in view before release`).toBe(true);
+    const endHit = await declareWordCaret(win, endBox, to.page, to.word, dir === "down" ? "end" : "start");
+    await win.mouse.move(endHit.x, endHit.y, { steps: 8 });
+    const hitBeforeUp = await pointerCaret(win, endHit.x, endHit.y);
+    expect(hitBeforeUp.onLine && hitBeforeUp.page === String(to.page) && normWord(hitBeforeUp.word) === normWord(endHit.word) && hitBeforeUp.off === endHit.off,
+      `${cell}: live pointer before mouseup is still the declared end caret (got ${JSON.stringify(hitBeforeUp)}, declared ${JSON.stringify(endHit)})`).toBe(true);
+    await win.mouse.up();
+    await win.waitForTimeout(200);
+    const sel = await selectionEndsNow(win);
+    console.log("PDF-SELECTION-CROSSPAGE-MOUSE", JSON.stringify({ cell, platform: process.platform, startHit, endHit, hitBeforeUp, sel }));
+    expect(sel.collapsed, `${cell}: selection is not collapsed after release`).toBe(false);
+    expect(sel.anchor.page, `${cell}: anchor page is the press page`).toBe(String(from.page));
+    expect(normWord(sel.anchor.word), `${cell}: anchor word is the declared start`).toBe(normWord(startHit.word));
+    expect(sel.anchor.off, `${cell}: anchor offset is the declared start caret`).toBe(startHit.off);
+    expect(sel.focus.page, `${cell}: focus page is the release page`).toBe(String(to.page));
+    expect(normWord(sel.focus.word), `${cell}: focus word is the declared end`).toBe(normWord(endHit.word));
+    expect(sel.focus.off, `${cell}: focus offset is the declared end caret, not a mid-word stand-in`).toBe(endHit.off);
+    // Document-order text still starts at the earlier page word; upward focus is not the text tail.
+    const earlier = dir === "down" ? startHit : endHit;
+    const later = dir === "down" ? endHit : startHit;
+    expect(sel.text, `${cell}: document-order text starts at the earlier word`).toMatch(new RegExp(`^${earlier.word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+    expect(sel.text, `${cell}: document-order text ends at the later word (exact declared end, not a prefix)`).toMatch(new RegExp(`${later.word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
+    mkdirSync(shots, { recursive: true });
+    await win.screenshot({ path: join(shots, `crosspage-${dir}-${z}-${process.platform}.png`) });
+    await assertBarAtFocus(win, cell);
+    await hideBar(win);
+  };
+
+  for (const z of [100, 150, 200] as const) {
+    for (const dir of ["down", "up"] as const) {
+      try {
+        await runCell(z, dir);
+      } catch (err) {
+        failed.push(`${z}% ${dir}: ${err instanceof Error ? err.message : String(err)}`);
+        await hideBar(win).catch(() => {});
+        await win.evaluate(() => getSelection()?.removeAllRanges());
+        await win.mouse.up().catch(() => {});
+      }
+    }
+  }
+  expect(failed, `cross-page matrix cells that did not meet their declared caret contract:\n${failed.join("\n")}`).toEqual([]);
 });

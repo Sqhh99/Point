@@ -117,16 +117,18 @@ function overlapArea(a: Rect, b: Rect): number {
  * including not clamping a below slot that overflows. Never overlaps the selection rectangle
  * when either slot is clear: the bar's vertical span is entirely above `sel.top - gap` or
  * entirely below `sel.bottom + gap`. Horizontally centred on the selection and clamped inside
- * the container (`left` is the bar's centre).
+ * the container (`left` is the bar's centre). `preferBelow` tries the below slot first (used
+ * when the anchor is the lower, release end of a selection).
  */
 export function placeBar(
   sel: Rect,
   container: Rect,
   bar: { width: number; height: number },
-  extra?: { gap?: number; obstacles?: readonly Rect[] }
+  extra?: { gap?: number; obstacles?: readonly Rect[]; preferBelow?: boolean }
 ): { top: number; left: number; below: boolean } {
   const gap = extra?.gap ?? BAR_GAP;
   const obstacles = extra?.obstacles ?? [];
+  const preferBelow = extra?.preferBelow ?? false;
   const selTop = sel.top - container.top;
   const selBottom = selTop + sel.height;
   const aboveTop = selTop - gap - bar.height;
@@ -151,8 +153,11 @@ export function placeBar(
   const inView = (top: number) => top >= 0 && top + bar.height <= container.height;
   const areaOf = (top: number) => obstacles.reduce((sum, o) => sum + overlapArea(at(top), o), 0);
 
-  if (inView(aboveTop) && !intersects(aboveTop)) return { top: aboveTop, left, below: false };
+  if (preferBelow) {
+    if (inView(belowTop) && !intersects(belowTop)) return { top: belowTop, left, below: true };
+  } else if (inView(aboveTop) && !intersects(aboveTop)) return { top: aboveTop, left, below: false };
   if (inView(belowTop) && !intersects(belowTop)) return { top: belowTop, left, below: true };
+  if (inView(aboveTop) && !intersects(aboveTop)) return { top: aboveTop, left, below: false };
 
   const maxTop = Math.max(0, container.height - bar.height);
   const clamp = (t: number) => Math.min(Math.max(t, 0), maxTop);
@@ -191,4 +196,34 @@ export function placeBar(
  *  `slack` must exceed the few-pixel overlap between consecutive `.pdf-line` boxes (line-height vs step). */
 export function outsideBodyRects(sel: Rect, candidates: readonly Rect[], slack = 8): Rect[] {
   return candidates.filter((r) => r.top + r.height <= sel.top + slack || r.top >= sel.top + sel.height - slack);
+}
+
+
+/** Among a range's visible line boxes, the one nearest the caret (the Selection focus),
+ *  not the document-order Range end. Fragments merge only when they share that line's
+ *  mid-Y; a slightly overlapping neighbour or a tall aggregate rect is not the same line. */
+export function rectAtCaret(caret: Rect, rects: readonly Rect[]): Rect | null {
+  if (!rects.length) return null;
+  const mid = (r: Rect) => r.top + r.height / 2;
+  const y = mid(caret);
+  const heights = rects.map((r) => r.height).sort((a, b) => a - b);
+  const typical = heights[Math.floor(heights.length / 2)] || caret.height || 16;
+  const lines = rects.filter((r) => r.height <= typical * 2 + 1);
+  const pool = lines.length ? lines : rects;
+  const nearest = pool.reduce((best, r) => (Math.abs(mid(r) - y) < Math.abs(mid(best) - y) ? r : best));
+  const same = pool.filter((r) => Math.abs(mid(r) - mid(nearest)) <= Math.max(nearest.height, r.height) / 2);
+  const top = Math.min(...same.map((r) => r.top));
+  const left = Math.min(...same.map((r) => r.left));
+  const bottom = Math.max(...same.map((r) => r.top + r.height));
+  const right = Math.max(...same.map((r) => r.left + r.width));
+  return { top, left, width: right - left, height: bottom - top };
+}
+
+export function selectionEnds(s: Selection | null | undefined) {
+  if (!s || s.rangeCount === 0 || s.isCollapsed || !s.anchorNode || !s.focusNode) return null;
+  return { anchorNode: s.anchorNode, anchorOffset: s.anchorOffset, focusNode: s.focusNode, focusOffset: s.focusOffset };
+}
+
+export function sameSelectionEnds(a: ReturnType<typeof selectionEnds>, b: ReturnType<typeof selectionEnds>) {
+  return !!a && !!b && a.anchorNode === b.anchorNode && a.anchorOffset === b.anchorOffset && a.focusNode === b.focusNode && a.focusOffset === b.focusOffset;
 }

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { BAR_GAP, outsideBodyRects, placeBar, type Rect } from "../../src/renderer/layout.js";
+import { BAR_GAP, outsideBodyRects, placeBar, rectAtCaret, type Rect } from "../../src/renderer/layout.js";
 
 const box: Rect = { top: 100, left: 0, width: 800, height: 600 };
 const bar = { width: 240, height: 36 };
@@ -99,6 +99,24 @@ describe("placeBar", () => {
     expect(p.below).toBe(false);
     expect(p.top + bar.height).toBe(sel.top - box.top - 8);
   });
+  it("does not sit on earlier selected lines when the anchor is only the focus (last) line", () => {
+    const earlier = { top: 120, left: 80, width: 400, height: 120 };
+    const focus = { top: 248, left: 80, width: 180, height: 32 };
+    const next = { top: 400, left: 80, width: 400, height: 32 };
+    const p = placeBar(focus, box, bar, { obstacles: [...outsideBodyRects(focus, [next]), earlier], preferBelow: true });
+    const top = box.top + p.top;
+    expect(p.below).toBe(true);
+    expect(top).toBe(focus.top + focus.height + BAR_GAP);
+    expect(top + bar.height <= next.top || top >= next.top + next.height).toBe(true);
+    expect(top + bar.height <= earlier.top || top >= earlier.top + earlier.height).toBe(true);
+  });
+  it("preferBelow uses the below slot even when the above slot is also clear", () => {
+    const sel = { top: 300, left: 200, width: 100, height: 20 };
+    const far = { top: 500, left: 200, width: 120, height: 20 };
+    const p = placeBar(sel, box, bar, { obstacles: [far], preferBelow: true });
+    expect(p.below).toBe(true);
+    expect(p.top).toBe(sel.top - box.top + sel.height + BAR_GAP);
+  });
 });
 
 describe("outsideBodyRects", () => {
@@ -129,5 +147,35 @@ describe("marked paragraph style", () => {
     const rules = [...css.matchAll(/([^{}]*::selection[^{}]*)\{/g)].map((m) => m[1]!.trim());
     expect(rules.length).toBeGreaterThan(0);
     for (const sel of rules) for (const part of sel.split(",")) expect(part.trim()).toMatch(/^\.pdf-text\b/);
+  });
+});
+
+describe("rectAtCaret", () => {
+  const first: Rect = { top: 100, left: 40, width: 200, height: 16 };
+  const last: Rect = { top: 400, left: 40, width: 180, height: 16 };
+  it("picks the line box nearest the focus caret, not the last box in document order", () => {
+    expect(rectAtCaret({ top: 100, left: 40, width: 1, height: 16 }, [first, last])).toEqual(first);
+    expect(rectAtCaret({ top: 400, left: 200, width: 1, height: 16 }, [first, last])).toEqual(last);
+  });
+  it("returns null when the range has no visible line boxes", () => {
+    expect(rectAtCaret({ top: 100, left: 0, width: 1, height: 1 }, [])).toBeNull();
+  });
+  it("unions fragments that sit on the same line as the caret", () => {
+    const a: Rect = { top: 100, left: 40, width: 80, height: 16 };
+    const b: Rect = { top: 101, left: 120, width: 80, height: 16 };
+    const far: Rect = { top: 400, left: 40, width: 180, height: 16 };
+    expect(rectAtCaret({ top: 100, left: 40, width: 1, height: 16 }, [a, b, far])).toEqual({ top: 100, left: 40, width: 160, height: 17 });
+  });
+  it("does not swallow a slightly overlapping neighbour line", () => {
+    const line: Rect = { top: 100, left: 40, width: 200, height: 16 };
+    const next: Rect = { top: 113, left: 40, width: 200, height: 16 };
+    expect(rectAtCaret({ top: 100, left: 40, width: 1, height: 16 }, [line, next])).toEqual(line);
+  });
+  it("ignores a tall aggregate rect covering the whole selection", () => {
+    const first: Rect = { top: 100, left: 40, width: 200, height: 16 };
+    const last: Rect = { top: 180, left: 40, width: 180, height: 16 };
+    const wrap: Rect = { top: 100, left: 40, width: 200, height: 96 };
+    expect(rectAtCaret({ top: 180, left: 40, width: 1, height: 16 }, [wrap, first, last])).toEqual(last);
+    expect(rectAtCaret({ top: 100, left: 40, width: 1, height: 16 }, [wrap, first, last])).toEqual(first);
   });
 });
