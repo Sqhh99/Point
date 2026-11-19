@@ -355,61 +355,21 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
     };
   }, [onSelectEnd]);
 
-  // Keyboard selections (Shift+Arrow) never hit article.onKeyUp: the PDF layer is not a focused
-  // control. Chromium also does not move a caret between absolutely positioned .pdf-line spans
-  // with ArrowDown / Selection.modify("line"), so Shift+Up/Down walks adjacent .pdf-line boxes
-  // and extends the existing Selection focus; left/right still use modify("character").
-  // keyup then opens / repositions the bar at the focus end.
+  // Keyboard selections never hit article.onKeyUp: the PDF text layer is not a focused
+  // control. A document keyup opens / repositions the bar at the existing Selection focus.
+  // Native keyboard extend is left unchanged; this effect does not rewrite Shift+Arrow.
   useEffect(() => {
     const field = (t: EventTarget | null) => t instanceof HTMLElement && !!t.closest("input, textarea, select, [contenteditable='true']");
-    const articleSel = () => {
-      const article = articleRef.current;
-      const s = window.getSelection();
-      if (!article || !s || s.rangeCount === 0) return null;
-      if (!article.contains(s.anchorNode) && !article.contains(s.focusNode)) return null;
-      return s;
-    };
-    const extendPdfLine = (s: Selection, down: boolean) => {
-      const article = articleRef.current;
-      const focusEl = s.focusNode instanceof Element ? s.focusNode : s.focusNode?.parentElement;
-      const line = focusEl?.closest(".pdf-line");
-      if (!article || !line || !article.contains(line)) return false;
-      const lines = [...article.querySelectorAll(".pdf-line")].filter((el) => el.textContent?.trim());
-      const dest = lines[lines.indexOf(line) + (down ? 1 : -1)];
-      if (!dest) return false;
-      const runs = [...dest.querySelectorAll(":scope > span")];
-      const first = runs[0]?.firstChild;
-      const last = runs[runs.length - 1]?.lastChild;
-      if (first?.nodeType !== Node.TEXT_NODE || last?.nodeType !== Node.TEXT_NODE) return false;
-      s.setBaseAndExtent(s.anchorNode!, s.anchorOffset, down ? last : first, down ? last.textContent!.length : 0);
-      return true;
-    };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (field(e.target) || !e.shiftKey) return;
-      const s = articleSel();
-      if (!s) return;
-      if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-        if (extendPdfLine(s, e.key === "ArrowDown")) e.preventDefault();
-        return;
-      }
-      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-      const modify = (s as Selection & { modify?(alter: string, direction: string, granularity: string): void }).modify;
-      if (!modify) return;
-      modify.call(s, "extend", e.key === "ArrowLeft" ? "backward" : "forward", "character");
-      e.preventDefault();
-    };
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.key === "Escape" || field(e.target)) return;
-      const s = articleSel();
-      if (!s || s.isCollapsed) return;
+      const article = articleRef.current;
+      const s = window.getSelection();
+      if (!article || !s || s.rangeCount === 0 || s.isCollapsed) return;
+      if (!article.contains(s.anchorNode) && !article.contains(s.focusNode)) return;
       onSelectEnd();
     };
-    document.addEventListener("keydown", onKeyDown);
     document.addEventListener("keyup", onKeyUp);
-    return () => {
-      document.removeEventListener("keydown", onKeyDown);
-      document.removeEventListener("keyup", onKeyUp);
-    };
+    return () => document.removeEventListener("keyup", onKeyUp);
   }, [onSelectEnd]);
 
   // Dismiss on Esc, outside click, scroll, or when the selection collapses.

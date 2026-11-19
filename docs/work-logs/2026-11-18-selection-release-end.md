@@ -17,7 +17,7 @@
 ## 3. 改动的文件
 | 文件 | 改动 | 对应的需求 |
 |------|------|------------|
-| `apps/desktop/src/renderer/Reader.tsx` | 出条：article 内 pointerdown 武装，document mouseup 再 measure。锚定：以焦点所在 `.pdf-line` 的 span 并集为 `placeBar` 的 sel，obstacles 仍用整段并集。键盘：Shift+Up/Down 按相邻 `.pdf-line` 延伸 focus，左/右仍用 `modify("character")`。 | 面板/分隔条松手出条；松手端 / 键盘端锚定 |
+| `apps/desktop/src/renderer/Reader.tsx` | 出条：article 内 pointerdown 武装，document mouseup 再 measure。锚定：以焦点所在 `.pdf-line` 的 span 并集为 `placeBar` 的 sel，obstacles 仍用整段并集。键盘：仅 document `keyup` 触发已有选区的 measure（不改写原生 Shift+方向键）。见第 6 节。 | 面板/分隔条松手出条；松手端 / 键盘端锚定 |
 | `apps/desktop/src/renderer/viewers/PdfView.tsx` | `keepEndInLayer`：指针不在行上时不再因焦点仍在层内而 return，夹到该方向最后 / 最先可及行的行端。 | 拖过文末 |
 | `apps/desktop/src/renderer/layout.ts` | `rectAtCaret`：只合并 mid-Y 同行的碎片，忽略微重叠邻行和整段高大盒。 | 锚定回退路径 |
 | `apps/desktop/e2e/fixtures/pdf/long-90-lines.pdf` 等 | 生成并纳入 90 行夹具。 | 文末回归 |
@@ -43,3 +43,24 @@
 - #81 须三项都经验收后再关；#79 Windows 偶发拖选仍单独保留，本轮未修其根因。
 - Windows / macOS 必需 CI 需在开 PR 后跑。本机无这两个平台。
 - sticky 阅读工具条与 `placeBar` 容器是否要互斥，仍建议在审查时看一眼，本轮未改。
+
+## 6. 后续收窄（移除全局键盘改写）
+`8e8ab03` 在 `Reader.tsx` 增加了全局 `Shift+Arrow` `keydown` 改写（`extendPdfLine` 走相邻整行，左右 `modify("character")` 并忽略 Ctrl/Meta）。这超出 #81 松手端定位范围，本轮用新提交移除该改写，只保留 document `keyup` 在已有非折叠选区上调用 `onSelectEnd`，仍按 Selection focus 几何定位。
+
+键盘验收改为：
+- 探测原生 `Shift+Right`（行内可用语义）。若选区仍折叠，记为 PDF 文本层既有键盘限制，不在本 PR 新造跨行导航。
+- 在不同真实行上设置反向/正向 programmatic Selection，再派发 document `keyup`，作为组件定位验证（不声称真实跨行键盘操作通过）。oracle 用 focus/anchor 所在 `.pdf-line` 的 span 并集，要求两行 mid-Y 可区分；距离断言未放宽（更近，且 ≤ 8+36+1）。
+
+条纹 A/B（相同 Linux/Xvfb `DISPLAY=:5`，`--retries=0`，只跑该用例一次；不改基线、不提交资源删除）：
+- 干净 main 独立 worktree `/workspace/Point-main-stripe-ab` @ `2a90488`：通过。日志 `/workspace/evidence/pr81-selection-release-end/ab-stripe/main-stripe.log`。
+- 本分支整文件一次的结果见下方验证补充。
+
+## 7. 本轮验证补充
+- `pnpm --filter @point/desktop run typecheck` 通过。
+- 核心 `vitest run`：14 文件，211 passed。
+- `test:main`：本 shell 继承了 `POINT_FAKE_LLM=1` 时，模型预设相关 13 项失败（期望 `deepseek-flash` 却得到 `fake`），与选区改动无关。`env -u POINT_FAKE_LLM` 后再跑一次：809 passed / 14 skipped。
+- 条纹 A/B（相同 Linux/Xvfb `DISPLAY=:5`，`--retries=0`，该用例各一次；不改基线、不提交资源删除），证据 `/workspace/evidence/pr81-selection-release-end/ab-stripe/`：
+  - 干净 main worktree `/workspace/Point-main-stripe-ab` @ `2a90488`：通过。`PDF-SELECTION-TINT` 125% tintedOfWordArea 0.631，200% 0.773。截图 `main-selection-125-linux.png`：工具条在整段选区下方，不压中间行。
+  - 本分支整文件一次：125% `darker` 0.044 > 0.005（tintedOfWordArea 0.59）。截图 `feature-selection-125-linux.png`：选区工具条压在 focus 末行上方的已选正文上。因果是松手端锚定把 `placeBar` 的 sel 收成 focus 行后，障碍仍只有选区外正文，上方槽位落在已选中间行；main 以整段并集为 sel，顶部空间不足时翻到整段下方。这是本轮回归，不是基线条纹，也不放宽 0.005。将在后续提交把整段选区并集加入障碍。
+- 整文件在第 1 项失败后，后面 9 项未跑。单独用 invert 跑剩余项时，第 2 项依赖第 1 项已打开文档，`zoom-value` 超时，不能当成产品失败。第 2、3 项依赖第 1 项会话；自包含用例（面板松手、long-90、0–8px、三击、跨页夹取、focus 端）待放置修复后随整文件再跑一次。
+- 未跑：Windows / macOS CI 与真机；跨页与完整缩放矩阵随整文件未完成而暂缺。
