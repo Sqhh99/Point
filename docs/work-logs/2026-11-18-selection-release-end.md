@@ -145,3 +145,15 @@ Windows 200% 在干净 main `#85`（`2a90488`）的 e2e 总结果为成功，本
 - 尚未 push、未更新 PR、未触发双平台 CI，因此还没有 Windows 两页两栏 / line-gap 的失败现场 JSON，也没有 mac 短窗工具条现场。
 - 短窗 100% 在错误路径下 collapsed 的对照只说明 Linux/Xvfb；不能写成「mac 测试问题」。
 - 独立审查仍未跑本轮测试改动。
+
+
+## 11. run 44486518704：分离前置输入与产品失败
+
+- Windows：AI panel 松手后文本只有 `techniq`；行隙用例首轮 `.endOfContent` 邻接行断言失败、重试通过，不能视作修复。此轮下载包没有找到手势 JSON，因此没有可据以判断截断发生时刻的现场，不推断产品根因。
+- macOS：同文异节点回归用例第一页用 `end.r - 2` 真实鼠标只选到 `equipmen`，第二页却程序化选到完整 `equipment`；在验证 node 身份之前，两个前置选区已经不等价。该回归改为两页都精确构造 `techniques and equipment` 并通过 keyup 驱动工具条；保留同文、异 node、Esc 后重新出条断言。真实鼠标跨页六格不删不改。
+- macOS 首轮还有点击「更多」后「记笔记」未出现（重试通过）；此项不宣称已修复，增加失败现场采集。
+- 面板/分栏松手用例先声明真实鼠标 caret，离开 reader 前要求完整 `techniques and equipment` 及起止 offset，松手后原有 reader 文本、出条、视口等断言保留。这样下一轮能分清有效选区在离开 reader 前还是之后丢失。
+- 失败诊断显式写入 `test.info().outputPath` 后再 attach；采集自身失败会报 `PDF-GESTURE-TRACE-ERROR`，不再静默吞掉。增加事件目标及 guard 邻接文本。未修改公共 CI、重试或超时。
+- 本地诊断自检：临时在离开 reader 前抛出 `intentional-diagnostic-probe`，如期失败并生成含 pointer/selection 时序的 JSON 附件；随后撤销临时抛错。日志 `evidence/pr86-ci-44486518704/diagnostic-probe.log`（本机绝对根目录 `/workspace/`）。这不是产品测试 PASS。
+- 产品文件、版本（0.2.4）、锁文件均未改；六个 build 资源删除不纳入提交。
+- 本地验证（Linux/Xvfb `DISPLAY=:5`）：tsc/typecheck、变更测试文件 ESLint、diff 检查通过；定向两例 2/2，之后整文件 `--retries=0` 一次 14/14（含未变动的跨页六格与短窗矩阵）。日志 `/workspace/evidence/pr86-ci-44486518704/local-target.log`、`local-full.log`。本次未重跑 main 单测（产品未改）；上轮 815/14 skipped 不是本次重跑结果。Win/mac 新结果尚待收集；不报双平台通过，不合并、不关闭 #81/#79。

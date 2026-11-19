@@ -565,6 +565,8 @@ async function startGestureTrace(win: Win) {
         t: +(performance.now() - t0).toFixed(1),
         ev,
         x, y,
+        target: e?.target instanceof Element ? `${e.target.tagName}.${String(e.target.className).slice(0, 80)}` : null,
+        guardAfter: document.querySelector(".pdf-text.selecting .endOfContent")?.previousElementSibling?.textContent?.slice(-80) ?? null,
         scrollTop: document.querySelector("main.center")?.scrollTop ?? null,
         collapsed: !s || s.rangeCount === 0 || s.isCollapsed,
         len: text.length,
@@ -616,7 +618,9 @@ async function attachGestureTrace(trace: Awaited<ReturnType<typeof startGestureT
   await trace.sample("t-after-measure");
   const evs = await trace.dump();
   const body = Buffer.from(JSON.stringify({ label, platform: process.platform, events: evs }, null, 2));
-  await test.info().attach(`${label}-gesture-trace.json`, { body, contentType: "application/json" });
+  const path = test.info().outputPath(`${label}-gesture-trace.json`);
+  writeFileSync(path, body);
+  await test.info().attach(`${label}-gesture-trace.json`, { path, contentType: "application/json" });
   const last = evs.at(-1);
   console.log(`PDF-GESTURE-TRACE ${JSON.stringify({ label, platform: process.platform, n: evs.length, last })}`);
 }
@@ -631,7 +635,9 @@ async function withGestureTrace(win: Win, label: string, fn: () => Promise<void>
     try {
       await trace.sample("t+120");
       await attachGestureTrace(trace, label);
-    } catch { /* attach best-effort */ }
+    } catch (traceError) {
+      console.error("PDF-GESTURE-TRACE-ERROR", String(traceError));
+    }
     throw err;
   } finally {
     await trace.stop().catch(() => {});
@@ -1182,10 +1188,17 @@ test("releasing a text selection on the AI panel or column resizer still shows t
     { name: "AI panel", x: panel.x + Math.min(40, panel.width / 2), y: (end.t + end.b) / 2 }
   ]) {
     await hideBar(win);
-    const sx = start.l + 2, sy = (start.t + start.b) / 2;
+    await withGestureTrace(win, `outside-release-${target.name.replace(/[^a-z]/gi, "-")}`, async () => {
+    const startHit = await declareWordCaret(win, start, 1, "techniques", "start");
+    const endHit = await declareWordCaret(win, end, 1, "equipment", "end");
+    const sx = startHit.x, sy = startHit.y;
     await win.mouse.move(sx, sy);
     await win.mouse.down();
-    await win.mouse.move(end.r - 2, (end.t + end.b) / 2, { steps: 12 });
+    await win.mouse.move(endHit.x, endHit.y, { steps: 12 });
+    const beforeExit = await selectionEndsNow(win);
+    expect(beforeExit.text, `${target.name}: declared range exists before leaving the reader`).toBe("techniques and equipment");
+    expect(beforeExit.anchor.off, `${target.name}: native anchor before leaving the reader`).toBe(startHit.off);
+    expect(beforeExit.focus.off, `${target.name}: native focus before leaving the reader`).toBe(endHit.off);
     await win.mouse.move(target.x, target.y, { steps: 6 });
     await win.mouse.up();
     await expect(toolbar, `${target.name}: the selection bar opens after release outside the article`).toBeVisible();
@@ -1196,6 +1209,7 @@ test("releasing a text selection on the AI panel or column resizer still shows t
     expect(place, `${target.name}: the bar is in the DOM`).toBeTruthy();
     expect(place!.overlapsPanel, `${target.name}: the bar does not cover the AI panel`).toBe(false);
     expect(place!.inReadingView, `${target.name}: the bar stays in the reading viewport`).toBe(true);
+    });
   }
 
   // A dismiss click that starts outside the article must not reopen the bar on mouseup.
@@ -1576,6 +1590,7 @@ test("clicking 更多 on a retained PDF selection does not rewrite the focus end
   await expect.poll(() => page1(win).evaluate((el) => el.querySelectorAll(".pdf-text span").length > 0)).toBe(true);
   await setZoom(win, 125);
   const toolbar = win.getByRole("toolbar", { name: "选区操作" });
+  await withGestureTrace(win, "retained-selection-more", async () => {
   const start = (await wordBox(win, "techniques"))!;
   const end = (await wordBox(win, "equipment"))!;
   await hideBar(win);
@@ -1621,6 +1636,7 @@ test("clicking 更多 on a retained PDF selection does not rewrite the focus end
   });
   expect(afterPanel.same, "a non-drag click on the AI panel does not rewrite the focus end").toBe(true);
   await expect(toolbar, "clicking the AI panel dismisses the bar").toBeHidden();
+  });
 });
 
 test("releasing Shift alone does not revive a toolbar hidden by Escape", async () => {
@@ -1685,15 +1701,19 @@ test("keyup after Escape still opens the bar when the endpoints move to a same-t
   await expect(win.locator('[data-page="2"] .pdf-text span').first()).toBeAttached({ timeout: 10_000 });
   await win.waitForTimeout(150);
   const toolbar = win.getByRole("toolbar", { name: "选区操作" });
-  const start = (await wordBoxOn(win, 1, "techniques"))!;
-  const end = (await wordBoxOn(win, 1, "equipment"))!;
-  await hideBar(win);
-  await win.mouse.move(start.l + 2, (start.t + start.b) / 2);
-  await win.mouse.down();
-  await win.mouse.move(end.r - 2, (end.t + end.b) / 2, { steps: 12 });
-  await win.mouse.up();
+  // This regression isolates dismissal by node identity, not native mouse rounding.
+  const page1Text = await page1(win).evaluate((el) => {
+    const spans = [...el.querySelectorAll<HTMLElement>(".pdf-line > span")];
+    const tech = spans.find((s) => s.textContent!.includes("techniques"))?.firstChild;
+    const equip = spans.find((s) => s.textContent!.includes("equipment"))?.firstChild;
+    if (!tech || !equip) throw new Error("page 1 endpoints missing");
+    const s = getSelection()!;
+    s.setBaseAndExtent(tech, (tech.textContent ?? "").indexOf("techniques"), equip, (equip.textContent ?? "").indexOf("equipment") + "equipment".length);
+    document.dispatchEvent(new KeyboardEvent("keyup", { key: "Shift", bubbles: true }));
+    return s.toString().replace(/\s+/g, " ").trim();
+  });
+  expect(page1Text, "the dismissed selection has declared complete endpoints").toBe("techniques and equipment");
   await expect(toolbar).toBeVisible();
-  const page1Text = await win.evaluate(() => getSelection()!.toString().replace(/\s+/g, " ").trim());
   await win.keyboard.press("Escape");
   await expect(toolbar).toBeHidden();
   const moved = await win.evaluate(() => {
