@@ -110,3 +110,38 @@ Windows 200% 在干净 main `#85`（`2a90488`）的 e2e 总结果为成功，本
 - typecheck 通过。
 - `env -u POINT_FAKE_LLM` `test:main`：815 passed / 14 skipped（含 4 个端点比较用例）。
 - 整文件首次跑因「Esc 后从原选区内部起拖」未出条失败（浏览器把已有选区当拖放），日志 `local-linux/pdf-embedded-fonts-first-run-gesture-ends.log`。随后改为从已关闭选区外的 During→decade 起拖，同一轮修正后整文件一次 14/14 通过（约 1.0m）：`local-linux/pdf-embedded-fonts-first-run-gesture-ends-2.log`。未放宽 200% / Line 03 契约。未跑 Win/mac CI 与真机。#79 仍保留。
+
+
+## 10. 测试输入路径与端点契约（B5 / run 44480116908 之后，本提交）
+
+本提交不改产品代码、不升版本（仍 0.2.4）、不放宽断言、不加超时/重试、不改 CI 配置。只改 e2e 输入、契约与失败现场采集。
+
+### 前提对照（仅 Linux/Xvfb，不能写成 mac 结论）
+
+时间序列证据见 `/workspace/evidence/pr86-b5-crosspage/DIAG.md`。要点：
+
+- B5 旧 100/150% 越过 `techniques` 到 `publication` 仍 PASS，是松手命中点不在目标词，`keepEndInLayer` 在 pointerup 当帧夹到行末；不是 pointerup 后浏览器改写。
+- 按住期间 `evaluate(scrollTop)` 会丢掉跨页 native anchor（选区塌成 `"on."`）。`mouse.wheel` 在本机可以滚动且保留 anchor，属于支持的交互，跨页六格只用它在按住后滚动。
+- 短窗（1024×677）100% 在错误输入路径上曾出现 collapsed，这是 Linux 实测，不能直接定论 mac 工具条不显示。对照后：在活坐标、预先声明 caret、端点在窗内时，短窗 100/125/150% 上下拖都能形成 range。大窗通过不能替代短窗实际交互；本轮短窗六格都跑了，没有跳过。
+- Windows 两页两栏 / line-gap 本机未复现。行隙与两页夹取用例包了轻量 `withGestureTrace`：pointerdown/move/up、selectionchange，以及 measure 后约 120ms 的 coords/scrollTop/anchor-focus offset/目标 hit。只在失败时 `test.info.attach` JSON 与 `console.log`，不是公共日志框架。下一轮 CI 应用这份现场判别，而不是猜成 #79。
+
+### 输入与契约
+
+- 起止 caret 在输入前用 `caretRangeFromPoint` 声明（词 + 精确 node offset）。向下：较早词的词首按下、较晚词的词末松开；向上相反，保证两个词都在 document-order 文本里。不允许 `contains(techniques)` 或把 offset 8 的 `techniqu` 当成完整词。Element 节点上的 Selection.anchor 会先解析到文本再比词。
+- focus 邻近（更近且 ≤ 8+36+1）、阅读视口内、不覆盖未选 `.pdf-line` 都断言；未选行用 `range.intersectsNode` 排除。
+- 同页 focus-end：大窗用 `During` → 页末唯一的 `sounding.`。1024×677 窄栏会把 `sounding.` 裁在阅读区右侧，松手点若落在裁切区会打空；测试在 **当前 scrollLeft=0** 下改用该末行里距边 24px 以内的可见词（本机短窗声明为 `each` / `of` / `propagated` 及对应 offset），不靠临时 `scrollLeft` 再被起始滚动打回。短窗矩阵跑完后把窗口恢复 1280×800，再跑键盘/programmatic 段（那一段原本按标准窗写，不能拿窄栏结果冒充）。
+- 跨页六格：`calibration.` ↔ 第 2 页 `techniques`，上/下 × 100/150/200%。先 evaluate 把第 2 页滚进视口预加载文本层（200% 时只停在第 1 页不会虚拟化出第 2 页），再滚回起点；按住后只 `mouse.wheel`。按下后先在同一词上拖出 range，再滚向终点。任一格失败会收集该格/锚点时序，不标 PASS。
+
+### 本机验证（Linux / Xvfb `DISPLAY=:5`，`--retries=0`）
+
+- typecheck 通过。
+- `env -u POINT_FAKE_LLM` `test:main`：815 passed / 14 skipped。
+- 目标对照：`pdf-embedded-fonts` 中 focus-end 与跨页六格先单独跑通；随后整文件一次 14/14 通过（约 1.3m）。日志：`/workspace/evidence/pr86-b5-crosspage/local-linux/target-first-run-14.log`、`full-first-run.log`。条纹比仍为 125% 0.631、200% 0.773。
+- 跨页六格实际端点（本机）：各格 anchor/focus 为第 1 页 `calibration.` offset 0 与第 2 页 `techniques` offset 10，document-order 文本以 `calibration.` 起、以 `techniques` 止，长度 150。
+- 未跑：Windows / macOS CI、真机、独立复核。作者 Linux 证据与独立/双平台证据分开。#79 仍单独保留，不以本机绿或 CI 重试绿称其已修复。
+
+### 未满足
+
+- 尚未 push、未更新 PR、未触发双平台 CI，因此还没有 Windows 两页两栏 / line-gap 的失败现场 JSON，也没有 mac 短窗工具条现场。
+- 短窗 100% 在错误路径下 collapsed 的对照只说明 Linux/Xvfb；不能写成「mac 测试问题」。
+- 独立审查仍未跑本轮测试改动。
