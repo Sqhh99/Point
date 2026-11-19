@@ -192,3 +192,24 @@ export function placeBar(
 export function outsideBodyRects(sel: Rect, candidates: readonly Rect[], slack = 8): Rect[] {
   return candidates.filter((r) => r.top + r.height <= sel.top + slack || r.top >= sel.top + sel.height - slack);
 }
+
+
+/** Among a range's visible line boxes, the one nearest the caret (the Selection focus),
+ *  not the document-order Range end. Fragments merge only when they share that line's
+ *  mid-Y; a slightly overlapping neighbour or a tall aggregate rect is not the same line. */
+export function rectAtCaret(caret: Rect, rects: readonly Rect[]): Rect | null {
+  if (!rects.length) return null;
+  const mid = (r: Rect) => r.top + r.height / 2;
+  const y = mid(caret);
+  const heights = rects.map((r) => r.height).sort((a, b) => a - b);
+  const typical = heights[Math.floor(heights.length / 2)] || caret.height || 16;
+  const lines = rects.filter((r) => r.height <= typical * 2 + 1);
+  const pool = lines.length ? lines : rects;
+  const nearest = pool.reduce((best, r) => (Math.abs(mid(r) - y) < Math.abs(mid(best) - y) ? r : best));
+  const same = pool.filter((r) => Math.abs(mid(r) - mid(nearest)) <= Math.max(nearest.height, r.height) / 2);
+  const top = Math.min(...same.map((r) => r.top));
+  const left = Math.min(...same.map((r) => r.left));
+  const bottom = Math.max(...same.map((r) => r.top + r.height));
+  const right = Math.max(...same.map((r) => r.left + r.width));
+  return { top, left, width: right - left, height: bottom - top };
+}

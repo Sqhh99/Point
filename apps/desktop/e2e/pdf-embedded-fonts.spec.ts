@@ -931,3 +931,105 @@ test("dragging past the last line of a long page keeps the selection through Lin
     expect(place?.inReadingView, `${tg.name}: the bar stays in the reading viewport`).toBe(true);
   }
 });
+
+test("the selection toolbar is anchored at the focus (release) end, not always the first line", async () => {
+  const win = await app.firstWindow();
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setBounds({ x: 0, y: 0, width: 2200, height: 1500 }));
+  await openFixture(win, "hydro-serif.pdf");
+  await expect.poll(() => page1(win).evaluate((el) => el.querySelectorAll(".pdf-text span").length > 0)).toBe(true);
+  const toolbar = win.getByRole("toolbar", { name: "选区操作" });
+
+  const wordOnScreen = async (w: string) => {
+    await page1(win).evaluate((el, w) => {
+      const span = [...el.querySelectorAll(".pdf-line > span")].find((s) => s.textContent?.includes(w as string));
+      span?.scrollIntoView({ block: "center", inline: "nearest" });
+    }, w);
+    await win.waitForTimeout(50);
+    return (await wordBox(win, w))!;
+  };
+
+  for (const z of [100, 125, 150]) {
+    await setZoom(win, z);
+    // Downward drag: the bar should sit next to the release (last) line, not the first line of the range.
+    await hideBar(win);
+    const first = await wordOnScreen("techniques");
+    const last = (await wordBox(win, "sounding."))!;
+    await win.mouse.move(first.l + 2, (first.t + first.b) / 2);
+    await win.mouse.down();
+    await win.mouse.move(last.r - 2, (last.t + last.b) / 2, { steps: 24 });
+    await win.mouse.up();
+    await expect(toolbar, `${z}% downward: bar visible`).toBeVisible();
+    let place = await barPlacement(win);
+    const downSel = await win.evaluate(() => {
+      const s = getSelection()!;
+      const rs = [...s.getRangeAt(0).getClientRects()].filter((r) => r.width > 1);
+      return { top: Math.min(...rs.map((r) => r.top)), bottom: Math.max(...rs.map((r) => r.bottom)), lastTop: rs.at(-1)!.top, lastBottom: rs.at(-1)!.bottom, firstBottom: rs[0]!.bottom };
+    });
+    expect(place, `${z}% downward: bar placed`).toBeTruthy();
+    // Near the focus/release line: within 8px of that line's above or below slot (bar height 36).
+    const downDist = Math.min(Math.abs(place!.bottom - downSel.lastTop), Math.abs(place!.top - downSel.lastBottom));
+    const downToStart = Math.min(Math.abs(place!.bottom - downSel.top), Math.abs(place!.top - downSel.firstBottom));
+    expect(downDist, `${z}% downward: bar is closer to the release line than to the first line`).toBeLessThan(downToStart);
+    expect(downDist, `${z}% downward: bar is within 8px + bar height of the release line`).toBeLessThanOrEqual(8 + 36 + 1);
+    expect(place!.inReadingView, `${z}% downward: bar in reading view`).toBe(true);
+
+    // Upward drag: release end is the first visual line. Re-measure after any autoscroll.
+    await hideBar(win);
+    const lastUp = await wordOnScreen("sounding.");
+    const firstUp = (await wordBox(win, "techniques"))!;
+    await win.mouse.move((lastUp.l + lastUp.r) / 2, (lastUp.t + lastUp.b) / 2);
+    await win.mouse.down();
+    await win.mouse.move(firstUp.l + 2, (firstUp.t + firstUp.b) / 2, { steps: 24 });
+    await win.mouse.up();
+    await expect(toolbar, `${z}% upward: bar visible`).toBeVisible();
+    place = await barPlacement(win);
+    const upSel = await win.evaluate(() => {
+      const s = getSelection()!;
+      const rs = [...s.getRangeAt(0).getClientRects()].filter((r) => r.width > 1);
+      return { firstTop: rs[0]!.top, firstBottom: rs[0]!.bottom, lastTop: rs.at(-1)!.top, lastBottom: rs.at(-1)!.bottom };
+    });
+    const upDist = Math.min(Math.abs(place!.bottom - upSel.firstTop), Math.abs(place!.top - upSel.firstBottom));
+    const upToEnd = Math.min(Math.abs(place!.bottom - upSel.lastTop), Math.abs(place!.top - upSel.lastBottom));
+    expect(upDist, `${z}% upward: bar is closer to the release line than to the last line`).toBeLessThan(upToEnd);
+    expect(place!.inReadingView, `${z}% upward: bar in reading view`).toBe(true);
+  }
+
+  // Keyboard selection: Shift+Arrow extends the focus end; the bar follows that end, not Range.end-in-document-order only.
+  await hideBar(win);
+  await setZoom(win, 125);
+  const caretAt = await wordOnScreen("techniques");
+  await win.mouse.click(caretAt.l + 2, (caretAt.t + caretAt.b) / 2);
+  for (let i = 0; i < 8; i++) await win.keyboard.press("Shift+ArrowDown");
+  await expect(toolbar, "keyboard selection opens the bar").toBeVisible();
+  const keyPlace = await barPlacement(win);
+  const keySel = await win.evaluate(() => {
+    const s = getSelection()!;
+    const elOf = (n: Node | null) => (n instanceof Element ? n : n?.parentElement) ?? null;
+    const focusLine = elOf(s.focusNode)?.closest(".pdf-line");
+    const anchorLine = elOf(s.anchorNode)?.closest(".pdf-line");
+    const boxOf = (line: Element | null | undefined) => {
+      if (!line) return null;
+      const boxes = [...line.querySelectorAll<HTMLElement>(":scope > span")].map((el) => el.getBoundingClientRect()).filter((b) => b.width >= 1 && b.height >= 1);
+      if (!boxes.length) return null;
+      return { top: Math.min(...boxes.map((b) => b.top)), bottom: Math.max(...boxes.map((b) => b.bottom)) };
+    };
+    const fb = boxOf(focusLine);
+    const ab = boxOf(anchorLine);
+    return {
+      distinct: !!focusLine && !!anchorLine && focusLine !== anchorLine,
+      focusTop: fb?.top ?? 0,
+      focusBottom: fb?.bottom ?? 0,
+      otherTop: ab?.top ?? 0,
+      otherBottom: ab?.bottom ?? 0,
+      text: s.toString().replace(/\s+/g, " ").trim()
+    };
+  });
+  expect(keySel.distinct, "keyboard selection spans more than one visual line (focus !== anchor)").toBe(true);
+  expect(keySel.text.length, "keyboard selection has extended").toBeGreaterThan(20);
+  const keyDist = Math.min(Math.abs(keyPlace!.bottom - keySel.focusTop), Math.abs(keyPlace!.top - keySel.focusBottom));
+  const keyToOther = Math.min(Math.abs(keyPlace!.bottom - keySel.otherTop), Math.abs(keyPlace!.top - keySel.otherBottom));
+  const keyGeom = `bar=${keyPlace!.top.toFixed(3)}..${keyPlace!.bottom.toFixed(3)} focus=${keySel.focusTop.toFixed(3)}..${keySel.focusBottom.toFixed(3)} other=${keySel.otherTop.toFixed(3)}..${keySel.otherBottom.toFixed(3)} dist=${keyDist} otherDist=${keyToOther}`;
+  expect(keyDist, `keyboard: bar is closer to the focus line than to the other end (${keyGeom})`).toBeLessThan(keyToOther);
+  expect(keyDist, `keyboard: bar sits by the focus end (${keyGeom})`).toBeLessThanOrEqual(8 + 36 + 1);
+  expect(keyPlace!.inReadingView, "keyboard: bar in reading view").toBe(true);
+});

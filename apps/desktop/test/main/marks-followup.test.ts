@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { BAR_GAP, outsideBodyRects, placeBar, type Rect } from "../../src/renderer/layout.js";
+import { BAR_GAP, outsideBodyRects, placeBar, rectAtCaret, type Rect } from "../../src/renderer/layout.js";
 
 const box: Rect = { top: 100, left: 0, width: 800, height: 600 };
 const bar = { width: 240, height: 36 };
@@ -129,5 +129,35 @@ describe("marked paragraph style", () => {
     const rules = [...css.matchAll(/([^{}]*::selection[^{}]*)\{/g)].map((m) => m[1]!.trim());
     expect(rules.length).toBeGreaterThan(0);
     for (const sel of rules) for (const part of sel.split(",")) expect(part.trim()).toMatch(/^\.pdf-text\b/);
+  });
+});
+
+describe("rectAtCaret", () => {
+  const first: Rect = { top: 100, left: 40, width: 200, height: 16 };
+  const last: Rect = { top: 400, left: 40, width: 180, height: 16 };
+  it("picks the line box nearest the focus caret, not the last box in document order", () => {
+    expect(rectAtCaret({ top: 100, left: 40, width: 1, height: 16 }, [first, last])).toEqual(first);
+    expect(rectAtCaret({ top: 400, left: 200, width: 1, height: 16 }, [first, last])).toEqual(last);
+  });
+  it("returns null when the range has no visible line boxes", () => {
+    expect(rectAtCaret({ top: 100, left: 0, width: 1, height: 1 }, [])).toBeNull();
+  });
+  it("unions fragments that sit on the same line as the caret", () => {
+    const a: Rect = { top: 100, left: 40, width: 80, height: 16 };
+    const b: Rect = { top: 101, left: 120, width: 80, height: 16 };
+    const far: Rect = { top: 400, left: 40, width: 180, height: 16 };
+    expect(rectAtCaret({ top: 100, left: 40, width: 1, height: 16 }, [a, b, far])).toEqual({ top: 100, left: 40, width: 160, height: 17 });
+  });
+  it("does not swallow a slightly overlapping neighbour line", () => {
+    const line: Rect = { top: 100, left: 40, width: 200, height: 16 };
+    const next: Rect = { top: 113, left: 40, width: 200, height: 16 };
+    expect(rectAtCaret({ top: 100, left: 40, width: 1, height: 16 }, [line, next])).toEqual(line);
+  });
+  it("ignores a tall aggregate rect covering the whole selection", () => {
+    const first: Rect = { top: 100, left: 40, width: 200, height: 16 };
+    const last: Rect = { top: 180, left: 40, width: 180, height: 16 };
+    const wrap: Rect = { top: 100, left: 40, width: 200, height: 96 };
+    expect(rectAtCaret({ top: 180, left: 40, width: 1, height: 16 }, [wrap, first, last])).toEqual(last);
+    expect(rectAtCaret({ top: 100, left: 40, width: 1, height: 16 }, [wrap, first, last])).toEqual(first);
   });
 });

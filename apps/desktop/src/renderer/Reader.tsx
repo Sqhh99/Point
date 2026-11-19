@@ -6,7 +6,7 @@ import { CaptureOverlay } from "./Capture";
 import { SelectionOverlay, confirmDuration, PDF_CSS_BASE, type OverlayMode } from "./SelectionOverlay";
 import { EmptyState } from "./EmptyState";
 import { IconAsk, IconCapture, IconDiagram, IconExplain, IconMark, IconMore, IconNote } from "./icons";
-import { isCaptureKey, outsideBodyRects, placeBar, type Box } from "./layout";
+import { isCaptureKey, outsideBodyRects, placeBar, rectAtCaret, type Box } from "./layout";
 import { isViewBlockId, relocateBlock } from "@point/core/relocate";
 import { DocError } from "./viewers/DocError";
 import { DocxView } from "./viewers/DocxView";
@@ -286,7 +286,7 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
     const text = s.toString().trim();
     if (text.length < 2) return setToolbar(null);
     const scroller = article.parentElement!;
-    const r = range.getBoundingClientRect();
+    const union = range.getBoundingClientRect();
     const box = scroller.getBoundingClientRect();
     const body: { top: number; left: number; width: number; height: number }[] = [];
     for (const el of article.querySelectorAll(".pdf-line, .block")) {
@@ -294,9 +294,34 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
       const b = el.getBoundingClientRect();
       if (b.width >= 1 && b.height >= 1) body.push({ top: b.top, left: b.left, width: b.width, height: b.height });
     }
-    // Above the selection with an 8px gap; flipped below when there is no room or when the bar
+    // Anchor at the Selection focus (the release / keyboard moving end), not the document-order
+    // Range end or the union's first line. Obstacles stay relative to the whole selection.
+    const focusEl = s.focusNode instanceof Element ? s.focusNode : s.focusNode?.parentElement;
+    const pdfLine = focusEl?.closest(".pdf-line");
+    const clientRects = [...range.getClientRects()]
+      .filter((c) => c.width >= 1 && c.height >= 1)
+      .map((c) => ({ top: c.top, left: c.left, width: c.width, height: c.height }));
+    let r = { top: union.top, left: union.left, width: union.width, height: union.height };
+    if (pdfLine && article.contains(pdfLine)) {
+      // Spans are absolutely positioned in the text layer, so the .pdf-line element's
+      // own box is not the glyph line; union the run boxes instead.
+      const boxes = [...pdfLine.querySelectorAll<HTMLElement>(":scope > span")].map((el) => el.getBoundingClientRect()).filter((b) => b.width >= 1 && b.height >= 1);
+      if (boxes.length) r = { top: Math.min(...boxes.map((b) => b.top)), left: Math.min(...boxes.map((b) => b.left)), width: Math.max(...boxes.map((b) => b.right)) - Math.min(...boxes.map((b) => b.left)), height: Math.max(...boxes.map((b) => b.bottom)) - Math.min(...boxes.map((b) => b.top)) };
+    } else if (s.focusNode && clientRects.length) {
+      try {
+        const caret = document.createRange();
+        caret.setStart(s.focusNode, s.focusOffset);
+        caret.collapse(true);
+        const c = caret.getBoundingClientRect();
+        const picked = rectAtCaret({ top: c.top, left: c.left, width: Math.max(c.width, 1), height: Math.max(c.height, 1) }, clientRects);
+        if (picked) r = picked;
+      } catch {
+        // Keep the union if the focus caret cannot be resolved.
+      }
+    }
+    // Above the focus line with an 8px gap; flipped below when there is no room or when the bar
     // would cover body text outside the selection (triple-click on a mid-page line).
-    const p = placeBar(r, box, barSize(), { obstacles: outsideBodyRects(r, body) });
+    const p = placeBar(r, box, barSize(), { obstacles: outsideBodyRects({ top: union.top, left: union.left, width: union.width, height: union.height }, body) });
     const top = p.top + scroller.scrollTop;
     const left = p.left;
     const where = blockAt(range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement);
@@ -327,6 +352,63 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
     return () => {
       document.removeEventListener("pointerdown", onDown, true);
       document.removeEventListener("mouseup", onUp);
+    };
+  }, [onSelectEnd]);
+
+  // Keyboard selections (Shift+Arrow) never hit article.onKeyUp: the PDF layer is not a focused
+  // control. Chromium also does not move a caret between absolutely positioned .pdf-line spans
+  // with ArrowDown / Selection.modify("line"), so Shift+Up/Down walks adjacent .pdf-line boxes
+  // and extends the existing Selection focus; left/right still use modify("character").
+  // keyup then opens / repositions the bar at the focus end.
+  useEffect(() => {
+    const field = (t: EventTarget | null) => t instanceof HTMLElement && !!t.closest("input, textarea, select, [contenteditable='true']");
+    const articleSel = () => {
+      const article = articleRef.current;
+      const s = window.getSelection();
+      if (!article || !s || s.rangeCount === 0) return null;
+      if (!article.contains(s.anchorNode) && !article.contains(s.focusNode)) return null;
+      return s;
+    };
+    const extendPdfLine = (s: Selection, down: boolean) => {
+      const article = articleRef.current;
+      const focusEl = s.focusNode instanceof Element ? s.focusNode : s.focusNode?.parentElement;
+      const line = focusEl?.closest(".pdf-line");
+      if (!article || !line || !article.contains(line)) return false;
+      const lines = [...article.querySelectorAll(".pdf-line")].filter((el) => el.textContent?.trim());
+      const dest = lines[lines.indexOf(line) + (down ? 1 : -1)];
+      if (!dest) return false;
+      const runs = [...dest.querySelectorAll(":scope > span")];
+      const first = runs[0]?.firstChild;
+      const last = runs[runs.length - 1]?.lastChild;
+      if (first?.nodeType !== Node.TEXT_NODE || last?.nodeType !== Node.TEXT_NODE) return false;
+      s.setBaseAndExtent(s.anchorNode!, s.anchorOffset, down ? last : first, down ? last.textContent!.length : 0);
+      return true;
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (field(e.target) || !e.shiftKey) return;
+      const s = articleSel();
+      if (!s) return;
+      if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+        if (extendPdfLine(s, e.key === "ArrowDown")) e.preventDefault();
+        return;
+      }
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      const modify = (s as Selection & { modify?(alter: string, direction: string, granularity: string): void }).modify;
+      if (!modify) return;
+      modify.call(s, "extend", e.key === "ArrowLeft" ? "backward" : "forward", "character");
+      e.preventDefault();
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === "Escape" || field(e.target)) return;
+      const s = articleSel();
+      if (!s || s.isCollapsed) return;
+      onSelectEnd();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("keyup", onKeyUp);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("keyup", onKeyUp);
     };
   }, [onSelectEnd]);
 
