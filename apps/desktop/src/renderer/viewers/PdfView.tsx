@@ -550,10 +550,13 @@ function trackSelection(layer: HTMLElement) {
   // click's paragraph at the clicked word.
   let pressLayer: HTMLElement | null = null;
   let dragging = false;
+  // Toolbar buttons call preventDefault on mousedown so the Selection is kept; a click there is not a PDF drag.
+  let pressOnToolbar = false;
   const resetAll = () => selectionLayers.forEach(resetSelectionLayer);
   document.addEventListener("pointerdown", (e) => {
     dragging = false;
     prevRange = null;
+    pressOnToolbar = e.target instanceof Element && !!e.target.closest(".selection-toolbar");
     pressLayer = e.target instanceof Element ? e.target.closest<HTMLElement>(".pdf-text") : null;
     press = pressLayer && e.button === 0 && !e.shiftKey ? caretInLineStart(e.clientX, e.clientY) : null;
     pressMoved = null;
@@ -574,7 +577,18 @@ function trackSelection(layer: HTMLElement) {
     }
     if (press) startDragSelection(e);
   });
-  document.addEventListener("pointerup", (e) => ((press = pressMoved = null), (dragging = false), keepEndInLayer(e, resetAll), resetAll()));
+  document.addEventListener("pointerup", (e) => {
+    // Skip a click that started on the selection toolbar (「更多」 etc.): those buttons
+    // keep the Selection, and must not be treated as a new end-point for clamping.
+    // A synthetic pointerup (tests) and a drag that started in the layer still clamp.
+    const clamp = e.button === 0 && !pressOnToolbar;
+    press = pressMoved = null;
+    dragging = false;
+    pressOnToolbar = false;
+    if (clamp) keepEndInLayer(e, resetAll);
+    resetAll();
+    pressLayer = null;
+  });
   window.addEventListener("blur", () => ((press = pressMoved = null), (dragging = false), resetAll()));
   document.addEventListener("keyup", () => !dragging && resetAll());
   document.addEventListener("selectionchange", () => {

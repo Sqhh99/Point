@@ -65,3 +65,34 @@
   - 修复：`preferBelow`（focus 在选区下半时先试下方），水平居中用整段并集，障碍加上 focus 内侧真实行。再跑整文件一次：10/10 通过。条纹 125%/200% 与 main 相同（0.631 / 0.773）。截图 `feature-prefer-below-125-linux.png` 与 main 一致，条在选区下方间隙，不压中间行。
 - 该次整文件覆盖：条纹、行隙拖选、200% 跨段截图、两页两栏出界夹取（跨页）、单击/三击、0–8px、AI 面板/分隔条松手、long-90 文末、上下拖 100/125/150 与 programmatic focus 端（含反向选区）。距离断言未放宽。
 - 未跑：Windows / macOS CI 与真机。缩放在松手端用例中覆盖 100/125/150，未另做独立跨页缩放矩阵。#79 未修。
+
+## 8. PR #86 独立审查后的修复（run 44475431855）
+
+对照 B 报告 `/workspace/evidence/pr86-b-review/REVIEW.md` 与 CI run `44475431855` 原始结果包（Windows 200% 跨段、macOS long-90），先核对现场和当前代码再改。未放宽既有 startsWith/endsWith / Line 03 起点断言，未再升版本（仍 0.2.4），未改 CI / 锁文件 / 依赖。
+
+### CI 现场
+
+- Windows 200% 跨段（`:479`，真实鼠标）：首跑 `:502` `startsWith("According")` 为 false，retry `:504` `endsWith("moving")` 为 false。日志未打印实际选区文本。该用例在 `:515` 截图前失败，不能用其它用例截图替代。后续新功能用例因 serial 被跳过。
+- macOS long-90（`:903`）：**第一个**目标「below the last line」通过（以 Line 03 起、到 Line 90）；**第二个**「below the page」失败，选区以 Line 54 起、仍到 Line 90。首跑与 retry 相同。macOS workArea 为 1024×677，`2200×1500` 会被缩小。
+- 本机用当前 head、同样 1024×677 复现：第一段拖选后 `scrollTop=557`，第一可见行约 Line 51；第二段若复用拖前 Line 03 盒（Y 仍约 139，但 live 盒已在 -423，视口外），mousedown 打在现有视口中部，选区从 Line 55 起。与 CI 的 Line 54 同一机制。证据：`/workspace/evidence/pr86-ci-44475431855/diag/long90-small-viewport.json`。
+
+Windows 200% 在干净 main `#85`（`2a90488`）的 e2e 总结果为成功，本次失败不能单凭重试或放宽断言处理；测试改为在拖选前确认 According / moving 均在阅读视口内，断言改为 `toMatch(/^According\b/)` / `/moving$/`（契约不变，失败时带出实际文本）。
+
+### P2 与最小修复
+
+1. **B1** `keepEndInLayer`：document `pointerup` 若本次 `pointerdown` 落在 `.selection-toolbar` 上则不夹取。工具条按钮 `mousedown.preventDefault()` 会保留 Selection，点击「更多」不得改写 focus。仍对正文拖选和测试里的合成 `pointerup` 夹取。曾误用「必须本次 PDF 拖动手势」导致合成夹取用例失败，已收回该过严条件（见首次失败日志 `local-linux/pdf-embedded-fonts-first-run.log`）。
+2. **B2** `Reader`：Esc / 滚动 `close()` 记下当前 Selection 签名；随后 `keyup` 若两端未变（例如只松 Shift）不再 `measure` 复活工具条。选区真正被键盘改动后仍可出条。不能恢复全局 Shift+Arrow 改写。
+3. **B3** 键盘测试 oracle：产品 `measure` 在 trim 后 `text.length < 2` 时隐藏工具条。测试不再在 `len >= 1` 时要求出条；`len === 1` 断言条保持隐藏，`len >= 2` 才要求可见。这是按契约修正 oracle，不是放宽。
+
+### 测试与跨页
+
+- long-90：每个松手目标前把 Line 03 滚回阅读视口并**重新测量**盒；另加 1024×677 Linux 回归（模拟 macOS CI workArea，不当成 mac / 真机 PASS）。断言仍要求以 Line 03 起、到 Line 90。
+- 新增真实鼠标跨页拖选：`hydro-times-std-2p.pdf`，按住从第 1 页 `calibration` 滚到第 2 页 `techniques`，覆盖 100/150/200%。标注 Linux/Xvfb，不是 Win/mac CI 或真机 PASS。原两页用例里 `setBaseAndExtent` + 合成事件的跨页段仍保留，不再把它当作真实跨页矩阵。
+
+### 本机验证（Linux / Xvfb `DISPLAY=:5`，`--retries=0`）
+
+- typecheck 通过。
+- `env -u POINT_FAKE_LLM` `test:main`：811 passed / 14 skipped。
+- 过严护栏下整文件首次失败（合成 pointerup 未夹取），已留存，未当作通过。
+- 修正护栏后整文件一次 13/13 通过（约 59s）。日志：`/workspace/evidence/pr86-ci-44475431855/local-linux/pdf-embedded-fonts-first-run-after-toolbar-guard.log`。含 200% 跨段、long-90 两个窗口尺寸、更多/Esc+Shift、真实鼠标跨页 100/150/200%。条纹比仍为 125% 0.631、200% 0.773。
+- 未跑：Windows / macOS CI、真机。#79 仍单独保留。

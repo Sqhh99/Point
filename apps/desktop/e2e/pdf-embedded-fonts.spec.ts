@@ -366,8 +366,8 @@ async function checkSelection(win: Win, z: number, endWord: string) {
 
 
 /** Client box of the nth occurrence of `w` in page 1's text layer. */
-const wordBox = (win: Win, w: string, nth = 0) =>
-  page1(win).evaluate(
+const wordBoxOn = (win: Win, page: number, w: string, nth = 0) =>
+  win.locator(`[data-page="${page}"]`).evaluate(
     (el, [w, nth]) => {
       let k = 0;
       for (const s of el.querySelectorAll<HTMLElement>(".pdf-line > span")) {
@@ -387,6 +387,18 @@ const wordBox = (win: Win, w: string, nth = 0) =>
     },
     [w, nth] as const
   );
+const wordBox = (win: Win, w: string, nth = 0) => wordBoxOn(win, 1, w, nth);
+
+/** Reading area below the sticky reader bar, inside main.center. */
+async function readingView(win: Win) {
+  const center = win.locator("main.center");
+  const vis = (await center.boundingBox())!;
+  const bar = (await win.getByTestId("reader-bar").boundingBox())!;
+  const y = bar.y + bar.height;
+  return { center, x: vis.x, y, width: vis.width - 16, bottom: vis.y + vis.height - 16, height: vis.y + vis.height - 16 - y };
+}
+const boxInView = (b: { l: number; r: number; t: number; b: number }, v: { x: number; y: number; width: number; bottom: number }) =>
+  b.t >= v.y + 2 && b.b <= v.bottom - 2 && b.l >= v.x + 1 && b.r <= v.x + v.width - 1;
 
 test("dragging from a word into a line gap or below the text keeps the selection local (.endOfContent, .selecting)", async () => {
   const win = await app.firstWindow();
@@ -479,29 +491,44 @@ test("dragging from a word into a line gap or below the text keeps the selection
 test("200 % selection across paragraphs, framing the worst-drift word (screenshots)", async () => {
   const win = await app.firstWindow();
   await setZoom(win, 200);
-  const center = win.locator("main.center");
-  const vis = (await center.boundingBox())!;
-  const bar = (await win.getByTestId("reader-bar").boundingBox())!;
-  const view = { x: vis.x, y: bar.y + bar.height, width: vis.width - 16, height: vis.y + vis.height - 16 - (bar.y + bar.height) };
+  const view = await readingView(win);
   // Page's left edge in view as far as it fits (at 200 % the page is about as wide as the view), the passage a few lines down.
   const a0 = (await wordBox(win, "According"))!;
   const pg0 = (await page1(win).boundingBox())!;
-  await center.evaluate((e, [dx, dy]) => ((e.scrollLeft += dx!), (e.scrollTop += dy!)), [Math.floor(pg0.x - view.x - 24), Math.floor(a0.t - view.y - 160)]);
+  await view.center.evaluate((e, [dx, dy]) => ((e.scrollLeft += dx!), (e.scrollTop += dy!)), [Math.floor(pg0.x - view.x - 24), Math.floor(a0.t - view.y - 160)]);
   await win.waitForTimeout(150);
   // Paragraph 1 line 2 (with the "5th" superscript) through the worst-drift word ("confidence" at 200 %) into
-  // paragraph 2 line 2 (with "2nd").
-  const a = (await wordBox(win, "According"))!;
-  const z = (await wordBox(win, "moving"))!;
-  const sx = a.l + 1, sy = (a.t + a.b) / 2, ex = z.r - 1, ey = (z.t + z.b) / 2;
+  // paragraph 2 line 2 (with "2nd"). Both words must be in the reading view; otherwise the drag starts or ends off-screen.
+  let a = (await wordBox(win, "According"))!;
+  let z = (await wordBox(win, "moving"))!;
+  if (!boxInView(a, view) || !boxInView(z, view)) {
+    const v = await readingView(win);
+    await v.center.evaluate((e, dy) => (e.scrollTop += dy), Math.floor(a.t - v.y - 80));
+    await win.waitForTimeout(150);
+    a = (await wordBox(win, "According"))!;
+    z = (await wordBox(win, "moving"))!;
+  }
+  const inset = (box: { l: number; r: number }, from: "start" | "end") => {
+    const pad = Math.min(3, Math.max(1, (box.r - box.l) * 0.15));
+    return from === "start" ? box.l + pad : box.r - pad;
+  };
+  const sx = inset(a, "start"), sy = (a.t + a.b) / 2, ex = inset(z, "end"), ey = (z.t + z.b) / 2;
+  const viewNow = await readingView(win);
+  console.log("PDF-SELECTION-200-CROSS", JSON.stringify({
+    a, z, sx, sy, ex, ey,
+    startInView: boxInView(a, viewNow),
+    endInView: boxInView(z, viewNow),
+    scrollTop: await viewNow.center.evaluate((e) => e.scrollTop)
+  }));
   await win.mouse.move(sx, sy);
   await win.mouse.down();
   for (let i = 1; i <= 16; i++) await win.mouse.move(sx + ((ex - sx) * i) / 16, sy + ((ey - sy) * i) / 16);
   await win.mouse.up();
   await win.waitForTimeout(300);
   const text = (await win.evaluate(() => getSelection()!.toString())).replace(/\s+/g, " ").trim();
-  expect(text.startsWith("According")).toBe(true);
-  expect(text).toContain("confidence");
-  expect(text.endsWith("moving")).toBe(true);
+  expect(text, `200 % cross-paragraph selection was ${JSON.stringify(text)}`).toMatch(/^According\b/);
+  expect(text, `200 % cross-paragraph selection was ${JSON.stringify(text)}`).toContain("confidence");
+  expect(text, `200 % cross-paragraph selection was ${JSON.stringify(text)}`).toMatch(/moving$/);
   const r = await win.evaluate(() => {
     const rs = [...getSelection()!.getRangeAt(0).getClientRects()].filter((x) => x.width > 1);
     return { l: Math.min(...rs.map((x) => x.left)), r: Math.max(...rs.map((x) => x.right)), t: Math.min(...rs.map((x) => x.top)), b: Math.max(...rs.map((x) => x.bottom)) };
@@ -862,6 +889,17 @@ const lineBox = (win: Win, label: string) =>
     };
   }, label);
 
+/** After a long drag the scroller may have moved; never reuse a pre-drag Line 03 box. */
+async function scrollLineIntoView(win: Win, label: string) {
+  const view = await readingView(win);
+  const before = (await lineBox(win, label))!;
+  if (!boxInView(before, view)) {
+    await view.center.evaluate((e, dy) => (e.scrollTop += dy), Math.floor(before.t - view.y - 40));
+    await win.waitForTimeout(150);
+  }
+  return (await lineBox(win, label))!;
+}
+
 test("releasing a text selection on the AI panel or column resizer still shows the toolbar in the reader", async () => {
   const win = await app.firstWindow();
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setBounds({ x: 0, y: 0, width: 2200, height: 1500 }));
@@ -905,30 +943,48 @@ test("dragging past the last line of a long page keeps the selection through Lin
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setBounds({ x: 0, y: 0, width: 2200, height: 1500 }));
   await openFixture(win, "long-90-lines.pdf");
   await expect.poll(() => page1(win).evaluate((el) => el.querySelectorAll(".pdf-line").length >= 90)).toBe(true);
-  await setZoom(win, 100);
-  const l03 = (await lineBox(win, "Line 03"))!;
-  const l90 = (await lineBox(win, "Line 90"))!;
-  const page = (await page1(win).boundingBox())!;
   const toolbar = win.getByRole("toolbar", { name: "选区操作" });
-  const midX = (l03.l + l03.r) / 2;
-  const cases = [
-    { name: "below the last line", x: midX, y: l90.b + 12 },
-    { name: "below the page", x: midX, y: page.y + page.height + 16 }
-  ];
-  for (const tg of cases) {
+  // CI macOS workArea is 1024×677: a 2200×1500 request is shrunk, and the first drag auto-scrolls
+  // so Line 03 leaves the view. Re-measure after scrolling Line 03 back in; do not reuse stale boxes.
+  // The 1024×677 pass is a Linux regression for that shrink; it is not a macOS or real-device PASS.
+  // Assertions still require a Line 03 start and a Line 90 end (not rewritten to a mid-page start).
+  for (const bounds of [
+    { w: 2200, h: 1500, label: "requested 2200x1500" },
+    { w: 1024, h: 677, label: "1024x677 (macOS CI workArea, Linux regression)" }
+  ] as const) {
+    await app.evaluate(({ BrowserWindow }, b) => BrowserWindow.getAllWindows()[0]!.setBounds({ x: 0, y: 0, width: b.w, height: b.h }), bounds);
+    await setZoom(win, 100);
+    for (const name of ["below the last line", "below the page"] as const) {
     await hideBar(win);
+    const l03 = await scrollLineIntoView(win, "Line 03");
+    const l90 = (await lineBox(win, "Line 90"))!;
+    const page = (await page1(win).boundingBox())!;
+    const view = await readingView(win);
+    const midX = (l03.l + l03.r) / 2;
+    const tg = name === "below the last line" ? { x: midX, y: l90.b + 12 } : { x: midX, y: page.y + page.height + 16 };
+    console.log("PDF-SELECTION-LONG90", JSON.stringify({
+      bounds: bounds.label,
+      name,
+      l03,
+      l90,
+      startInView: boxInView(l03, view),
+      scrollTop: await view.center.evaluate((e) => e.scrollTop),
+      inner: await win.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }))
+    }));
+    expect(boxInView(l03, view), `${name}: Line 03 is in the reading view at mousedown (live box, not a pre-drag cache)`).toBe(true);
     await win.mouse.move(l03.l + 2, (l03.t + l03.b) / 2);
     await win.mouse.down();
     await win.mouse.move(midX, (l90.t + l90.b) / 2, { steps: 30 });
     await win.mouse.move(tg.x, tg.y, { steps: 6 });
     await win.mouse.up();
     const sel = await win.evaluate(() => getSelection()!.toString().replace(/\s+/g, " ").trim());
-    expect(sel, `${tg.name}: starts at Line 03`).toMatch(/^Line 03\b/);
-    expect(sel, `${tg.name}: reaches Line 90, not a mid-page truncate or a collapse to Line 01`).toMatch(/Line 90 kappa lambda mu nu xi$/);
-    expect(sel, `${tg.name}: is not reversed onto Line 01`).not.toMatch(/^Line 03[\s\S]*Line 01\b/);
-    await expect(toolbar, `${tg.name}: the selection bar opens`).toBeVisible();
+    expect(sel, `${name}: starts at Line 03 (selection was ${JSON.stringify(sel.slice(0, 80))})`).toMatch(/^Line 03\b/);
+    expect(sel, `${name}: reaches Line 90, not a mid-page truncate or a collapse to Line 01`).toMatch(/Line 90 kappa lambda mu nu xi$/);
+    expect(sel, `${name}: is not reversed onto Line 01`).not.toMatch(/^Line 03[\s\S]*Line 01\b/);
+    await expect(toolbar, `${name}: the selection bar opens`).toBeVisible();
     const place = await barPlacement(win);
-    expect(place?.inReadingView, `${tg.name}: the bar stays in the reading viewport`).toBe(true);
+    expect(place?.inReadingView, `${name}: the bar stays in the reading viewport`).toBe(true);
+    }
   }
 });
 
@@ -1006,14 +1062,20 @@ test("the selection toolbar is anchored at the focus (release) end, not always t
     const s = getSelection()!;
     return { collapsed: s.isCollapsed, len: s.toString().replace(/\s+/g, " ").trim().length };
   });
-  if (!nativeRight.collapsed && nativeRight.len >= 1) {
-    await expect(toolbar, "native Shift+Right opens the bar when a selection is formed").toBeVisible();
+  // Product contract (Reader.measure): hide the bar when trimmed text length is < 2.
+  // A 1-character native extend must not be required to open the bar.
+  if (!nativeRight.collapsed && nativeRight.len >= 2) {
+    await expect(toolbar, "native Shift+Right opens the bar when the selection has at least 2 characters").toBeVisible();
+  } else if (!nativeRight.collapsed && nativeRight.len === 1) {
+    await expect(toolbar, "Reader hides the bar when the selection is shorter than 2 characters").toBeHidden();
   }
   test.info().annotations.push({
     type: "pdf-keyboard",
     description: nativeRight.collapsed
       ? "native Shift+Right did not extend a PDF span-layer caret (pre-existing limitation; not added in this PR)"
-      : `native Shift+Right extended to ${nativeRight.len} chars and opened the bar`
+      : nativeRight.len === 1
+        ? "native Shift+Right extended to 1 char; bar stays hidden per the <2 character contract"
+        : `native Shift+Right extended to ${nativeRight.len} chars and opened the bar`
   });
 
   // Component placement check, not a claim that the PDF text layer supports real
@@ -1090,5 +1152,145 @@ test("the selection toolbar is anchored at the focus (release) end, not always t
     expect(keyDist, `programmatic ${focusAt}-focus: bar is closer to the focus line than to the other end (${keyGeom})`).toBeLessThan(keyToOther);
     expect(keyDist, `programmatic ${focusAt}-focus: bar sits by the focus end (${keyGeom})`).toBeLessThanOrEqual(8 + 36 + 1);
     expect(keyPlace!.inReadingView, `programmatic ${focusAt}-focus: bar in reading view`).toBe(true);
+  }
+});
+
+test("clicking 更多 on a retained PDF selection does not rewrite the focus end", async () => {
+  const win = await app.firstWindow();
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setBounds({ x: 0, y: 0, width: 1280, height: 800 }));
+  await openFixture(win, "hydro-serif.pdf");
+  await expect.poll(() => page1(win).evaluate((el) => el.querySelectorAll(".pdf-text span").length > 0)).toBe(true);
+  await setZoom(win, 125);
+  const toolbar = win.getByRole("toolbar", { name: "选区操作" });
+  const start = (await wordBox(win, "techniques"))!;
+  const end = (await wordBox(win, "equipment"))!;
+  await hideBar(win);
+  await win.mouse.move(start.l + 2, (start.t + start.b) / 2);
+  await win.mouse.down();
+  await win.mouse.move(end.r - 2, (end.t + end.b) / 2, { steps: 12 });
+  await win.mouse.up();
+  await expect(toolbar).toBeVisible();
+  const before = await win.evaluate(() => {
+    const s = getSelection()!;
+    const mark = (n: Node | null) => {
+      const el = n instanceof Element ? n : n?.parentElement;
+      return { text: (el?.textContent ?? "").replace(/\s+/g, " ").trim(), offset: n === s.anchorNode ? s.anchorOffset : s.focusOffset };
+    };
+    return {
+      text: s.toString().replace(/\s+/g, " ").trim(),
+      anchor: { ...mark(s.anchorNode), offset: s.anchorOffset },
+      focus: { ...mark(s.focusNode), offset: s.focusOffset }
+    };
+  });
+  expect(before.text.length, "need a multi-character selection before clicking 更多").toBeGreaterThan(1);
+  await win.getByRole("button", { name: "更多" }).click();
+  const after = await win.evaluate(() => {
+    const s = getSelection()!;
+    const mark = (n: Node | null) => {
+      const el = n instanceof Element ? n : n?.parentElement;
+      return { text: (el?.textContent ?? "").replace(/\s+/g, " ").trim() };
+    };
+    return {
+      text: s.toString().replace(/\s+/g, " ").trim(),
+      anchorOffset: s.anchorOffset,
+      focusOffset: s.focusOffset,
+      anchorText: mark(s.anchorNode).text,
+      focusText: mark(s.focusNode).text
+    };
+  });
+  expect(after.text, "clicking 更多 keeps the selected text").toBe(before.text);
+  expect(after.anchorOffset, "clicking 更多 keeps the anchor offset").toBe(before.anchor.offset);
+  expect(after.focusOffset, "clicking 更多 keeps the focus offset").toBe(before.focus.offset);
+  expect(after.anchorText).toBe(before.anchor.text);
+  expect(after.focusText).toBe(before.focus.text);
+  await expect(win.getByRole("button", { name: "记笔记" })).toBeVisible();
+});
+
+test("releasing Shift alone does not revive a toolbar hidden by Escape", async () => {
+  const win = await app.firstWindow();
+  await openFixture(win, "hydro-serif.pdf");
+  await expect.poll(() => page1(win).evaluate((el) => el.querySelectorAll(".pdf-text span").length > 0)).toBe(true);
+  await setZoom(win, 125);
+  const toolbar = win.getByRole("toolbar", { name: "选区操作" });
+  const start = (await wordBox(win, "techniques"))!;
+  const end = (await wordBox(win, "equipment"))!;
+  await hideBar(win);
+  await win.mouse.move(start.l + 2, (start.t + start.b) / 2);
+  await win.mouse.down();
+  await win.mouse.move(end.r - 2, (end.t + end.b) / 2, { steps: 12 });
+  await win.mouse.up();
+  await expect(toolbar).toBeVisible();
+  const text = await win.evaluate(() => getSelection()!.toString().replace(/\s+/g, " ").trim());
+  expect(text.length).toBeGreaterThan(1);
+  await win.keyboard.press("Escape");
+  await expect(toolbar, "Escape hides the bar and leaves the native selection").toBeHidden();
+  const still = await win.evaluate(() => getSelection()!.toString().replace(/\s+/g, " ").trim());
+  expect(still, "Escape does not clear the native selection").toBe(text);
+  await win.keyboard.down("Shift");
+  await win.keyboard.up("Shift");
+  await win.waitForTimeout(400);
+  await expect(toolbar, "releasing Shift alone does not revive the bar after Escape").toBeHidden();
+  expect(await win.evaluate(() => getSelection()!.toString().replace(/\s+/g, " ").trim())).toBe(text);
+});
+
+test("real mouse drag across two pages at 100/150/200 % (Linux/Xvfb)", async () => {
+  test.info().annotations.push({
+    type: "platform",
+    description: "Linux/Xvfb only. This is not a Windows/macOS CI result and not a real-device PASS."
+  });
+  const win = await app.firstWindow();
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setBounds({ x: 0, y: 0, width: 1280, height: 800 }));
+  await openFixture(win, "hydro-times-std-2p.pdf");
+  await expect(page1(win).locator(".pdf-text span").first()).toBeVisible();
+  const toolbar = win.getByRole("toolbar", { name: "选区操作" });
+
+  for (const z of [100, 150, 200] as const) {
+    await hideBar(win);
+    await setZoom(win, z);
+    const view0 = await readingView(win);
+    const start0 = (await wordBoxOn(win, 1, "calibration"))!;
+    await view0.center.evaluate((e, dy) => (e.scrollTop += dy), Math.floor(start0.t - view0.y - 40));
+    await expect(win.locator('[data-page="2"] .pdf-text span').first(), `${z}%: page 2 text layer is preloaded`).toBeAttached({ timeout: 10_000 });
+    await win.waitForTimeout(150);
+    const start = (await wordBoxOn(win, 1, "calibration"))!;
+    const view = await readingView(win);
+    expect(boxInView(start, view), `${z}%: page-1 "calibration" is in the reading view at mousedown`).toBe(true);
+    const sx = start.l + 2, sy = (start.t + start.b) / 2;
+    await win.mouse.move(sx, sy);
+    await win.mouse.down();
+    await win.mouse.move(sx + 8, sy + 12, { steps: 4 });
+    // Hold the button and scroll until page 2's "techniques" is in view, then drop on it.
+    for (let i = 0; i < 12; i++) {
+      const endTry = await wordBoxOn(win, 2, "techniques");
+      const v = await readingView(win);
+      if (endTry && boxInView(endTry, v)) break;
+      await win.mouse.move(sx + 8, v.bottom - 10, { steps: 4 });
+      await v.center.evaluate((e, dy) => (e.scrollTop += dy), 160);
+      await win.waitForTimeout(80);
+    }
+    const end = (await wordBoxOn(win, 2, "techniques"))!;
+    const viewEnd = await readingView(win);
+    expect(boxInView(end, viewEnd), `${z}%: page-2 "techniques" is in the reading view at release`).toBe(true);
+    await win.mouse.move(end.r - 2, (end.t + end.b) / 2, { steps: 20 });
+    await win.mouse.up();
+    await win.waitForTimeout(200);
+    const sel = await win.evaluate(() => {
+      const s = getSelection()!;
+      const elOf = (n: Node | null) => (n instanceof Element ? n : n?.parentElement) ?? null;
+      const pageOf = (n: Node | null) => elOf(n)?.closest("[data-page]")?.getAttribute("data-page") ?? null;
+      return {
+        text: s.toString().replace(/\s+/g, " ").trim(),
+        anchorPage: pageOf(s.anchorNode),
+        focusPage: pageOf(s.focusNode)
+      };
+    });
+    console.log("PDF-SELECTION-CROSSPAGE-MOUSE", JSON.stringify({ z, platform: process.platform, ...sel }));
+    expect(sel.anchorPage, `${z}% real mouse: anchor stays on page 1`).toBe("1");
+    expect(sel.focusPage, `${z}% real mouse: focus is on page 2`).toBe("2");
+    expect(sel.text, `${z}% real mouse: starts on the page-1 end word`).toMatch(/calibration/i);
+    expect(sel.text, `${z}% real mouse: reaches page 2`).toMatch(/techniques/i);
+    expect(sel.text.length, `${z}% real mouse: spans more than a single line`).toBeGreaterThan(40);
+    await expect(toolbar, `${z}% real mouse: the selection bar opens`).toBeVisible();
+    await hideBar(win);
   }
 });

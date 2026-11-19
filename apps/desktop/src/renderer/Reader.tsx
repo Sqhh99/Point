@@ -55,6 +55,20 @@ function blockAt(el: Element | null): { blockId?: string; page?: number } {
 const TOOLBAR_H = 36;
 const SHOW_DELAY_MS = 120;
 
+/** Anchor/focus signature of the current Selection, used to ignore a keyup that did not move it. */
+function selectionKey(): string {
+  const s = window.getSelection();
+  if (!s || s.rangeCount === 0 || s.isCollapsed) return "";
+  const mark = (n: Node | null) => {
+    if (!n) return "";
+    const el = n instanceof Element ? n : n.parentElement;
+    const page = el?.closest("[data-page]")?.getAttribute("data-page") ?? "";
+    const line = (el?.closest(".pdf-line") ?? el)?.textContent?.replace(/\s+/g, " ").trim().slice(0, 32) ?? "";
+    return `${page}:${line}:${n.nodeType}:${n.nodeType === Node.TEXT_NODE ? n.textContent?.length ?? 0 : 0}`;
+  };
+  return `${mark(s.anchorNode)}@${s.anchorOffset}|${mark(s.focusNode)}@${s.focusOffset}`;
+}
+
 function pageOf(range: Range): number | undefined {
   const el = (range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement)?.closest("[data-page]");
   const n = Number(el?.getAttribute("data-page"));
@@ -235,12 +249,15 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
   const articleRef = useRef<HTMLElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const timer = useRef<number | undefined>(undefined);
+  /** Selection still in place after Esc / scroll hid the bar: a lone Shift keyup must not revive it. */
+  const dismissedSel = useRef<string | null>(null);
 
   /** The bar's real size once rendered; a fallback before the first paint. */
   const barSize = (fallbackWidth = 340) => ({ width: toolbarRef.current?.offsetWidth || fallbackWidth, height: toolbarRef.current?.offsetHeight || TOOLBAR_H });
 
   const close = useCallback((opts?: { keepSelection?: boolean }) => {
     window.clearTimeout(timer.current);
+    dismissedSel.current = selectionKey() || dismissedSel.current;
     setToolbar(null);
     setMore(false);
     if (!opts?.keepSelection) setSelection(null);
@@ -355,6 +372,12 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
     timer.current = window.setTimeout(measure, SHOW_DELAY_MS);
   }, [measure]);
 
+  const onKeySelectEnd = useCallback(() => {
+    if (dismissedSel.current && dismissedSel.current === selectionKey()) return;
+    dismissedSel.current = null;
+    onSelectEnd();
+  }, [onSelectEnd]);
+
   // A drag that starts in the article must still open the bar when the pointer is
   // released on .col-resizer or the AI panel: those sit outside <article>, so the
   // article's onMouseUp never runs. Clicks that start outside stay a dismiss.
@@ -387,11 +410,11 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
       const s = window.getSelection();
       if (!article || !s || s.rangeCount === 0 || s.isCollapsed) return;
       if (!article.contains(s.anchorNode) && !article.contains(s.focusNode)) return;
-      onSelectEnd();
+      onKeySelectEnd();
     };
     document.addEventListener("keyup", onKeyUp);
     return () => document.removeEventListener("keyup", onKeyUp);
-  }, [onSelectEnd]);
+  }, [onKeySelectEnd]);
 
   // Dismiss on Esc, outside click, scroll, or when the selection collapses.
   useEffect(() => {
@@ -701,7 +724,7 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
       data-kind={view.kind}
       ref={articleRef}
       onMouseUp={onSelectEnd}
-      onKeyUp={(e) => e.key !== "Escape" && onSelectEnd()}
+      onKeyUp={(e) => e.key !== "Escape" && onKeySelectEnd()}
     >
       {view.kind === "md" && doc && (
         <div style={{ zoom: zoom / 100 }}>
