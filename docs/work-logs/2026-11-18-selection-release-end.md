@@ -96,3 +96,17 @@ Windows 200% 在干净 main `#85`（`2a90488`）的 e2e 总结果为成功，本
 - 过严护栏下整文件首次失败（合成 pointerup 未夹取），已留存，未当作通过。
 - 修正护栏后整文件一次 13/13 通过（约 59s）。日志：`/workspace/evidence/pr86-ci-44475431855/local-linux/pdf-embedded-fonts-first-run-after-toolbar-guard.log`。含 200% 跨段、long-90 两个窗口尺寸、更多/Esc+Shift、真实鼠标跨页 100/150/200%。条纹比仍为 125% 0.631、200% 0.773。
 - 未跑：Windows / macOS CI、真机。#79 仍单独保留。
+
+## 9. 审查后结构修正（手势夹取与端点快照）
+
+`e400daa` 的 `clamp = e.button === 0 && !pressOnToolbar` 仍会在任意左键 pointerup（页面 / 面板点击且 Selection 被保留）上夹取；注释里为合成测试保留该行为，不能接受。
+
+- `PdfView`：仅当本次左键、`pressLayer` 有值且已进入 `dragging` 时才 `keepEndInLayer`。没有这次合法 PDF 拖选，pointerup 不夹取。去掉 `pressOnToolbar`。
+- 旧合成跨页 / 出界夹取：先在起点 span 上派发 `pointerdown` + `pointermove(buttons=1)` 再 `setBaseAndExtent` 和 `pointerup`。另加无手势的 pointerup 断言：逃逸端不得被夹回层内。
+- `Reader`：关闭时记下 `{anchorNode, anchorOffset, focusNode, focusOffset}`，keyup 用节点引用比较；同文不同 node 视为已变更，可再出条。不再用页码+文本指纹。
+- 单测：`sameSelectionEnds`（同引用相等，同文不同 node 不相等）。e2e：Esc / 滚动后只松 Shift 不出条；Esc 后在已关闭选区外真实拖选可出条；同文换到第 2 页 node 后 keyup 出条；「更多」和面板非拖选点击不改 focus。
+
+验证（Linux / Xvfb `DISPLAY=:5`，`--retries=0`，版本仍 0.2.4）：
+- typecheck 通过。
+- `env -u POINT_FAKE_LLM` `test:main`：815 passed / 14 skipped（含 4 个端点比较用例）。
+- 整文件首次跑因「Esc 后从原选区内部起拖」未出条失败（浏览器把已有选区当拖放），日志 `local-linux/pdf-embedded-fonts-first-run-gesture-ends.log`。随后改为从已关闭选区外的 During→decade 起拖，同一轮修正后整文件一次 14/14 通过（约 1.0m）：`local-linux/pdf-embedded-fonts-first-run-gesture-ends-2.log`。未放宽 200% / Line 03 契约。未跑 Win/mac CI 与真机。#79 仍保留。

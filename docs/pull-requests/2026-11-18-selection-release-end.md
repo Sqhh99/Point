@@ -9,12 +9,12 @@
 - 行首 0–8px 起选、页边单击清选区仍保持。
 
 ## 改动
-- `Reader.tsx`：article 内 pointerdown 武装，document `mouseup` 再 measure；`placeBar` 纵向锚在焦点行、水平居中用整段并集，focus 在选区下半时 `preferBelow`；document `keyup` 触发已有选区的 measure，不改写原生键盘选择。Esc / 滚动关闭后，两端未变的 keyup（例如只松 Shift）不再复活工具条。
-- `PdfView.tsx`：`keepEndInLayer` 在指针不在行盒内时，即使焦点仍在 `.pdf-text` 也夹到最后/最先可及行；若本次 pointerdown 落在选区工具条上则不夹取（点击「更多」不得改写 focus）。
+- `Reader.tsx`：article 内 pointerdown 武装，document `mouseup` 再 measure；`placeBar` 纵向锚在焦点行、水平居中用整段并集，focus 在选区下半时 `preferBelow`；document `keyup` 触发已有选区的 measure，不改写原生键盘选择。Esc / 滚动关闭时记下 Selection 端点引用，两端未变的 keyup（例如只松 Shift）不再复活工具条；换到同文不同 node 或新的真实拖选仍可出条。
+- `PdfView.tsx`：`keepEndInLayer` 在指针不在行盒内时，即使焦点仍在 `.pdf-text` 也夹到最后/最先可及行；仅本次从正文按下并已拖动的左键手势才夹取。点击「更多」或面板不得改写 focus。
 - `layout.ts`：`rectAtCaret` 只合并同一视觉行碎片；`placeBar` 增加 `preferBelow`。
 - e2e / 夹具 / `rectAtCaret` 单测见工作日志。
 
 ## 验证
-- 本地 Linux/Xvfb：typecheck；核心 vitest 211 passed；`test:main` 811 passed / 14 skipped；审查修复后 `pdf-embedded-fonts.spec.ts` 整文件一次 13/13 通过（含 200% 跨段、long-90 在 2200×1500 与 1024×677、更多/Esc+Shift、真实鼠标跨页 100/150/200%；条纹 125%/200% 仍为 0.631 / 0.773）。详见工作日志第 7–8 节。Windows / macOS CI 与真机仍未跑，不能报通过。不把 CI 重试变绿当作 #79 已修复。
+- 本地 Linux/Xvfb：typecheck；`test:main` 815 passed / 14 skipped；手势护栏与端点快照修正后 `pdf-embedded-fonts.spec.ts` 整文件一次 14/14 通过（含 200% 跨段、long-90 两个窗口尺寸、更多/面板非拖选点击、Esc/滚动后 Shift、同文不同 node、真实鼠标跨页 100/150/200%；条纹 125%/200% 仍为 0.631 / 0.773）。详见工作日志第 7–9 节。Windows / macOS CI 与真机仍未跑，不能报通过。不把 CI 重试变绿当作 #79 已修复。
 
 Related to #81. Related to #79（共享拖选现场，不关闭）。

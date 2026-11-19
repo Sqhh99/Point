@@ -218,3 +218,12 @@ export function rectAtCaret(caret: Rect, rects: readonly Rect[]): Rect | null {
   const right = Math.max(...same.map((r) => r.left + r.width));
   return { top, left, width: right - left, height: bottom - top };
 }
+
+export function selectionEnds(s: Selection | null | undefined) {
+  if (!s || s.rangeCount === 0 || s.isCollapsed || !s.anchorNode || !s.focusNode) return null;
+  return { anchorNode: s.anchorNode, anchorOffset: s.anchorOffset, focusNode: s.focusNode, focusOffset: s.focusOffset };
+}
+
+export function sameSelectionEnds(a: ReturnType<typeof selectionEnds>, b: ReturnType<typeof selectionEnds>) {
+  return !!a && !!b && a.anchorNode === b.anchorNode && a.anchorOffset === b.anchorOffset && a.focusNode === b.focusNode && a.focusOffset === b.focusOffset;
+}

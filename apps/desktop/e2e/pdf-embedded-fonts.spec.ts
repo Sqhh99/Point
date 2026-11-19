@@ -476,15 +476,32 @@ test("dragging from a word into a line gap or below the text keeps the selection
   // .col-resizer and release right of a middle line; it must end on that line.
   await win.evaluate(() => getSelection()!.removeAllRanges());
   const pulled = await page1(win).evaluate((el, [x, y]) => {
-    const t = [...el.querySelectorAll<HTMLElement>(".pdf-line > span")].find((s) => s.textContent!.includes("techniques"))!.firstChild!;
+    const span = [...el.querySelectorAll<HTMLElement>(".pdf-line > span")].find((s) => s.textContent!.includes("techniques"))!;
+    const t = span.firstChild!;
     const out = document.querySelector(".col-resizer")!;
+    const r = span.getBoundingClientRect();
+    const sx = r.left + Math.min(2, r.width / 2), sy = (r.top + r.bottom) / 2;
+    span.dispatchEvent(new PointerEvent("pointerdown", { button: 0, buttons: 1, clientX: sx, clientY: sy, bubbles: true }));
+    span.dispatchEvent(new PointerEvent("pointermove", { button: 0, buttons: 1, clientX: sx + 1, clientY: sy, bubbles: true }));
     getSelection()!.setBaseAndExtent(t, (t.textContent ?? "").indexOf("techniques"), out, 0);
-    document.dispatchEvent(new PointerEvent("pointerup", { clientX: x, clientY: y, bubbles: true }));
+    document.dispatchEvent(new PointerEvent("pointerup", { button: 0, clientX: x, clientY: y, bubbles: true }));
     const s = getSelection()!;
     const f = s.focusNode instanceof Element ? s.focusNode : s.focusNode?.parentElement;
     return { inText: !!f?.closest(".pdf-text"), tail: s.toString().replace(/\s+/g, " ").trim().slice(-30) };
   }, [short.r + 30, (short.t + short.b) / 2] as const);
   expect(pulled, "escaped end pulled back to the line at the pointer's height").toEqual({ inText: true, tail: expect.stringMatching(/in the survey\.$/) });
+  const unarmed = await page1(win).evaluate((el, [x, y]) => {
+    const t = [...el.querySelectorAll<HTMLElement>(".pdf-line > span")].find((s) => s.textContent!.includes("techniques"))!.firstChild!;
+    const out = document.querySelector(".col-resizer")!;
+    getSelection()!.setBaseAndExtent(t, (t.textContent ?? "").indexOf("techniques"), out, 0);
+    document.dispatchEvent(new PointerEvent("pointerup", { button: 0, clientX: x, clientY: y, bubbles: true }));
+    const s = getSelection()!;
+    const f = s.focusNode instanceof Element ? s.focusNode : s.focusNode?.parentElement;
+    const r = { inText: !!f?.closest(".pdf-text"), tail: s.toString().replace(/\s+/g, " ").trim().slice(-30) };
+    s.removeAllRanges();
+    return r;
+  }, [short.r + 30, (short.t + short.b) / 2] as const);
+  expect(unarmed.inText, "a pointerup without a PDF drag gesture must not clamp the escaped end back into the layer").toBe(false);
   await win.evaluate(() => getSelection()!.removeAllRanges());
 });
 
@@ -574,8 +591,13 @@ const pullBack = (win: Win, from: string, x: number, y: number, { up = false, ou
       const t = span.firstChild!;
       const i = (t.textContent ?? "").indexOf(from);
       const o = document.querySelector(out)!;
+      const box = span.getBoundingClientRect();
+      const sx = box.left + Math.min(2, box.width / 2), sy = (box.top + box.bottom) / 2;
+      // A real PDF drag arms pressLayer + dragging; a bare pointerup must not clamp.
+      span.dispatchEvent(new PointerEvent("pointerdown", { button: 0, buttons: 1, clientX: sx, clientY: sy, bubbles: true }));
+      span.dispatchEvent(new PointerEvent("pointermove", { button: 0, buttons: 1, clientX: sx + 1, clientY: sy, bubbles: true }));
       getSelection()!.setBaseAndExtent(t, up ? i + from.length : i, o, 0);
-      document.dispatchEvent(new PointerEvent("pointerup", { clientX: x, clientY: y, bubbles: true }));
+      document.dispatchEvent(new PointerEvent("pointerup", { button: 0, clientX: x, clientY: y, bubbles: true }));
       const s = getSelection()!;
       const f = s.focusNode instanceof Element ? s.focusNode : s.focusNode?.parentElement;
       const text = s.toString().replace(/\s+/g, " ").trim();
@@ -1183,27 +1205,30 @@ test("clicking 更多 on a retained PDF selection does not rewrite the focus end
     };
   });
   expect(before.text.length, "need a multi-character selection before clicking 更多").toBeGreaterThan(1);
-  await win.getByRole("button", { name: "更多" }).click();
-  const after = await win.evaluate(() => {
+  await win.evaluate(() => {
     const s = getSelection()!;
-    const mark = (n: Node | null) => {
-      const el = n instanceof Element ? n : n?.parentElement;
-      return { text: (el?.textContent ?? "").replace(/\s+/g, " ").trim() };
-    };
-    return {
-      text: s.toString().replace(/\s+/g, " ").trim(),
-      anchorOffset: s.anchorOffset,
-      focusOffset: s.focusOffset,
-      anchorText: mark(s.anchorNode).text,
-      focusText: mark(s.focusNode).text
+    (window as unknown as { __pointSel?: { a: Node | null; ao: number; f: Node | null; fo: number; text: string } }).__pointSel = {
+      a: s.anchorNode, ao: s.anchorOffset, f: s.focusNode, fo: s.focusOffset, text: s.toString()
     };
   });
-  expect(after.text, "clicking 更多 keeps the selected text").toBe(before.text);
-  expect(after.anchorOffset, "clicking 更多 keeps the anchor offset").toBe(before.anchor.offset);
-  expect(after.focusOffset, "clicking 更多 keeps the focus offset").toBe(before.focus.offset);
-  expect(after.anchorText).toBe(before.anchor.text);
-  expect(after.focusText).toBe(before.focus.text);
+  await win.getByRole("button", { name: "更多" }).click();
+  const afterMore = await win.evaluate(() => {
+    const s = getSelection()!;
+    const b = (window as unknown as { __pointSel: { a: Node | null; ao: number; f: Node | null; fo: number; text: string } }).__pointSel;
+    return { same: s.anchorNode === b.a && s.anchorOffset === b.ao && s.focusNode === b.f && s.focusOffset === b.fo && s.toString() === b.text };
+  });
+  expect(afterMore.same, "clicking 更多 keeps the same Selection nodes and offsets").toBe(true);
   await expect(win.getByRole("button", { name: "记笔记" })).toBeVisible();
+
+  const panel = (await win.locator(".ai-panel").boundingBox())!;
+  await win.mouse.click(panel.x + 24, panel.y + 24);
+  const afterPanel = await win.evaluate(() => {
+    const s = getSelection()!;
+    const b = (window as unknown as { __pointSel: { a: Node | null; ao: number; f: Node | null; fo: number; text: string } }).__pointSel;
+    return { same: s.anchorNode === b.a && s.anchorOffset === b.ao && s.focusNode === b.f && s.focusOffset === b.fo && s.toString() === b.text };
+  });
+  expect(afterPanel.same, "a non-drag click on the AI panel does not rewrite the focus end").toBe(true);
+  await expect(toolbar, "clicking the AI panel dismisses the bar").toBeHidden();
 });
 
 test("releasing Shift alone does not revive a toolbar hidden by Escape", async () => {
@@ -1231,6 +1256,78 @@ test("releasing Shift alone does not revive a toolbar hidden by Escape", async (
   await win.waitForTimeout(400);
   await expect(toolbar, "releasing Shift alone does not revive the bar after Escape").toBeHidden();
   expect(await win.evaluate(() => getSelection()!.toString().replace(/\s+/g, " ").trim())).toBe(text);
+
+  // Start outside the dismissed range so the browser makes a new selection instead of dragging the old text.
+  const next = (await wordBox(win, "During"))!;
+  const last = (await wordBox(win, "decade"))!;
+  await win.mouse.move(next.l + 2, (next.t + next.b) / 2);
+  await win.mouse.down();
+  await win.mouse.move(last.r - 2, (last.t + last.b) / 2, { steps: 12 });
+  await win.mouse.up();
+  await win.waitForTimeout(200);
+  const newText = await win.evaluate(() => getSelection()!.toString().replace(/\s+/g, " ").trim());
+  expect(newText, `new mouse selection after Escape was ${JSON.stringify(newText)}`).toMatch(/^During\b/);
+  expect(newText).not.toBe(text);
+  await expect(toolbar, "a real new mouse selection after Escape still opens the bar").toBeVisible();
+
+  await win.locator("main.center").evaluate((e) => (e.scrollTop += 48));
+  await expect(toolbar, "scrolling hides the bar and leaves the native selection").toBeHidden();
+  const afterScroll = await win.evaluate(() => getSelection()!.toString().replace(/\s+/g, " ").trim());
+  expect(afterScroll.length).toBeGreaterThan(1);
+  await win.keyboard.down("Shift");
+  await win.keyboard.up("Shift");
+  await win.waitForTimeout(400);
+  await expect(toolbar, "releasing Shift alone does not revive the bar after scroll").toBeHidden();
+  expect(await win.evaluate(() => getSelection()!.toString().replace(/\s+/g, " ").trim())).toBe(afterScroll);
+});
+
+test("keyup after Escape still opens the bar when the endpoints move to a same-text node on another page", async () => {
+  const win = await app.firstWindow();
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setBounds({ x: 0, y: 0, width: 1280, height: 800 }));
+  await openFixture(win, "hydro-times-std-2p.pdf");
+  await expect(page1(win).locator(".pdf-text span").first()).toBeVisible();
+  await setZoom(win, 125);
+  const view = await readingView(win);
+  const s0 = (await wordBoxOn(win, 1, "techniques"))!;
+  await view.center.evaluate((e, dy) => (e.scrollTop += dy), Math.floor(s0.t - view.y - 40));
+  await expect(win.locator('[data-page="2"] .pdf-text span').first()).toBeAttached({ timeout: 10_000 });
+  await win.waitForTimeout(150);
+  const toolbar = win.getByRole("toolbar", { name: "选区操作" });
+  const start = (await wordBoxOn(win, 1, "techniques"))!;
+  const end = (await wordBoxOn(win, 1, "equipment"))!;
+  await hideBar(win);
+  await win.mouse.move(start.l + 2, (start.t + start.b) / 2);
+  await win.mouse.down();
+  await win.mouse.move(end.r - 2, (end.t + end.b) / 2, { steps: 12 });
+  await win.mouse.up();
+  await expect(toolbar).toBeVisible();
+  const page1Text = await win.evaluate(() => getSelection()!.toString().replace(/\s+/g, " ").trim());
+  await win.keyboard.press("Escape");
+  await expect(toolbar).toBeHidden();
+  const moved = await win.evaluate(() => {
+    const page2 = document.querySelector('[data-page="2"]');
+    const spans = [...(page2?.querySelectorAll<HTMLElement>(".pdf-line > span") ?? [])];
+    const tech = spans.find((s) => s.textContent!.includes("techniques"))?.firstChild;
+    const equip = spans.find((s) => s.textContent!.includes("equipment"))?.firstChild;
+    if (!tech || tech.nodeType !== Node.TEXT_NODE || !equip || equip.nodeType !== Node.TEXT_NODE) return { ok: false as const };
+    const s = getSelection()!;
+    const sameNode = s.anchorNode === tech && s.focusNode === equip;
+    s.setBaseAndExtent(tech, (tech.textContent ?? "").indexOf("techniques"), equip, (equip.textContent ?? "").indexOf("equipment") + "equipment".length);
+    document.dispatchEvent(new KeyboardEvent("keyup", { key: "Shift", bubbles: true }));
+    return {
+      ok: true as const,
+      sameNode,
+      sameText: s.toString().replace(/\s+/g, " ").trim(),
+      page: (tech.parentElement?.closest("[data-page]") as HTMLElement | null)?.getAttribute("data-page") ?? null
+    };
+  });
+  expect(moved.ok, "page-2 techniques node is available").toBe(true);
+  if (moved.ok) {
+    expect(moved.sameNode, "page-2 techniques is a different node from the dismissed page-1 selection").toBe(false);
+    expect(moved.sameText, "the new selection is the same words on the other page").toBe(page1Text);
+    expect(moved.page).toBe("2");
+  }
+  await expect(toolbar, "keyup opens the bar when the Selection moved to a different node with the same text").toBeVisible();
 });
 
 test("real mouse drag across two pages at 100/150/200 % (Linux/Xvfb)", async () => {

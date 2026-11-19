@@ -6,7 +6,7 @@ import { CaptureOverlay } from "./Capture";
 import { SelectionOverlay, confirmDuration, PDF_CSS_BASE, type OverlayMode } from "./SelectionOverlay";
 import { EmptyState } from "./EmptyState";
 import { IconAsk, IconCapture, IconDiagram, IconExplain, IconMark, IconMore, IconNote } from "./icons";
-import { isCaptureKey, outsideBodyRects, placeBar, rectAtCaret, type Box } from "./layout";
+import { isCaptureKey, outsideBodyRects, placeBar, rectAtCaret, selectionEnds, sameSelectionEnds, type Box } from "./layout";
 import { isViewBlockId, relocateBlock } from "@point/core/relocate";
 import { DocError } from "./viewers/DocError";
 import { DocxView } from "./viewers/DocxView";
@@ -54,20 +54,6 @@ function blockAt(el: Element | null): { blockId?: string; page?: number } {
 
 const TOOLBAR_H = 36;
 const SHOW_DELAY_MS = 120;
-
-/** Anchor/focus signature of the current Selection, used to ignore a keyup that did not move it. */
-function selectionKey(): string {
-  const s = window.getSelection();
-  if (!s || s.rangeCount === 0 || s.isCollapsed) return "";
-  const mark = (n: Node | null) => {
-    if (!n) return "";
-    const el = n instanceof Element ? n : n.parentElement;
-    const page = el?.closest("[data-page]")?.getAttribute("data-page") ?? "";
-    const line = (el?.closest(".pdf-line") ?? el)?.textContent?.replace(/\s+/g, " ").trim().slice(0, 32) ?? "";
-    return `${page}:${line}:${n.nodeType}:${n.nodeType === Node.TEXT_NODE ? n.textContent?.length ?? 0 : 0}`;
-  };
-  return `${mark(s.anchorNode)}@${s.anchorOffset}|${mark(s.focusNode)}@${s.focusOffset}`;
-}
 
 function pageOf(range: Range): number | undefined {
   const el = (range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement)?.closest("[data-page]");
@@ -249,15 +235,15 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
   const articleRef = useRef<HTMLElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const timer = useRef<number | undefined>(undefined);
-  /** Selection still in place after Esc / scroll hid the bar: a lone Shift keyup must not revive it. */
-  const dismissedSel = useRef<string | null>(null);
+  const dismissedSel = useRef<ReturnType<typeof selectionEnds>>(null);
 
   /** The bar's real size once rendered; a fallback before the first paint. */
   const barSize = (fallbackWidth = 340) => ({ width: toolbarRef.current?.offsetWidth || fallbackWidth, height: toolbarRef.current?.offsetHeight || TOOLBAR_H });
 
   const close = useCallback((opts?: { keepSelection?: boolean }) => {
     window.clearTimeout(timer.current);
-    dismissedSel.current = selectionKey() || dismissedSel.current;
+    const ends = selectionEnds(window.getSelection());
+    if (ends) dismissedSel.current = ends;
     setToolbar(null);
     setMore(false);
     if (!opts?.keepSelection) setSelection(null);
@@ -373,7 +359,7 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
   }, [measure]);
 
   const onKeySelectEnd = useCallback(() => {
-    if (dismissedSel.current && dismissedSel.current === selectionKey()) return;
+    if (sameSelectionEnds(dismissedSel.current, selectionEnds(window.getSelection()))) return;
     dismissedSel.current = null;
     onSelectEnd();
   }, [onSelectEnd]);
