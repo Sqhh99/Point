@@ -117,16 +117,18 @@ function overlapArea(a: Rect, b: Rect): number {
  * including not clamping a below slot that overflows. Never overlaps the selection rectangle
  * when either slot is clear: the bar's vertical span is entirely above `sel.top - gap` or
  * entirely below `sel.bottom + gap`. Horizontally centred on the selection and clamped inside
- * the container (`left` is the bar's centre).
+ * the container (`left` is the bar's centre). `preferBelow` tries the below slot first (used
+ * when the anchor is the lower, release end of a selection).
  */
 export function placeBar(
   sel: Rect,
   container: Rect,
   bar: { width: number; height: number },
-  extra?: { gap?: number; obstacles?: readonly Rect[] }
+  extra?: { gap?: number; obstacles?: readonly Rect[]; preferBelow?: boolean }
 ): { top: number; left: number; below: boolean } {
   const gap = extra?.gap ?? BAR_GAP;
   const obstacles = extra?.obstacles ?? [];
+  const preferBelow = extra?.preferBelow ?? false;
   const selTop = sel.top - container.top;
   const selBottom = selTop + sel.height;
   const aboveTop = selTop - gap - bar.height;
@@ -151,8 +153,11 @@ export function placeBar(
   const inView = (top: number) => top >= 0 && top + bar.height <= container.height;
   const areaOf = (top: number) => obstacles.reduce((sum, o) => sum + overlapArea(at(top), o), 0);
 
-  if (inView(aboveTop) && !intersects(aboveTop)) return { top: aboveTop, left, below: false };
+  if (preferBelow) {
+    if (inView(belowTop) && !intersects(belowTop)) return { top: belowTop, left, below: true };
+  } else if (inView(aboveTop) && !intersects(aboveTop)) return { top: aboveTop, left, below: false };
   if (inView(belowTop) && !intersects(belowTop)) return { top: belowTop, left, below: true };
+  if (inView(aboveTop) && !intersects(aboveTop)) return { top: aboveTop, left, below: false };
 
   const maxTop = Math.max(0, container.height - bar.height);
   const clamp = (t: number) => Math.min(Math.max(t, 0), maxTop);

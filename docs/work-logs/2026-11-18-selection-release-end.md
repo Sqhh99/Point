@@ -17,12 +17,12 @@
 ## 3. 改动的文件
 | 文件 | 改动 | 对应的需求 |
 |------|------|------------|
-| `apps/desktop/src/renderer/Reader.tsx` | 出条：article 内 pointerdown 武装，document mouseup 再 measure。锚定：以焦点所在 `.pdf-line` 的 span 并集为 `placeBar` 的 sel，obstacles 仍用整段并集。键盘：仅 document `keyup` 触发已有选区的 measure（不改写原生 Shift+方向键）。见第 6 节。 | 面板/分隔条松手出条；松手端 / 键盘端锚定 |
+| `apps/desktop/src/renderer/Reader.tsx` | 出条：article 内 pointerdown 武装，document mouseup 再 measure。锚定：以焦点行的 span 并集为纵向锚点，水平居中用整段并集；focus 在选区下半时 `preferBelow`。障碍为选区外正文加 focus 内侧真实行。键盘：仅 document `keyup` 触发已有选区的 measure。见第 6–7 节。 | 面板/分隔条松手出条；松手端 / 键盘端锚定 |
 | `apps/desktop/src/renderer/viewers/PdfView.tsx` | `keepEndInLayer`：指针不在行上时不再因焦点仍在层内而 return，夹到该方向最后 / 最先可及行的行端。 | 拖过文末 |
-| `apps/desktop/src/renderer/layout.ts` | `rectAtCaret`：只合并 mid-Y 同行的碎片，忽略微重叠邻行和整段高大盒。 | 锚定回退路径 |
+| `apps/desktop/src/renderer/layout.ts` | `rectAtCaret`：只合并 mid-Y 同行的碎片。`placeBar` 增加 `preferBelow`（下方槽位优先）。 | 锚定回退路径 |
 | `apps/desktop/e2e/fixtures/pdf/long-90-lines.pdf` 等 | 生成并纳入 90 行夹具。 | 文末回归 |
-| `apps/desktop/e2e/pdf-embedded-fonts.spec.ts` | 出条、文末、松手端（含键盘，oracle 用焦点/锚点行的 span 并集，要求两行可区分）回归。 | 行为测试 |
-| `apps/desktop/test/main/marks-followup.test.ts` | `rectAtCaret` 单测，含邻行重叠与高大盒。 | 单位测试 |
+| `apps/desktop/e2e/pdf-embedded-fonts.spec.ts` | 出条、文末、松手端回归。键盘段改为原生 Shift+Right 探测 + programmatic 反向选区加 keyup（组件定位，不声称跨行键盘导航）；oracle 为独立 span 并集，距离断言未放宽。 | 行为测试 |
+| `apps/desktop/test/main/marks-followup.test.ts` | `rectAtCaret` 与 `placeBar`/`preferBelow` 单测。 | 单位测试 |
 | 根目录 / `packages/core` / `apps/desktop` 的 `package.json` | `0.2.3` → `0.2.4` | 本轮修复升 c |
 | 本日志与 PR 记录 | project-records | 记录 |
 
@@ -58,9 +58,10 @@
 ## 7. 本轮验证补充
 - `pnpm --filter @point/desktop run typecheck` 通过。
 - 核心 `vitest run`：14 文件，211 passed。
-- `test:main`：本 shell 继承了 `POINT_FAKE_LLM=1` 时，模型预设相关 13 项失败（期望 `deepseek-flash` 却得到 `fake`），与选区改动无关。`env -u POINT_FAKE_LLM` 后再跑一次：809 passed / 14 skipped。
-- 条纹 A/B（相同 Linux/Xvfb `DISPLAY=:5`，`--retries=0`，该用例各一次；不改基线、不提交资源删除），证据 `/workspace/evidence/pr81-selection-release-end/ab-stripe/`：
-  - 干净 main worktree `/workspace/Point-main-stripe-ab` @ `2a90488`：通过。`PDF-SELECTION-TINT` 125% tintedOfWordArea 0.631，200% 0.773。截图 `main-selection-125-linux.png`：工具条在整段选区下方，不压中间行。
-  - 本分支整文件一次：125% `darker` 0.044 > 0.005（tintedOfWordArea 0.59）。截图 `feature-selection-125-linux.png`：选区工具条压在 focus 末行上方的已选正文上。因果是松手端锚定把 `placeBar` 的 sel 收成 focus 行后，障碍仍只有选区外正文，上方槽位落在已选中间行；main 以整段并集为 sel，顶部空间不足时翻到整段下方。这是本轮回归，不是基线条纹，也不放宽 0.005。将在后续提交把整段选区并集加入障碍。
-- 整文件在第 1 项失败后，后面 9 项未跑。单独用 invert 跑剩余项时，第 2 项依赖第 1 项已打开文档，`zoom-value` 超时，不能当成产品失败。第 2、3 项依赖第 1 项会话；自包含用例（面板松手、long-90、0–8px、三击、跨页夹取、focus 端）待放置修复后随整文件再跑一次。
-- 未跑：Windows / macOS CI 与真机；跨页与完整缩放矩阵随整文件未完成而暂缺。
+- `test:main`：本 shell 继承了 `POINT_FAKE_LLM=1` 时，模型预设相关 13 项失败（期望 `deepseek-flash` 却得到 `fake`），与选区改动无关。`env -u POINT_FAKE_LLM` 后：放置修复前 809 passed / 14 skipped；本提交后 811 passed / 14 skipped。
+- 条纹 A/B（相同 Linux/Xvfb `DISPLAY=:5`，`--retries=0`，不改基线、不提交资源删除），证据与说明 `/workspace/evidence/pr81-selection-release-end/ab-stripe/AB-RESULT.md`：
+  - 干净 main worktree `/workspace/Point-main-stripe-ab` @ `2a90488` 一次通过。125% tintedOfWordArea 0.631，200% 0.773。截图：工具条在整段选区下方。
+  - 收窄键盘改写后、放置修复前，本分支整文件一次失败：125% `darker` 0.044 > 0.005（0.59）。截图确认条压在 focus 末行上方的已选正文上。因果是松手端锚定把 sel 收成 focus 行后仍优先上方槽，且障碍只有选区外正文。这是本轮回归，不是基线条纹，未放宽 0.005。
+  - 修复：`preferBelow`（focus 在选区下半时先试下方），水平居中用整段并集，障碍加上 focus 内侧真实行。再跑整文件一次：10/10 通过。条纹 125%/200% 与 main 相同（0.631 / 0.773）。截图 `feature-prefer-below-125-linux.png` 与 main 一致，条在选区下方间隙，不压中间行。
+- 该次整文件覆盖：条纹、行隙拖选、200% 跨段截图、两页两栏出界夹取（跨页）、单击/三击、0–8px、AI 面板/分隔条松手、long-90 文末、上下拖 100/125/150 与 programmatic focus 端（含反向选区）。距离断言未放宽。
+- 未跑：Windows / macOS CI 与真机。缩放在松手端用例中覆盖 100/125/150，未另做独立跨页缩放矩阵。#79 未修。

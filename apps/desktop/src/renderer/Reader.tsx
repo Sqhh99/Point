@@ -288,14 +288,26 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
     const scroller = article.parentElement!;
     const union = range.getBoundingClientRect();
     const box = scroller.getBoundingClientRect();
+    // Spans are absolutely positioned, so a .pdf-line element's own box is not the glyph line.
+    const lineBox = (el: Element) => {
+      const boxes = el.classList.contains("pdf-line")
+        ? [...el.querySelectorAll<HTMLElement>(":scope > span")].map((s) => s.getBoundingClientRect()).filter((b) => b.width >= 1 && b.height >= 1)
+        : [el.getBoundingClientRect()].filter((b) => b.width >= 1 && b.height >= 1);
+      if (!boxes.length) return null;
+      const top = Math.min(...boxes.map((b) => b.top));
+      const left = Math.min(...boxes.map((b) => b.left));
+      return { top, left, width: Math.max(...boxes.map((b) => b.right)) - left, height: Math.max(...boxes.map((b) => b.bottom)) - top };
+    };
     const body: { top: number; left: number; width: number; height: number }[] = [];
     for (const el of article.querySelectorAll(".pdf-line, .block")) {
       if (!el.textContent?.trim()) continue;
-      const b = el.getBoundingClientRect();
-      if (b.width >= 1 && b.height >= 1) body.push({ top: b.top, left: b.left, width: b.width, height: b.height });
+      const b = lineBox(el);
+      if (b) body.push(b);
     }
     // Anchor at the Selection focus (the release / keyboard moving end), not the document-order
-    // Range end or the union's first line. Obstacles stay relative to the whole selection.
+    // Range end or the union's first line. Obstacles are body lines outside the focus line, so
+    // earlier selected lines block "above the last line" without treating the whole highlight
+    // as a slab that would push the bar past later unselected paragraphs.
     const focusEl = s.focusNode instanceof Element ? s.focusNode : s.focusNode?.parentElement;
     const pdfLine = focusEl?.closest(".pdf-line");
     const clientRects = [...range.getClientRects()]
@@ -303,10 +315,8 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
       .map((c) => ({ top: c.top, left: c.left, width: c.width, height: c.height }));
     let r = { top: union.top, left: union.left, width: union.width, height: union.height };
     if (pdfLine && article.contains(pdfLine)) {
-      // Spans are absolutely positioned in the text layer, so the .pdf-line element's
-      // own box is not the glyph line; union the run boxes instead.
-      const boxes = [...pdfLine.querySelectorAll<HTMLElement>(":scope > span")].map((el) => el.getBoundingClientRect()).filter((b) => b.width >= 1 && b.height >= 1);
-      if (boxes.length) r = { top: Math.min(...boxes.map((b) => b.top)), left: Math.min(...boxes.map((b) => b.left)), width: Math.max(...boxes.map((b) => b.right)) - Math.min(...boxes.map((b) => b.left)), height: Math.max(...boxes.map((b) => b.bottom)) - Math.min(...boxes.map((b) => b.top)) };
+      const picked = lineBox(pdfLine);
+      if (picked) r = picked;
     } else if (s.focusNode && clientRects.length) {
       try {
         const caret = document.createRange();
@@ -319,9 +329,20 @@ export function Reader({ docId, hasWorkspace, onDocLoaded, onAction, onOpenWorks
         // Keep the union if the focus caret cannot be resolved.
       }
     }
-    // Above the focus line with an 8px gap; flipped below when there is no room or when the bar
-    // would cover body text outside the selection (triple-click on a mid-page line).
-    const p = placeBar(r, box, barSize(), { obstacles: outsideBodyRects({ top: union.top, left: union.left, width: union.width, height: union.height }, body) });
+    // Anchor vertically at the focus line; centre horizontally on the whole highlight so a
+    // short last line does not pull the bar over the previous full line. When the focus is
+    // the lower end, try below first so "above the last line" cannot sit on earlier selected
+    // text. Obstacles: unselected body, plus body lines clearly on the inner side of the focus.
+    const unionRect = { top: union.top, left: union.left, width: union.width, height: union.height };
+    const preferBelow = r.top + r.height / 2 >= union.top + union.height / 2;
+    const inner = body.filter((b) => {
+      const mid = b.top + b.height / 2;
+      return preferBelow ? mid < r.top - r.height / 2 : mid > r.top + r.height + r.height / 2;
+    });
+    const p = placeBar({ top: r.top, left: union.left, width: union.width, height: r.height }, box, barSize(), {
+      obstacles: [...outsideBodyRects(unionRect, body), ...inner],
+      preferBelow
+    });
     const top = p.top + scroller.scrollTop;
     const left = p.left;
     const where = blockAt(range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement);

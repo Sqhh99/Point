@@ -1024,7 +1024,10 @@ test("the selection toolbar is anchored at the focus (release) end, not always t
   const applyFocusSel = (focusAt: "first" | "last") =>
     win.evaluate((focusAt) => {
       const textOf = (n: Node | null) => (n?.textContent ?? "").replace(/\s+/g, " ");
-      const firstLine = [...document.querySelectorAll(".pdf-text .pdf-line")].find((l) => textOf(l).includes("techniques"));
+      // Use the second paragraph's first and last lines: the gap above "During" is wide enough
+      // for the 8px + bar-height slot. "techniques" has a body line immediately above, so
+      // placeBar correctly moves further up and would fail a tight adjacency assert.
+      const firstLine = [...document.querySelectorAll(".pdf-text .pdf-line")].find((l) => textOf(l).includes("During the last decade"));
       const lastLine = [...document.querySelectorAll(".pdf-text .pdf-line")].find((l) => textOf(l).includes("sounding."));
       const startNode = (el: Element) => {
         const n = [...el.querySelectorAll(":scope > span")][0]?.firstChild;

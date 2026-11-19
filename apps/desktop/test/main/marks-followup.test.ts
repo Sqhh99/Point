@@ -99,6 +99,24 @@ describe("placeBar", () => {
     expect(p.below).toBe(false);
     expect(p.top + bar.height).toBe(sel.top - box.top - 8);
   });
+  it("does not sit on earlier selected lines when the anchor is only the focus (last) line", () => {
+    const earlier = { top: 120, left: 80, width: 400, height: 120 };
+    const focus = { top: 248, left: 80, width: 180, height: 32 };
+    const next = { top: 400, left: 80, width: 400, height: 32 };
+    const p = placeBar(focus, box, bar, { obstacles: [...outsideBodyRects(focus, [next]), earlier], preferBelow: true });
+    const top = box.top + p.top;
+    expect(p.below).toBe(true);
+    expect(top).toBe(focus.top + focus.height + BAR_GAP);
+    expect(top + bar.height <= next.top || top >= next.top + next.height).toBe(true);
+    expect(top + bar.height <= earlier.top || top >= earlier.top + earlier.height).toBe(true);
+  });
+  it("preferBelow uses the below slot even when the above slot is also clear", () => {
+    const sel = { top: 300, left: 200, width: 100, height: 20 };
+    const far = { top: 500, left: 200, width: 120, height: 20 };
+    const p = placeBar(sel, box, bar, { obstacles: [far], preferBelow: true });
+    expect(p.below).toBe(true);
+    expect(p.top).toBe(sel.top - box.top + sel.height + BAR_GAP);
+  });
 });
 
 describe("outsideBodyRects", () => {
